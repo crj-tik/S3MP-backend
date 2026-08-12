@@ -7,6 +7,33 @@ from fastapi import Depends, Request
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
+MANAGEMENT_OPERATION_PERMISSIONS = {
+    "list_users": "members.read",
+    "get_user": "members.read",
+    "list_members": "members.read",
+    "create_member": "members.manage",
+    "get_member": "members.read",
+    "update_member": "members.manage",
+    "list_group_members": "groups.read",
+    "add_group_member": "groups.manage",
+    "remove_group_member": "groups.manage",
+    "list_groups": "groups.read",
+    "create_group": "groups.manage",
+    "get_group": "groups.read",
+    "update_group": "groups.manage",
+    "delete_group": "groups.manage",
+    "list_roles": "roles.read",
+    "create_role": "roles.manage",
+    "get_role": "roles.read",
+    "update_role": "roles.manage",
+    "list_role_bindings": "role_bindings.read",
+    "create_role_binding": "role_bindings.manage",
+    "get_role_binding": "role_bindings.read",
+    "revoke_role_binding": "role_bindings.manage",
+    "get_effective_permissions": "authorization.explain",
+    "simulate_authorization": "authorization.simulate",
+}
+
 
 def principal_context(request: Request) -> PrincipalContext:
     """Extract the server-derived PrincipalContext from request state.
@@ -41,5 +68,22 @@ def application_service(attr: str) -> Any:
                 status_code=500,
             )
         return service
+
+    return Depends(resolver)
+
+
+def management_permission(operation_id: str) -> Any:
+    """Require the catalog permission bound to a management operation."""
+    permission = MANAGEMENT_OPERATION_PERMISSIONS[operation_id]
+
+    async def resolver(request: Request) -> PrincipalContext:
+        context = principal_context(request)
+        service = getattr(request.app.state, "authorization_management", None)
+        if service is None:
+            raise ApiError(
+                "internal_error", "Authorization management is not configured", status_code=500
+            )
+        await service.require_permission(context, permission)
+        return context
 
     return Depends(resolver)

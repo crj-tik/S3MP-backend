@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Header, Path, Request
+from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from s3mp.common.errors import ApiError
@@ -71,7 +71,6 @@ async def update_quota(
     request: Request,
     body: QuotaUpdate,
     quota_id: str = Path(min_length=1),
-    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> Any:
     return await _quota_svc(request).update_quota(
         _context(request).tenant_id, quota_id, body.limit_bytes

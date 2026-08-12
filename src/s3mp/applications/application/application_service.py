@@ -14,6 +14,11 @@ from s3mp.applications.domain.credentials import (
 from s3mp.common.errors import ApiError
 
 
+def _public_api_key(record: dict[str, Any]) -> dict[str, Any]:
+    """Remove verification material before returning an API-key record publicly."""
+    return {key: value for key, value in record.items() if key != "secret_digest"}
+
+
 class ApplicationStore(Protocol):
     async def list_apps(
         self, tenant_id: UUID, limit: int, cursor: str | None
@@ -99,13 +104,14 @@ class ApiKeyService:
     async def list_keys(
         self, tenant_id: UUID, app_id: UUID, limit: int = 50, cursor: str | None = None
     ) -> tuple[list[dict[str, Any]], str | None]:
-        return await self.store.list_keys(tenant_id, app_id, min(limit, 200), cursor)
+        items, next_cursor = await self.store.list_keys(tenant_id, app_id, min(limit, 200), cursor)
+        return [_public_api_key(item) for item in items], next_cursor
 
     async def get_key(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any]:
         result = await self.store.get_key(tenant_id, key_id)
         if result is None:
             raise ApiError("resource_not_found", "API key not found", status_code=404)
-        return result
+        return _public_api_key(result)
 
     async def issue(
         self, tenant_id: UUID, app_id: UUID, scopes: list[str], ttl_days: int = 90
@@ -119,7 +125,7 @@ class ApiKeyService:
         )
         record["secret"] = issued.secret
         record["credential"] = issued.credential
-        return record
+        return _public_api_key(record)
 
     async def rotate(
         self, tenant_id: UUID, key_id: UUID, overlap_seconds: int = 300
@@ -140,7 +146,7 @@ class ApiKeyService:
         )
         record["secret"] = issued.secret
         record["credential"] = issued.credential
-        return record
+        return _public_api_key(record)
 
     async def revoke(
         self, tenant_id: UUID, key_id: UUID, reason: str
@@ -150,7 +156,7 @@ class ApiKeyService:
         )
         if result is None:
             raise ApiError("resource_not_found", "API key not found", status_code=404)
-        return result
+        return _public_api_key(result)
 
     async def authenticate(
         self, credential: str

@@ -36,7 +36,13 @@ class IngestionEventType(StrEnum):
 
 
 VALID_TRANSITIONS: dict[IngestionStatus, set[IngestionStatus]] = {
-    IngestionStatus.INITIATED: {IngestionStatus.UPLOADING, IngestionStatus.EXPIRED},
+    IngestionStatus.INITIATED: {
+        IngestionStatus.UPLOADING,
+        IngestionStatus.VERIFIED,
+        IngestionStatus.FAILED,
+        IngestionStatus.RECONCILIATION_REQUIRED,
+        IngestionStatus.EXPIRED,
+    },
     IngestionStatus.UPLOADING: {IngestionStatus.VERIFICATION_PENDING, IngestionStatus.FAILED, IngestionStatus.EXPIRED},
     IngestionStatus.VERIFICATION_PENDING: {IngestionStatus.VERIFIED, IngestionStatus.FAILED, IngestionStatus.EXPIRED},
     IngestionStatus.VERIFIED: {IngestionStatus.COMMITTED, IngestionStatus.FAILED, IngestionStatus.RECONCILIATION_REQUIRED},
@@ -44,7 +50,11 @@ VALID_TRANSITIONS: dict[IngestionStatus, set[IngestionStatus]] = {
     IngestionStatus.AVAILABLE: set(),
     IngestionStatus.FAILED: {IngestionStatus.RECONCILIATION_REQUIRED},
     IngestionStatus.EXPIRED: set(),
-    IngestionStatus.RECONCILIATION_REQUIRED: {IngestionStatus.COMMITTED, IngestionStatus.FAILED},
+    IngestionStatus.RECONCILIATION_REQUIRED: {
+        IngestionStatus.VERIFIED,
+        IngestionStatus.COMMITTED,
+        IngestionStatus.FAILED,
+    },
 }
 
 

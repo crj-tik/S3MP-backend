@@ -76,6 +76,7 @@ class SqlAlchemyApplicationStore:
                 tenant_id=tenant_id, name=name, principal_id=principal_id, status="active"
             )
             session.add(model)
+            await session.flush()
             session.add(
                 ApplicationOwnerModel(
                     tenant_id=tenant_id, application_id=model.id, owner_principal_id=principal_id

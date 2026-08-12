@@ -41,11 +41,9 @@ def main() -> int:
             continue
         if not isinstance(item, dict):
             continue
-        # Strip /api/v1 prefix from runtime paths to match baseline
-        norm = path.removeprefix("/api/v1") if path.startswith("/api/v1") else path
         for method in item:
             if method.lower() in {"get", "put", "post", "delete", "options", "head", "patch"}:
-                runtime_ops.add((method.lower(), norm))
+                runtime_ops.add((method.lower(), path))
 
     missing = declared - runtime_ops
     extra = runtime_ops - declared

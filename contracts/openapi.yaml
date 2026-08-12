@@ -5,7 +5,7 @@ info:
   summary: Tenant-isolated identity, authorization and private object storage API.
   description: The normative API contract. See api-conventions.md, error-codes.yaml and permission-catalog.yaml.
 servers:
-  - url: /api/v1
+  - url: /
 security:
   - session_cookie: []
   - s3mp_key: []
@@ -25,7 +25,7 @@ tags:
   - {name: Quotas}
   - {name: Audit}
 paths:
-  /me:
+  /api/v1/me:
     get:
       tags: [Context]
       operationId: get_me
@@ -34,18 +34,18 @@ paths:
         '200': {description: Current context, content: {application/json: {schema: {$ref: '#/components/schemas/Me'}, examples: {success: {$ref: '#/components/examples/MeSuccess'}}}}}
         '401': {$ref: '#/components/responses/AuthenticationRequired'}
         '403': {$ref: '#/components/responses/MembershipInactive'}
-  /users:
+  /api/v1/users:
     get:
       tags: [Users]
       operationId: list_users
       summary: List user identities visible in the current tenant
       x-permission: members.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}, {name: q, in: query, schema: {type: string, maxLength: 200}}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: User page, content: {application/json: {schema: {$ref: '#/components/schemas/UserPage'}}}}
         '400': {$ref: '#/components/responses/InvalidCursor'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
-  /users/{user_id}:
+  /api/v1/users/{user_id}:
     parameters: [{$ref: '#/components/parameters/UserId'}]
     get:
       tags: [Users]
@@ -54,12 +54,12 @@ paths:
       responses:
         '200': {description: User, content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
-  /members:
+  /api/v1/members:
     get:
       tags: [Members]
       operationId: list_members
       x-permission: members.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}, {name: status, in: query, schema: {$ref: '#/components/schemas/MembershipStatus'}}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Membership page, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipPage'}, examples: {empty: {$ref: '#/components/examples/EmptyPage'}}}}}
         '400': {$ref: '#/components/responses/InvalidCursor'}
@@ -69,13 +69,12 @@ paths:
       operationId: create_member
       summary: Add an existing or invited user to the tenant
       x-permission: members.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipCreate'}}}}
       responses:
         '201': {description: Membership created, headers: {Location: {schema: {type: string}}}, content: {application/json: {schema: {$ref: '#/components/schemas/Membership'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /members/{membership_id}:
+  /api/v1/members/{membership_id}:
     parameters: [{$ref: '#/components/parameters/MembershipId'}]
     get:
       tags: [Members]
@@ -94,25 +93,25 @@ paths:
       responses:
         '200': {description: Updated membership, content: {application/json: {schema: {$ref: '#/components/schemas/Membership'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
+        '428': {$ref: '#/components/responses/EtagRequired'}
         '412': {$ref: '#/components/responses/EtagMismatch'}
-  /groups:
+  /api/v1/groups:
     get:
       tags: [Groups]
       operationId: list_groups
       x-permission: groups.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Group page, content: {application/json: {schema: {$ref: '#/components/schemas/GroupPage'}}}}
     post:
       tags: [Groups]
       operationId: create_group
       x-permission: groups.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GroupWrite'}}}}
       responses:
         '201': {description: Group created, content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /groups/{group_id}:
+  /api/v1/groups/{group_id}:
     parameters: [{$ref: '#/components/parameters/GroupId'}]
     get:
       tags: [Groups]
@@ -129,22 +128,22 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GroupWrite'}}}}
       responses:
         '200': {description: Updated group, content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}}
+        '428': {$ref: '#/components/responses/EtagRequired'}
         '412': {$ref: '#/components/responses/EtagMismatch'}
     delete:
       tags: [Groups]
       operationId: delete_group
       x-permission: groups.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
       responses:
         '204': {description: Group deleted}
         '409': {$ref: '#/components/responses/Conflict'}
-  /groups/{group_id}/members:
+  /api/v1/groups/{group_id}/members:
     parameters: [{$ref: '#/components/parameters/GroupId'}]
     get:
       tags: [Groups]
       operationId: list_group_members
       x-permission: groups.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Membership page, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipPage'}}}}
     post:
@@ -155,7 +154,7 @@ paths:
       responses:
         '204': {description: Member added}
         '409': {$ref: '#/components/responses/Conflict'}
-  /groups/{group_id}/members/{membership_id}:
+  /api/v1/groups/{group_id}/members/{membership_id}:
     parameters: [{$ref: '#/components/parameters/GroupId'}, {$ref: '#/components/parameters/MembershipId'}]
     delete:
       tags: [Groups]
@@ -164,12 +163,12 @@ paths:
       responses:
         '204': {description: Member removed}
         '404': {$ref: '#/components/responses/NotFound'}
-  /roles:
+  /api/v1/roles:
     get:
       tags: [Roles]
       operationId: list_roles
       x-permission: roles.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
+      parameters: [{$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Role page, content: {application/json: {schema: {$ref: '#/components/schemas/RolePage'}}}}
     post:
@@ -180,7 +179,7 @@ paths:
       responses:
         '201': {description: Role created, content: {application/json: {schema: {$ref: '#/components/schemas/Role'}}}}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /roles/{role_id}:
+  /api/v1/roles/{role_id}:
     parameters: [{$ref: '#/components/parameters/RoleId'}]
     get:
       tags: [Roles]
@@ -197,26 +196,26 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RoleWrite'}}}}
       responses:
         '200': {description: Updated role, content: {application/json: {schema: {$ref: '#/components/schemas/Role'}}}}
+        '428': {$ref: '#/components/responses/EtagRequired'}
         '412': {$ref: '#/components/responses/EtagMismatch'}
-  /role_bindings:
+  /api/v1/role_bindings:
     get:
       tags: [Authorization]
       operationId: list_role_bindings
       x-permission: role_bindings.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}, {name: principal_id, in: query, schema: {$ref: '#/components/schemas/Id'}}]
+      parameters: [{name: principal_id, in: query, schema: {type: [string, 'null']}}, {$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Binding page, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBindingPage'}}}}
     post:
       tags: [Authorization]
       operationId: create_role_binding
       x-permission: role_bindings.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBindingCreate'}}}}
       responses:
         '201': {description: Binding created, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBinding'}}}}
         '403': {description: Delegation denied, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {denied: {$ref: '#/components/examples/DelegationDenied'}}}}}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /role_bindings/{role_binding_id}:
+  /api/v1/role_bindings/{role_binding_id}:
     parameters: [{$ref: '#/components/parameters/RoleBindingId'}]
     get:
       tags: [Authorization]
@@ -229,21 +228,20 @@ paths:
       tags: [Authorization]
       operationId: revoke_role_binding
       x-permission: role_bindings.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
       responses:
         '204': {description: Binding revoked}
         '410': {$ref: '#/components/responses/Expired'}
-  /principals/{principal_id}/effective_permissions:
+  /api/v1/principals/{principal_id}/effective_permissions:
     parameters: [{$ref: '#/components/parameters/PrincipalId'}]
     get:
       tags: [Authorization]
       operationId: get_effective_permissions
       x-permission: authorization.explain
-      parameters: [{name: storage_space_id, in: query, schema: {$ref: '#/components/schemas/Id'}}, {name: object_key, in: query, schema: {$ref: '#/components/schemas/ObjectKey'}}]
+      parameters: [{name: storage_space_id, in: query, schema: {type: [string, 'null']}}, {name: object_key, in: query, schema: {type: [string, 'null']}}]
       responses:
         '200': {description: Effective permissions and sources, content: {application/json: {schema: {$ref: '#/components/schemas/EffectivePermissions'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
-  /authorization/simulations:
+  /api/v1/authorization/simulations:
     post:
       tags: [Authorization]
       operationId: simulate_authorization
@@ -253,24 +251,22 @@ paths:
       responses:
         '200': {description: Decision, content: {application/json: {schema: {$ref: '#/components/schemas/AuthorizationDecision'}, examples: {deny: {$ref: '#/components/examples/SimulationDenied'}}}}}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /applications:
+  /api/v1/applications:
     get:
       tags: [Applications]
       operationId: list_applications
       x-permission: applications.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Application page, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationPage'}}}}
     post:
       tags: [Applications]
       operationId: create_application
       x-permission: applications.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationCreate'}}}}
       responses:
         '201': {description: Application created, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /applications/{application_id}:
+  /api/v1/applications/{application_id}:
     parameters: [{$ref: '#/components/parameters/ApplicationId'}]
     get:
       tags: [Applications]
@@ -283,18 +279,16 @@ paths:
       tags: [Applications]
       operationId: update_application
       x-permission: applications.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationUpdate'}}}}
       responses:
         '200': {description: Updated application, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /applications/{application_id}/api_keys:
+  /api/v1/applications/{application_id}/api_keys:
     parameters: [{$ref: '#/components/parameters/ApplicationId'}]
     get:
       tags: [API Keys]
       operationId: list_api_keys
       x-permission: api_keys.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Key metadata page, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyPage'}}}}
     post:
@@ -302,12 +296,11 @@ paths:
       operationId: create_api_key
       summary: Issue a key; secret appears only in this response
       x-permission: api_keys.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyCreate'}}}}
       responses:
         '201': {description: One-time key credential, content: {application/json: {schema: {$ref: '#/components/schemas/IssuedApiKey'}, examples: {success: {$ref: '#/components/examples/ApiKeyIssued'}}}}}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /api_keys/{api_key_id}:
+  /api/v1/api_keys/{api_key_id}:
     parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     get:
       tags: [API Keys]
@@ -316,7 +309,7 @@ paths:
       responses:
         '200': {description: Non-secret key metadata, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKey'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
-  /api_keys/{api_key_id}/secret:
+  /api/v1/api_keys/{api_key_id}/secret:
     parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     get:
       tags: [API Keys]
@@ -326,18 +319,17 @@ paths:
       x-permission: api_keys.read
       responses:
         '410': {description: Secret cannot be retrieved, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {expired: {$ref: '#/components/examples/SecretGone'}}}}}
-  /api_keys/{api_key_id}/rotations:
+  /api/v1/api_keys/{api_key_id}/rotations:
     parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     post:
       tags: [API Keys]
       operationId: rotate_api_key
       x-permission: api_keys.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [overlap_seconds], properties: {overlap_seconds: {type: integer, minimum: 0, maximum: 86400}}}}}}
       responses:
         '201': {description: Replacement one-time credential, content: {application/json: {schema: {$ref: '#/components/schemas/IssuedApiKey'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /api_keys/{api_key_id}/revocations:
+  /api/v1/api_keys/{api_key_id}/revocations:
     parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     post:
       tags: [API Keys]
@@ -347,12 +339,11 @@ paths:
       responses:
         '200': {description: Revoked key and residual presigned exposure, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyRevocation'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /storage_connections:
+  /api/v1/storage_connections:
     get:
       tags: [Storage]
       operationId: list_storage_connections
       x-permission: storage_connections.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Redacted connection page, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnectionPage'}}}}
     post:
@@ -363,7 +354,7 @@ paths:
       responses:
         '201': {description: Connection created, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnection'}}}}
         '422': {$ref: '#/components/responses/ValidationFailed'}
-  /storage_connections/{connection_id}:
+  /api/v1/storage_connections/{connection_id}:
     parameters: [{$ref: '#/components/parameters/ConnectionId'}]
     get:
       tags: [Storage]
@@ -372,23 +363,21 @@ paths:
       responses:
         '200': {description: Redacted connection, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnection'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
-  /storage_connections/{connection_id}/probes:
+  /api/v1/storage_connections/{connection_id}/probes:
     parameters: [{$ref: '#/components/parameters/ConnectionId'}]
     post:
       tags: [Storage]
       operationId: probe_storage_connection
       x-permission: storage_connections.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, properties: {write_test_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}}}}}}
       responses:
         '200': {description: Capability probe result, content: {application/json: {schema: {$ref: '#/components/schemas/StorageProbe'}}}}
         '503': {$ref: '#/components/responses/StorageUnavailable'}
-  /storage_spaces:
+  /api/v1/storage_spaces:
     get:
       tags: [Storage]
       operationId: list_storage_spaces
       x-permission: storage_spaces.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
       responses:
         '200': {description: Space page, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpacePage'}}}}
     post:
@@ -399,7 +388,7 @@ paths:
       responses:
         '201': {description: Space created, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpace'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /storage_spaces/{space_id}:
+  /api/v1/storage_spaces/{space_id}:
     parameters: [{$ref: '#/components/parameters/SpaceId'}]
     get:
       tags: [Storage]
@@ -408,25 +397,25 @@ paths:
       responses:
         '200': {description: Storage space, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpace'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
-  /storage_spaces/{space_id}/files:
+  /api/v1/storage_spaces/{space_id}/files:
     parameters: [{$ref: '#/components/parameters/SpaceId'}]
     get:
       tags: [Files]
       operationId: list_files
       x-permission: files.list
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}, {name: prefix, in: query, schema: {$ref: '#/components/schemas/CanonicalPrefix'}}]
+      parameters: [{name: prefix, in: query, schema: {type: [string, 'null']}}]
       responses:
-        '200': {description: Authorized object page, content: {application/json: {schema: {$ref: '#/components/schemas/FilePage'}, examples: {empty: {$ref: '#/components/examples/EmptyPage'}}}}}
+        '200': {description: Authorized visible objects, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/FileObjectRuntime'}}}}}
         '400': {$ref: '#/components/responses/InvalidCursor'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
-  /storage_spaces/{space_id}/files/{file_id}:
+  /api/v1/storage_spaces/{space_id}/files/{file_id}:
     parameters: [{$ref: '#/components/parameters/SpaceId'}, {$ref: '#/components/parameters/FileId'}]
     get:
       tags: [Files]
       operationId: get_file
       x-permission: files.read
       responses:
-        '200': {description: Verified object metadata, content: {application/json: {schema: {$ref: '#/components/schemas/FileObject'}}}}
+        '200': {description: Verified object metadata, content: {application/json: {schema: {$ref: '#/components/schemas/FileObjectRuntime'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
     delete:
       tags: [Files]
@@ -434,9 +423,9 @@ paths:
       x-permission: files.delete
       parameters: [{$ref: '#/components/parameters/IfMatch'}, {$ref: '#/components/parameters/IdempotencyKey'}]
       responses:
-        '202': {description: Delete accepted, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperation'}}}}
+        '202': {description: Durable deletion intent accepted; reconciliation performs the provider delete, content: {application/json: {schema: {$ref: '#/components/schemas/DeleteQueued'}}}}
         '412': {$ref: '#/components/responses/EtagMismatch'}
-  /storage_spaces/{space_id}/file_operations:
+  /api/v1/storage_spaces/{space_id}/file_operations:
     parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
       tags: [Files]
@@ -444,19 +433,19 @@ paths:
       summary: Copy, move, or fixed-scope bulk-delete objects
       x-permission: files.copy
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationCreate'}}}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationCreateRuntime'}}}}
       responses:
-        '202': {description: Operation accepted, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperation'}}}}
+        '202': {description: Operation accepted, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationRuntime'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /file_operations/{operation_id}:
+  /api/v1/file_operations/{operation_id}:
     parameters: [{$ref: '#/components/parameters/OperationId'}]
     get:
       tags: [Files]
       operationId: get_file_operation
       responses:
-        '200': {description: Operation state, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperation'}, examples: {partial_failure: {$ref: '#/components/examples/MovePartialFailure'}}}}}
+        '200': {description: Operation state, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationRuntime'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
-  /storage_spaces/{space_id}/uploads:
+  /api/v1/storage_spaces/{space_id}/uploads:
     parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
       tags: [Uploads]
@@ -464,20 +453,20 @@ paths:
       summary: Reserve quota and choose proxy or direct PUT according to capabilities
       x-permission: files.write
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadCreate'}}}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadCreateRuntime'}}}}
       responses:
-        '201': {description: Upload session; direct mode includes one presigned request, content: {application/json: {schema: {$ref: '#/components/schemas/UploadSession'}, examples: {success: {$ref: '#/components/examples/UploadCreated'}}}}}
+        '201': {description: Durable upload session and ingestion intent, content: {application/json: {schema: {$ref: '#/components/schemas/UploadSessionRuntime'}}}}
         '409': {$ref: '#/components/responses/QuotaExceeded'}
         '422': {$ref: '#/components/responses/InvalidObjectKey'}
-  /uploads/{upload_id}:
+  /api/v1/uploads/{upload_id}:
     parameters: [{$ref: '#/components/parameters/UploadId'}]
     get:
       tags: [Uploads]
       operationId: get_upload
       responses:
-        '200': {description: Upload state without presigned URL, content: {application/json: {schema: {$ref: '#/components/schemas/UploadSession'}}}}
+        '200': {description: Upload state without a signed URL, content: {application/json: {schema: {$ref: '#/components/schemas/UploadSessionRuntime'}}}}
         '410': {$ref: '#/components/responses/Expired'}
-  /uploads/{upload_id}/content:
+  /api/v1/uploads/{upload_id}/content:
     parameters: [{$ref: '#/components/parameters/UploadId'}]
     put:
       tags: [Uploads]
@@ -490,19 +479,20 @@ paths:
         '204': {description: Content stored and verified}
         '409': {$ref: '#/components/responses/UploadVerificationFailed'}
         '410': {$ref: '#/components/responses/Expired'}
-  /uploads/{upload_id}/completion:
+  /api/v1/uploads/{upload_id}/completion:
     parameters: [{$ref: '#/components/parameters/UploadId'}]
     post:
       tags: [Uploads]
       operationId: complete_upload
       summary: Verify exact stored metadata before making the object available
       x-permission: files.write
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadComplete'}}}}
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadCompleteRuntime'}}}}
       responses:
-        '200': {description: Available file, content: {application/json: {schema: {$ref: '#/components/schemas/FileObject'}}}}
+        '200': {description: Committed ingestion result, content: {application/json: {schema: {$ref: '#/components/schemas/IngestionCommitResult'}}}}
         '409': {$ref: '#/components/responses/UploadVerificationFailed'}
         '410': {$ref: '#/components/responses/Expired'}
-  /storage_spaces/{space_id}/presigned_downloads:
+  /api/v1/storage_spaces/{space_id}/presigned_downloads:
     parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
       tags: [Uploads]
@@ -510,28 +500,28 @@ paths:
       x-permission: presigned_urls.issue
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresignedDownloadCreate'}}}}
       responses:
-        '201': {description: One-time response containing an exact GET request, content: {application/json: {schema: {$ref: '#/components/schemas/PresignedRequest'}}}}
+        '201': {description: One-time response containing an exact GET request for a controlled file reference, content: {application/json: {schema: {$ref: '#/components/schemas/PresignedDownloadRuntime'}}}}
         '403': {$ref: '#/components/responses/PermissionDenied'}
         '422': {$ref: '#/components/responses/UnsupportedCapability'}
-  /storage_spaces/{space_id}/multipart_uploads:
+  /api/v1/storage_spaces/{space_id}/multipart_uploads:
     parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
       tags: [Multipart]
       operationId: create_multipart_upload
       x-permission: multipart.manage
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartCreate'}}}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartCreateRuntime'}}}}
       responses:
-        '201': {description: Bound multipart session, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartUpload'}}}}
+        '201': {description: Bound multipart session and ingestion intent, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartUploadRuntime'}}}}
         '409': {$ref: '#/components/responses/QuotaExceeded'}
         '422': {$ref: '#/components/responses/UnsupportedCapability'}
-  /multipart_uploads/{multipart_id}:
+  /api/v1/multipart_uploads/{multipart_id}:
     parameters: [{$ref: '#/components/parameters/MultipartId'}]
     get:
       tags: [Multipart]
       operationId: get_multipart_upload
       responses:
-        '200': {description: Multipart session, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartUpload'}}}}
+        '200': {description: Multipart session, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartUploadRuntime'}}}}
         '410': {$ref: '#/components/responses/Expired'}
     delete:
       tags: [Multipart]
@@ -541,57 +531,59 @@ paths:
       responses:
         '204': {description: Multipart upload aborted and reservation released}
         '410': {$ref: '#/components/responses/Expired'}
-  /multipart_uploads/{multipart_id}/parts:
+  /api/v1/multipart_uploads/{multipart_id}/parts:
     parameters: [{$ref: '#/components/parameters/MultipartId'}]
     get:
       tags: [Multipart]
       operationId: list_multipart_parts
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}]
       responses:
-        '200': {description: Part page, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartPage'}}}}
+        '200': {description: Bound multipart parts, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/MultipartPartRuntime'}}}}}
         '410': {$ref: '#/components/responses/Expired'}
     post:
       tags: [Multipart]
       operationId: create_multipart_part
       summary: Issue an exact part PUT request
       x-permission: multipart.manage
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartCreate'}}}}
       responses:
-        '201': {description: Presigned part request, content: {application/json: {schema: {$ref: '#/components/schemas/PresignedRequest'}}}}
+        '201': {description: Bound multipart part state, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartRuntime'}}}}
         '410': {$ref: '#/components/responses/Expired'}
-  /multipart_uploads/{multipart_id}/parts/{part_number}:
+  /api/v1/multipart_uploads/{multipart_id}/parts/{part_number}:
     parameters: [{$ref: '#/components/parameters/MultipartId'}, {name: part_number, in: path, required: true, schema: {type: integer, minimum: 1, maximum: 10000}}]
     put:
       tags: [Multipart]
       operationId: confirm_multipart_part
       summary: Record an opaque ETag after validating this bound part
       x-permission: multipart.manage
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartConfirm'}}}}
       responses:
-        '200': {description: Confirmed part, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPart'}}}}
+        '200': {description: Confirmed part, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartRuntime'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
         '410': {$ref: '#/components/responses/Expired'}
-  /multipart_uploads/{multipart_id}/completion:
+  /api/v1/multipart_uploads/{multipart_id}/completion:
     parameters: [{$ref: '#/components/parameters/MultipartId'}]
     post:
       tags: [Multipart]
       operationId: complete_multipart_upload
       x-permission: multipart.manage
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartComplete'}}}}
       responses:
-        '200': {description: Verified available file, content: {application/json: {schema: {$ref: '#/components/schemas/FileObject'}}}}
+        '200': {description: Committed ingestion result, content: {application/json: {schema: {$ref: '#/components/schemas/IngestionCommitResult'}}}}
         '409': {$ref: '#/components/responses/MultipartInvalid'}
         '410': {$ref: '#/components/responses/Expired'}
-  /quotas:
+  /api/v1/quotas:
     get:
       tags: [Quotas]
       operationId: list_quotas
       x-permission: quotas.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}, {name: storage_space_id, in: query, schema: {$ref: '#/components/schemas/Id'}}]
+      parameters: [{name: storage_space_id, in: query, schema: {type: [string, 'null']}}]
       responses:
         '200': {description: Quota page, content: {application/json: {schema: {$ref: '#/components/schemas/QuotaPage'}}}}
         '403': {$ref: '#/components/responses/PermissionDenied'}
-  /quotas/{quota_id}:
+  /api/v1/quotas/{quota_id}:
     parameters: [{$ref: '#/components/parameters/QuotaId'}]
     get:
       tags: [Quotas]
@@ -604,23 +596,22 @@ paths:
       tags: [Quotas]
       operationId: update_quota
       x-permission: quotas.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/QuotaUpdate'}}}}
       responses:
         '200': {description: Updated quota, content: {application/json: {schema: {$ref: '#/components/schemas/Quota'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
-  /audit_events:
+  /api/v1/audit_events:
     get:
       tags: [Audit]
       operationId: list_audit_events
       summary: Search immutable tenant audit events
       x-permission: audit.read
-      parameters: [{$ref: '#/components/parameters/Limit'}, {$ref: '#/components/parameters/Cursor'}, {name: occurred_from, in: query, schema: {$ref: '#/components/schemas/Timestamp'}}, {name: occurred_to, in: query, schema: {$ref: '#/components/schemas/Timestamp'}}, {name: action, in: query, schema: {type: string}}, {name: actor_principal_id, in: query, schema: {$ref: '#/components/schemas/Id'}}]
+      parameters: [{name: occurred_from, in: query, schema: {type: [string, 'null']}}, {name: occurred_to, in: query, schema: {type: [string, 'null']}}, {name: action, in: query, schema: {type: [string, 'null']}}, {name: actor_principal_id, in: query, schema: {type: [string, 'null']}}]
       responses:
         '200': {description: Audit page, content: {application/json: {schema: {$ref: '#/components/schemas/AuditEventPage'}, examples: {empty: {$ref: '#/components/examples/EmptyPage'}}}}}
         '400': {$ref: '#/components/responses/InvalidCursor'}
         '403': {$ref: '#/components/responses/PermissionDenied'}
-  /audit_events/{audit_event_id}:
+  /api/v1/audit_events/{audit_event_id}:
     parameters: [{$ref: '#/components/parameters/AuditEventId'}]
     get:
       tags: [Audit]
@@ -663,6 +654,7 @@ components:
     Conflict: {description: State conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {conflict: {$ref: '#/components/examples/Conflict'}}}}}
     ValidationFailed: {description: Validation failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     EtagMismatch: {description: Resource changed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    EtagRequired: {description: If-Match is required, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     Expired: {description: Resource expired, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {expired: {$ref: '#/components/examples/Expired'}}}}}
     QuotaExceeded: {description: Quota cannot be reserved, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     InvalidObjectKey: {description: Unsafe or ambiguous object key, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -671,7 +663,7 @@ components:
     UnsupportedCapability: {description: Required connection capability unsupported, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     StorageUnavailable: {description: Storage unavailable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   schemas:
-    Id: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$'}
+    Id: {type: string}
     Timestamp: {type: string, format: date-time, pattern: 'Z$'}
     ObjectKey: {type: string, minLength: 1, maxLength: 1024, description: Canonical relative object key; no leading slash, dot segments, backslash, controls or ambiguous encoding.}
     CanonicalPrefix: {type: string, maxLength: 1024, description: Canonical relative prefix; empty string denotes the complete storage space.}
@@ -686,6 +678,7 @@ components:
         details: {type: object, additionalProperties: true}
     PageBase:
       type: object
+      additionalProperties: false
       required: [items, next_cursor]
       properties: {next_cursor: {type: [string, 'null']}}
     TenantSummary:
@@ -718,38 +711,38 @@ components:
     Membership:
       type: object
       additionalProperties: false
-      required: [id, user, status, authorization_version, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, user: {$ref: '#/components/schemas/User'}, status: {$ref: '#/components/schemas/MembershipStatus'}, authorization_version: {type: integer, minimum: 1}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
+      required: [id, user, principal, status, authorization_version, created_at, updated_at, etag]
+      properties: {id: {$ref: '#/components/schemas/Id'}, user: {$ref: '#/components/schemas/User'}, principal: {$ref: '#/components/schemas/PrincipalSummary'}, status: {$ref: '#/components/schemas/MembershipStatus'}, authorization_version: {type: integer, minimum: 1}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
     MembershipCreate:
       type: object
       additionalProperties: false
       required: [email]
-      properties: {email: {type: string, format: email}, display_name: {type: string, maxLength: 200}}
+      properties: {email: {type: string, minLength: 3, maxLength: 320}, display_name: {type: [string, 'null'], maxLength: 200}}
     MembershipUpdate:
       type: object
       additionalProperties: false
       required: [status, reason]
-      properties: {status: {$ref: '#/components/schemas/MembershipStatus'}, reason: {type: string, minLength: 1, maxLength: 500}}
+      properties: {status: {type: string}, reason: {type: string, minLength: 1, maxLength: 500}}
     MembershipPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Membership'}}}}]}
     Group:
       type: object
       additionalProperties: false
-      required: [id, name, description, member_count, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, description: {type: string}, member_count: {type: integer, minimum: 0}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    GroupWrite: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}, description: {type: string, maxLength: 1000}}}
+      required: [id, principal, name, description, member_count, created_at, updated_at, etag]
+      properties: {id: {$ref: '#/components/schemas/Id'}, principal: {$ref: '#/components/schemas/PrincipalSummary'}, name: {type: string}, description: {type: string}, member_count: {type: integer, minimum: 0}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
+    GroupWrite: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}, description: {type: [string, 'null'], maxLength: 1000}}}
     GroupPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Group'}}}}]}
     Role:
       type: object
       additionalProperties: false
       required: [id, name, description, permissions, system, created_at, updated_at, etag]
       properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, description: {type: string}, permissions: {type: array, uniqueItems: true, items: {type: string}}, system: {type: boolean}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    RoleWrite: {type: object, additionalProperties: false, required: [name, permissions], properties: {name: {type: string, minLength: 1, maxLength: 200}, description: {type: string, maxLength: 1000}, permissions: {type: array, uniqueItems: true, items: {type: string}}}}
+    RoleWrite: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}, description: {type: [string, 'null'], maxLength: 1000}, permissions: {type: array, items: {type: string}}}}
     RolePage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Role'}}}}]}
     ResourceScope:
       type: object
       additionalProperties: false
       required: [type]
-      properties: {type: {type: string, enum: [tenant, storage_space, storage_prefix]}, storage_space_id: {$ref: '#/components/schemas/Id'}, canonical_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}}
+      properties: {type: {type: string, enum: [tenant, storage_space, directory]}, storage_space_id: {type: [string, 'null']}, canonical_prefix: {type: [string, 'null']}}
     RoleBinding:
       type: object
       additionalProperties: false
@@ -770,25 +763,25 @@ components:
       type: object
       additionalProperties: false
       required: [permission, decision, reason_code, sources]
-      properties: {permission: {type: string}, decision: {type: string, enum: [allow, deny]}, reason_code: {type: string}, scope: {$ref: '#/components/schemas/ResourceScope'}, sources: {type: array, items: {$ref: '#/components/schemas/DecisionSource'}}}
+      properties: {permission: {type: string}, decision: {type: string, enum: [allow, deny]}, reason_code: {type: string}, sources: {type: array, items: {$ref: '#/components/schemas/DecisionSource'}}}
     EffectivePermissions: {type: object, additionalProperties: false, required: [principal_id, authorization_version, evaluated_at, permissions], properties: {principal_id: {$ref: '#/components/schemas/Id'}, authorization_version: {type: integer}, evaluated_at: {$ref: '#/components/schemas/Timestamp'}, permissions: {type: array, items: {$ref: '#/components/schemas/EffectivePermission'}}}}
-    AuthorizationSimulationRequest: {type: object, additionalProperties: false, required: [principal_id, permission, resource], properties: {principal_id: {$ref: '#/components/schemas/Id'}, permission: {type: string}, resource: {$ref: '#/components/schemas/ResourceScope'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, at: {$ref: '#/components/schemas/Timestamp'}}}
-    AuthorizationDecision: {type: object, additionalProperties: false, required: [decision, reason_code, authorization_version, evaluated_at, sources], properties: {decision: {type: string, enum: [allow, deny]}, reason_code: {type: string}, authorization_version: {type: integer}, evaluated_at: {$ref: '#/components/schemas/Timestamp'}, sources: {type: array, items: {$ref: '#/components/schemas/DecisionSource'}}}}
+    AuthorizationSimulationRequest: {type: object, additionalProperties: false, required: [principal_id, permission], properties: {principal_id: {type: string}, permission: {type: string}, storage_space_id: {type: [string, 'null']}, object_key: {type: [string, 'null']}}}
+    AuthorizationDecision: {type: object, additionalProperties: false, required: [permission, decision, reason_code, authorization_version, evaluated_at, sources], properties: {permission: {type: string}, decision: {type: string, enum: [allow, deny]}, reason_code: {type: string}, authorization_version: {type: integer}, evaluated_at: {$ref: '#/components/schemas/Timestamp'}, sources: {type: array, items: {$ref: '#/components/schemas/DecisionSource'}}}}
     OwnerRef: {type: object, additionalProperties: false, required: [principal_id, principal_type], properties: {principal_id: {$ref: '#/components/schemas/Id'}, principal_type: {type: string, enum: [user, group]}}}
     Application:
       type: object
       additionalProperties: false
       required: [id, name, status, owners, takeover_required, created_at, updated_at, etag]
       properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, status: {type: string, enum: [active, disabled, takeover_required]}, owners: {type: array, minItems: 1, items: {$ref: '#/components/schemas/OwnerRef'}}, takeover_required: {type: boolean}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    ApplicationCreate: {type: object, additionalProperties: false, required: [name, owners], properties: {name: {type: string, minLength: 1, maxLength: 200}, owners: {type: array, minItems: 1, items: {$ref: '#/components/schemas/OwnerRef'}}}}
-    ApplicationUpdate: {type: object, additionalProperties: false, properties: {name: {type: string, minLength: 1, maxLength: 200}, status: {type: string, enum: [active, disabled]}, owners: {type: array, minItems: 1, items: {$ref: '#/components/schemas/OwnerRef'}}}}
+    ApplicationCreate: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}}}
+    ApplicationUpdate: {type: object, additionalProperties: false, properties: {name: {type: [string, 'null'], maxLength: 200}}}
     ApplicationPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Application'}}}}]}
     ApiKey:
       type: object
       additionalProperties: false
       required: [id, application_id, name, prefix, scopes, status, created_at, expires_at, last_used_at, etag]
       properties: {id: {$ref: '#/components/schemas/Id'}, application_id: {$ref: '#/components/schemas/Id'}, name: {type: string}, prefix: {type: string}, scopes: {type: array, uniqueItems: true, items: {type: string}}, status: {type: string, enum: [active, disabled, revoked, expired, rotating]}, created_at: {$ref: '#/components/schemas/Timestamp'}, expires_at: {$ref: '#/components/schemas/Timestamp'}, last_used_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: "null"}]}, etag: {type: string}}
-    ApiKeyCreate: {type: object, additionalProperties: false, required: [name, scopes, expires_at], properties: {name: {type: string, minLength: 1, maxLength: 200}, scopes: {type: array, minItems: 1, uniqueItems: true, items: {type: string}}, expires_at: {$ref: '#/components/schemas/Timestamp'}}}
+    ApiKeyCreate: {type: object, additionalProperties: false, properties: {scopes: {type: array, items: {type: string}}, ttl_days: {type: integer, minimum: 1, maximum: 365, default: 90}}}
     IssuedApiKey: {type: object, additionalProperties: false, required: [api_key, credential], properties: {api_key: {$ref: '#/components/schemas/ApiKey'}, credential: {type: string, writeOnly: true, description: One-time `key_id.secret`; never retrievable again.}}}
     ApiKeyPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/ApiKey'}}}}]}
     ApiKeyRevocation: {type: object, additionalProperties: false, required: [api_key, revoked_at, presigned_exposure_until], properties: {api_key: {$ref: '#/components/schemas/ApiKey'}, revoked_at: {$ref: '#/components/schemas/Timestamp'}, presigned_exposure_until: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: "null"}]}}}
@@ -798,29 +791,41 @@ components:
       additionalProperties: false
       required: [id, name, endpoint, region, signature_version, path_style, credential_reference, status, capabilities, last_probed_at, etag]
       properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, endpoint: {type: string, format: uri}, region: {type: string}, signature_version: {type: string, const: sigv4}, path_style: {type: boolean}, credential_reference: {type: string, description: Redacted external secret reference, pattern: '^secret://'}, status: {type: string, enum: [pending, available, unavailable]}, capabilities: {$ref: '#/components/schemas/StorageCapabilities'}, last_probed_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: "null"}]}, etag: {type: string}}
-    StorageConnectionCreate: {type: object, additionalProperties: false, required: [name, endpoint, region, path_style, credential_reference], properties: {name: {type: string}, endpoint: {type: string, format: uri}, region: {type: string, minLength: 1}, path_style: {type: boolean}, credential_reference: {type: string, pattern: '^secret://'}}}
+    StorageConnectionCreate: {type: object, additionalProperties: false, required: [name, endpoint, region, credential_reference], properties: {name: {type: string, minLength: 1, maxLength: 200}, endpoint: {type: string, minLength: 1, maxLength: 500}, region: {type: string, minLength: 1, maxLength: 100}, path_style: {type: boolean, default: true}, credential_reference: {type: string, minLength: 1, maxLength: 500}}}
     StorageConnectionPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/StorageConnection'}}}}]}
     StorageProbe: {type: object, additionalProperties: false, required: [connection_id, status, probed_at, capabilities, checks], properties: {connection_id: {$ref: '#/components/schemas/Id'}, status: {type: string, enum: [available, unavailable]}, probed_at: {$ref: '#/components/schemas/Timestamp'}, capabilities: {$ref: '#/components/schemas/StorageCapabilities'}, checks: {type: array, items: {type: object, additionalProperties: false, required: [name, status], properties: {name: {type: string}, status: {type: string, enum: [passed, failed, unsupported]}, reason_code: {type: [string, 'null']}}}}}}
     StorageSpace: {type: object, additionalProperties: false, required: [id, name, connection_id, bucket, root_prefix, status, created_at, etag], properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, connection_id: {$ref: '#/components/schemas/Id'}, bucket: {type: string}, root_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}, status: {type: string, enum: [active, disabled]}, created_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}}
-    StorageSpaceCreate: {type: object, additionalProperties: false, required: [name, connection_id, bucket, root_prefix], properties: {name: {type: string}, connection_id: {$ref: '#/components/schemas/Id'}, bucket: {type: string, minLength: 3, maxLength: 255}, root_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}}}
+    StorageSpaceCreate: {type: object, additionalProperties: false, required: [name, connection_id, bucket], properties: {name: {type: string, minLength: 1, maxLength: 200}, connection_id: {type: string}, bucket: {type: string, minLength: 1, maxLength: 255}, root_prefix: {type: string, maxLength: 1024, default: ''}}}
     StorageSpacePage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/StorageSpace'}}}}]}
     FileObject: {type: object, additionalProperties: false, required: [id, storage_space_id, object_key, size_bytes, content_type, etag, status, created_at, updated_at], properties: {id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 0}, content_type: {type: string}, checksum_sha256: {type: [string, 'null']}, etag: {type: string, description: Opaque storage validator; not assumed to be MD5.}, status: {type: string, enum: [pending, available, quarantined, deleting, deleted, partial_failure]}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}}}
     FilePage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/FileObject'}}}}]}
     FileOperationCreate: {type: object, additionalProperties: false, required: [type, source_keys], properties: {type: {type: string, enum: [copy, move, bulk_delete]}, source_keys: {type: array, minItems: 1, maxItems: 1000, uniqueItems: true, items: {$ref: '#/components/schemas/ObjectKey'}}, destination_space_id: {$ref: '#/components/schemas/Id'}, destination_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}, confirmation: {type: string, description: Required server-issued confirmation for bulk delete.}}}
+    FileOperationCreateRuntime: {type: object, additionalProperties: false, required: [operation_type], properties: {operation_type: {type: string, enum: [copy, move, delete]}, source_key: {type: [string, 'null'], maxLength: 1024}, destination_key: {type: [string, 'null'], maxLength: 1024}, keys: {type: [array, 'null'], items: {$ref: '#/components/schemas/ObjectKey'}}}}
     FileOperationItem: {type: object, additionalProperties: false, required: [source_key, status], properties: {source_key: {$ref: '#/components/schemas/ObjectKey'}, destination_key: {oneOf: [{$ref: '#/components/schemas/ObjectKey'}, {type: "null"}]}, status: {type: string, enum: [pending, succeeded, failed, copied_source_delete_failed]}, error: {oneOf: [{$ref: '#/components/schemas/Error'}, {type: "null"}]}}}
     FileOperation: {type: object, additionalProperties: false, required: [id, type, status, created_at, updated_at, items], properties: {id: {$ref: '#/components/schemas/Id'}, type: {type: string, enum: [copy, move, bulk_delete]}, status: {type: string, enum: [pending, running, succeeded, failed, partial_failure]}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, items: {type: array, items: {$ref: '#/components/schemas/FileOperationItem'}}}}
+    FileOperationRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, operation_type, status, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, operation_type: {type: string, enum: [copy, move, delete]}, status: {type: string}, source_key: {type: [string, 'null']}, destination_key: {type: [string, 'null']}, failure_reason: {type: [string, 'null']}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
     UploadCreate: {type: object, additionalProperties: false, required: [object_key, size_bytes, content_type, mode], properties: {object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 0}, content_type: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}, mode: {type: string, enum: [auto, proxy, direct]}, overwrite: {type: boolean, default: false}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}}}
+    UploadCreateRuntime: {type: object, additionalProperties: false, required: [object_key, content_length, content_type], properties: {object_key: {type: string, minLength: 1, maxLength: 1024}, content_length: {type: integer, minimum: 0}, content_type: {type: string, minLength: 1, maxLength: 255}, checksum: {type: [string, 'null'], maxLength: 512}, direct_requested: {type: boolean, default: false}}}
+    UploadSessionRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, principal_id, storage_space_id, object_key, content_length, content_type, status, expires_at, ingestion_id], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, principal_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, checksum: {type: [string, 'null']}, status: {type: string, enum: [pending, completed, expired, failed, reconciliation_required]}, expires_at: {$ref: '#/components/schemas/Timestamp'}, ingestion_id: {$ref: '#/components/schemas/Id'}}}
     PresignedRequest: {type: object, additionalProperties: false, required: [method, url, headers, expires_at], properties: {method: {type: string, enum: [GET, PUT]}, url: {type: string, format: uri, writeOnly: true}, headers: {type: object, additionalProperties: {type: string}}, expires_at: {$ref: '#/components/schemas/Timestamp'}}}
     UploadSession: {type: object, additionalProperties: false, required: [id, storage_space_id, object_key, declared_size_bytes, content_type, mode, status, quota_reservation_id, expires_at, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, declared_size_bytes: {type: integer}, content_type: {type: string}, mode: {type: string, enum: [proxy, direct]}, status: {type: string, enum: [pending, uploaded, verifying, completed, failed, expired]}, quota_reservation_id: {$ref: '#/components/schemas/Id'}, presigned_request: {oneOf: [{$ref: '#/components/schemas/PresignedRequest'}, {type: "null"}], description: Present only in the direct-mode creation response.}, expires_at: {$ref: '#/components/schemas/Timestamp'}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
+    UploadCompleteRuntime: {type: object, additionalProperties: false, properties: {checksum: {type: [string, 'null'], maxLength: 512}}}
     UploadComplete: {type: object, additionalProperties: false, properties: {observed_etag: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}}}
-    PresignedDownloadCreate: {type: object, additionalProperties: false, required: [file_id, ttl_seconds], properties: {file_id: {$ref: '#/components/schemas/Id'}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600}}}
+    PresignedDownloadCreate: {type: object, additionalProperties: false, required: [file_id], properties: {file_id: {type: string, minLength: 1, maxLength: 64}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}}}
+    PresignedDownloadRuntime: {type: object, additionalProperties: false, required: [method, url, file_id, expires_in], properties: {method: {type: string, const: GET}, url: {type: string, format: uri, writeOnly: true}, file_id: {$ref: '#/components/schemas/Id'}, expires_in: {type: integer, minimum: 30, maximum: 3600}}}
     MultipartCreate: {type: object, additionalProperties: false, required: [object_key, size_bytes, content_type], properties: {object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 1}, content_type: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}, expires_in_seconds: {type: integer, minimum: 300, maximum: 86400, default: 3600}}}
+    MultipartCreateRuntime: {type: object, additionalProperties: false, required: [object_key, content_length, content_type], properties: {object_key: {type: string, minLength: 1, maxLength: 1024}, content_length: {type: integer, minimum: 0}, content_type: {type: string, minLength: 1, maxLength: 255}}}
+    MultipartUploadRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, principal_id, storage_space_id, object_key, content_length, content_type, status, expires_at, ingestion_id], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, principal_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, provider_upload_id: {type: [string, 'null']}, status: {type: string, enum: [pending, completed, aborted, expired, failed, reconciliation_required]}, expires_at: {$ref: '#/components/schemas/Timestamp'}, ingestion_id: {$ref: '#/components/schemas/Id'}}}
     MultipartUpload: {type: object, additionalProperties: false, required: [id, storage_space_id, object_key, declared_size_bytes, content_type, status, quota_reservation_id, expires_at, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, declared_size_bytes: {type: integer}, content_type: {type: string}, status: {type: string, enum: [pending, completing, completed, aborted, expired, failed]}, quota_reservation_id: {$ref: '#/components/schemas/Id'}, expires_at: {$ref: '#/components/schemas/Timestamp'}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
-    MultipartPartCreate: {type: object, additionalProperties: false, required: [part_number, size_bytes], properties: {part_number: {type: integer, minimum: 1, maximum: 10000}, size_bytes: {type: integer, minimum: 1}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}}}
-    MultipartPartConfirm: {type: object, additionalProperties: false, required: [etag, size_bytes], properties: {etag: {type: string}, size_bytes: {type: integer, minimum: 1}, checksum_sha256: {type: string}}}
+    MultipartPartCreate: {type: object, additionalProperties: false, required: [part_number], properties: {part_number: {type: integer, minimum: 1, maximum: 10000}}}
+    MultipartPartConfirm: {type: object, additionalProperties: false, required: [etag, content_length], properties: {etag: {type: string, minLength: 1, maxLength: 512}, content_length: {type: integer, minimum: 0}}}
     MultipartPart: {type: object, additionalProperties: false, required: [part_number, size_bytes, etag, confirmed_at], properties: {part_number: {type: integer}, size_bytes: {type: integer}, etag: {type: string}, checksum_sha256: {type: [string, 'null']}, confirmed_at: {$ref: '#/components/schemas/Timestamp'}}}
+    MultipartPartRuntime: {type: object, additionalProperties: false, required: [part_number], properties: {id: {$ref: '#/components/schemas/Id'}, part_number: {type: integer, minimum: 1, maximum: 10000}, etag: {type: string}, content_length: {type: integer, minimum: 0}}}
     MultipartPartPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/MultipartPart'}}}}]}
     MultipartComplete: {type: object, additionalProperties: false, required: [parts], properties: {parts: {type: array, minItems: 1, items: {type: object, additionalProperties: false, required: [part_number, etag], properties: {part_number: {type: integer, minimum: 1}, etag: {type: string}}}}}}
+    FileObjectRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, storage_space_id, object_key, content_length, content_type, status, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, etag: {type: [string, 'null']}, checksum: {type: [string, 'null']}, status: {type: string, enum: [available, deleting]}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
+    IngestionCommitResult: {type: object, additionalProperties: false, required: [id, tenant_id, storage_space_id, status, file_object], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, status: {type: string, const: committed}, file_object: {$ref: '#/components/schemas/FileObjectRuntime'}}}
+    DeleteQueued: {type: object, additionalProperties: false, required: [status], properties: {status: {type: string, const: deletion_queued}}}
     Quota: {type: object, additionalProperties: false, required: [id, scope_type, limit_bytes, used_bytes, reserved_bytes, available_bytes, measured_at, etag], properties: {id: {$ref: '#/components/schemas/Id'}, scope_type: {type: string, enum: [tenant, storage_space]}, storage_space_id: {oneOf: [{$ref: '#/components/schemas/Id'}, {type: "null"}]}, limit_bytes: {type: integer, minimum: 0}, used_bytes: {type: integer, minimum: 0}, reserved_bytes: {type: integer, minimum: 0}, available_bytes: {type: integer}, measured_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}}
     QuotaUpdate: {type: object, additionalProperties: false, required: [limit_bytes], properties: {limit_bytes: {type: integer, minimum: 0}}}
     QuotaPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Quota'}}}}]}

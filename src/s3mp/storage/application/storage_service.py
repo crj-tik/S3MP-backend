@@ -23,15 +23,14 @@ class StorageService:
     store: StorageStore
 
     async def list_connections(self, tenant_id: UUID) -> list[dict[str, Any]]:
-        return await self.store.list_connections(tenant_id)
+        connections = await self.store.list_connections(tenant_id)
+        return [_public_connection(connection) for connection in connections]
 
     async def get_connection(self, tenant_id: UUID, conn_id: str) -> dict[str, Any]:
         result = await self.store.get_connection(tenant_id, UUID(conn_id))
         if result is None:
             raise ApiError("resource_not_found", "Connection not found", status_code=404)
-        # Redact credential reference
-        result.pop("credential_reference", None)
-        return result
+        return _public_connection(result)
 
     async def create_connection(self, tenant_id: UUID, body: Any) -> dict[str, Any]:
         # Validate config before persisting
@@ -77,3 +76,8 @@ class StorageService:
             "status": "active",
         }
         return await self.store.create_space(tenant_id, data)
+
+
+def _public_connection(connection: dict[str, Any]) -> dict[str, Any]:
+    """Credential references are internal secret-store locators, never API output."""
+    return {key: value for key, value in connection.items() if key != "credential_reference"}

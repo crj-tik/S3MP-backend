@@ -46,9 +46,15 @@ error_codes:
   - code: idempotency_key_reused
     http_status: 409
     description: The idempotency key was previously used with a different request fingerprint.
+  - code: invalid_idempotency_key
+    http_status: 400
+    description: A required Idempotency-Key is missing or outside the accepted length.
   - code: etag_mismatch
     http_status: 412
     description: If-Match does not identify the current resource version.
+  - code: etag_required
+    http_status: 428
+    description: A management mutation requires the current resource ETag in If-Match.
   - code: resource_expired
     http_status: 410
     description: The addressed binding, upload, multipart session or operation has expired.

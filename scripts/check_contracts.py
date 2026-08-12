@@ -108,6 +108,34 @@ def validate_catalog(path: Path, candidates: tuple[str, ...]) -> list[str]:
     return errors
 
 
+def validate_management_permission_bindings(openapi: Any) -> list[str]:
+    """Verify management operation declarations use the executable permission map."""
+    from s3mp.common.api.dependencies import MANAGEMENT_OPERATION_PERMISSIONS
+
+    operations: dict[str, str] = {}
+    for path_item in (openapi.get("paths") or {}).values():
+        if not isinstance(path_item, dict):
+            continue
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            operation_id = operation.get("operationId")
+            permission = operation.get("x-permission")
+            if isinstance(operation_id, str) and operation_id in MANAGEMENT_OPERATION_PERMISSIONS:
+                operations[operation_id] = permission if isinstance(permission, str) else ""
+    errors = []
+    missing = set(MANAGEMENT_OPERATION_PERMISSIONS) - set(operations)
+    if missing:
+        errors.append("Management operations missing from OpenAPI: " + ", ".join(sorted(missing)))
+    for operation_id, permission in operations.items():
+        if permission != MANAGEMENT_OPERATION_PERMISSIONS[operation_id]:
+            errors.append(
+                f"Management permission mismatch for {operation_id}: "
+                f"OpenAPI={permission!r}, runtime={MANAGEMENT_OPERATION_PERMISSIONS[operation_id]!r}"
+            )
+    return errors
+
+
 def main() -> int:
     if not CONTRACTS.exists():
         print("contracts/ is absent; contract validation deferred")
@@ -125,6 +153,7 @@ def main() -> int:
         errors += validate_catalog(
             CONTRACTS / "permission-catalog.yaml", ("permissions", "operations")
         )
+        errors += validate_management_permission_bindings(openapi)
         known_permissions = catalog_identifiers(permission_catalog, ("permissions", "operations"))
         referenced_permissions = collect_key_values(openapi, "x-permission")
         unknown_permissions = referenced_permissions - known_permissions

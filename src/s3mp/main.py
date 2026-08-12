@@ -2,12 +2,14 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+import yaml
 
 from s3mp.applications.api.router import router as applications_router
 from s3mp.applications.application.application_service import (
@@ -17,6 +19,7 @@ from s3mp.applications.application.application_service import (
 from s3mp.applications.domain.credentials import ApiKeyCredentialService
 from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.authorization.api.router import router as authorization_router
+from s3mp.authorization.application.management_service import AuthorizationManagementService
 from s3mp.common.config import Settings, get_settings
 from s3mp.common.database import create_engine, create_session_factory
 from s3mp.common.errors import install_error_handlers
@@ -26,15 +29,29 @@ from s3mp.common.middleware import RequestIDMiddleware
 from s3mp.common.redis import create_redis
 from s3mp.files.api.router import router as files_router
 from s3mp.files.application.file_service import FileApplicationService
+from s3mp.files.infrastructure.authorization_repository import (
+    SqlAlchemyFileAuthorizationStore,
+)
+from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
 from s3mp.governance.api.router import router as governance_router
 from s3mp.governance.application.governance_service import AuditService, QuotaService
 from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, SqlAlchemyQuotaStore
 from s3mp.identity.api.router import router as identity_router
+from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.storage.api.router import router as storage_router
 from s3mp.storage.application.storage_service import StorageService
 from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
 from s3mp.storage.infrastructure.repositories import SqlAlchemyStorageStore
+
+
+def _known_permissions() -> frozenset[str]:
+    catalog_path = Path(__file__).resolve().parents[2] / "contracts" / "permission-catalog.yaml"
+    with catalog_path.open(encoding="utf-8") as stream:
+        catalog = yaml.safe_load(stream) or {}
+    return frozenset(
+        entry["name"] for entry in catalog.get("permissions", []) if isinstance(entry, dict)
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -96,6 +113,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 membership_store=identity_store,
                 principal_store=identity_store,
             )
+            authorization_management = AuthorizationManagementService(
+                identity_store, _known_permissions()
+            )
+            app.state.authorization_management = authorization_management
+            app.state.identity_management = IdentityManagementService(
+                identity_store, authorization_management
+            )
 
         async def database_check() -> None:
             if engine is None:
@@ -138,9 +162,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.storage_service = StorageService(storage_store)  # type: ignore[arg-type]
         file_store = SqlAlchemyFileStore(session_factory) if session_factory else _store
+        file_authorization_store = (
+            SqlAlchemyFileAuthorizationStore(session_factory) if session_factory else None
+        )
+        ingestion_store = SqlAlchemyIngestionStore(session_factory) if session_factory else None
         app.state.file_service = FileApplicationService(
             file_store,  # type: ignore[arg-type]
-            object_storage=object_storage, storage_store=storage_store  # type: ignore[arg-type]
+            object_storage=object_storage,
+            storage_store=storage_store,  # type: ignore[arg-type]
+            authorization_store=file_authorization_store,
+            ingestion_store=ingestion_store,
         )
         quota_store = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
         audit_store = SqlAlchemyAuditStore(session_factory) if session_factory else _store

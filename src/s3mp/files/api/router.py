@@ -2,9 +2,10 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Header, Path, Request
+from fastapi import APIRouter, Body, Header, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.common.application.idempotency import IdempotencyGuard
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
@@ -88,6 +89,10 @@ def _file_svc(request: Request) -> Any:
     return svc
 
 
+def _idempotency_key(value: str | None) -> str:
+    return IdempotencyGuard.validate_key(value)
+
+
 # ── Files ─────────────────────────────────────────────────────────────────────
 
 
@@ -113,7 +118,7 @@ async def get_file(
     )
 
 
-@router.delete("/storage_spaces/{space_id}/files/{file_id}", operation_id="delete_file")
+@router.delete("/storage_spaces/{space_id}/files/{file_id}", status_code=202, operation_id="delete_file")
 async def delete_file(
     request: Request,
     space_id: str = Path(min_length=1),
@@ -122,7 +127,11 @@ async def delete_file(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).delete_file(
-        _context(request), space_id, file_id, idempotency_key=idempotency_key, if_match=if_match
+        _context(request),
+        space_id,
+        file_id,
+        idempotency_key=_idempotency_key(idempotency_key),
+        if_match=if_match,
     )
 
 
@@ -134,7 +143,7 @@ async def create_file_operation(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).create_file_operation(
-        _context(request), space_id, body, idempotency_key=idempotency_key
+        _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
     )
 
 
@@ -159,7 +168,7 @@ async def create_upload(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).create_upload(
-        _context(request), space_id, body, idempotency_key=idempotency_key
+        _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
     )
 
 
@@ -179,8 +188,8 @@ async def proxy_upload_content(
     upload_id: str = Path(min_length=1),
     content_length: int = Header(alias="Content-Length"),
     content_type: str = Header(alias="Content-Type"),
+    body: bytes = Body(..., media_type="application/octet-stream"),
 ) -> None:
-    body = await request.body()
     await _file_svc(request).proxy_upload_content(
         _context(request), upload_id, body, content_length, content_type
     )
@@ -194,7 +203,7 @@ async def complete_upload(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).complete_upload(
-        _context(request), upload_id, body, idempotency_key=idempotency_key
+        _context(request), upload_id, body, idempotency_key=_idempotency_key(idempotency_key)
     )
 
 
@@ -220,7 +229,7 @@ async def create_multipart_upload(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).create_multipart_upload(
-        _context(request), space_id, body, idempotency_key=idempotency_key
+        _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
     )
 
 
@@ -241,7 +250,7 @@ async def abort_multipart_upload(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> None:
     await _file_svc(request).abort_multipart_upload(
-        _context(request), multipart_id, idempotency_key=idempotency_key
+        _context(request), multipart_id, idempotency_key=_idempotency_key(idempotency_key)
     )
 
 
@@ -263,7 +272,7 @@ async def create_multipart_part(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).create_multipart_part(
-        _context(request), multipart_id, body, idempotency_key=idempotency_key
+        _context(request), multipart_id, body, idempotency_key=_idempotency_key(idempotency_key)
     )
 
 
@@ -273,9 +282,14 @@ async def confirm_multipart_part(
     body: MultipartPartConfirm,
     multipart_id: str = Path(min_length=1),
     part_number: int = Path(ge=1, le=10000),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).confirm_multipart_part(
-        _context(request), multipart_id, part_number, body
+        _context(request),
+        multipart_id,
+        part_number,
+        body,
+        idempotency_key=_idempotency_key(idempotency_key),
     )
 
 
@@ -287,5 +301,5 @@ async def complete_multipart_upload(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _file_svc(request).complete_multipart_upload(
-        _context(request), multipart_id, body, idempotency_key=idempotency_key
+        _context(request), multipart_id, body, idempotency_key=_idempotency_key(idempotency_key)
     )
