@@ -1,0 +1,14 @@
+principal:
+  id: usr_01J5YPGW8B2Q1KXMSA2JBNM8T7
+  type: user
+  display_name: Chen Rui
+current_tenant:
+  id: ten_01J5YPH8J79M4S7JAHV1P3P6WQ
+  name: Example Research
+  membership_status: active
+available_tenants:
+  - id: ten_01J5YPH8J79M4S7JAHV1P3P6WQ
+    name: Example Research
+    membership_status: active
+coarse_permissions: [files.list, files.read, files.write]
+authorization_version: 42

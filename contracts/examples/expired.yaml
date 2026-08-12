@@ -1,0 +1,7 @@
+code: resource_expired
+message: The upload session has expired.
+request_id: req_01J5YQGEX3K6BXW43MZS8M29CM
+details:
+  resource_type: upload
+  resource_id: upl_01J5YR5Q6VWDN44WTPX5VHV7MB
+  expired_at: '2026-08-10T09:45:00Z'

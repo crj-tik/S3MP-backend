@@ -1,0 +1,17 @@
+id: upl_01J5YR5Q6VWDN44WTPX5VHV7MB
+storage_space_id: spc_01J5YR3P6NP3V6KK7S4YRHTAZA
+object_key: reports/2026-08/summary.csv
+declared_size_bytes: 18432
+content_type: text/csv
+mode: direct
+status: pending
+quota_reservation_id: qrs_01J5YR5QCB9HZ6Q2VM7DRS1YZY
+presigned_request:
+  method: PUT
+  url: https://objects.example.invalid/archive/reports/2026-08/summary.csv?X-Amz-Signature=REDACTED_EXAMPLE
+  headers:
+    content-type: text/csv
+    x-amz-checksum-sha256: EXAMPLE_BASE64_CHECKSUM
+  expires_at: '2026-08-10T09:45:00Z'
+expires_at: '2026-08-10T09:45:00Z'
+created_at: '2026-08-10T09:30:00Z'

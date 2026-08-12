@@ -1,0 +1,6 @@
+code: permission_denied
+message: The principal is not allowed to perform this action.
+request_id: req_01J5YQ2NA8R6QJ8VY6X4Z6AT2M
+details:
+  permission: files.write
+  reason_code: no_matching_allow

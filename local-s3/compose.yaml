@@ -1,0 +1,62 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+
+  # Create the development bucket after MinIO is available.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3MP_LOCAL_BUCKET: ${S3MP_LOCAL_BUCKET:-s3mp-dev}
+      S3MP_ACCESS_KEY: ${S3MP_ACCESS_KEY:-s3mp-app}
+      S3MP_SECRET_KEY: ${S3MP_SECRET_KEY:-change-me-s3mp-local}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          sleep 2
+        done
+        mc mb --ignore-existing "local/$${S3MP_LOCAL_BUCKET}"
+        mc anonymous set none "local/$${S3MP_LOCAL_BUCKET}"
+        cat > /tmp/s3mp-policy.json <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": ["s3:GetBucketLocation", "s3:ListBucket"],
+              "Resource": ["arn:aws:s3:::$${S3MP_LOCAL_BUCKET}"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+              ],
+              "Resource": ["arn:aws:s3:::$${S3MP_LOCAL_BUCKET}/*"]
+            }
+          ]
+        }
+        EOF
+        mc admin policy create local s3mp-app-policy /tmp/s3mp-policy.json 2>/dev/null || true
+        mc admin user add local "$${S3MP_ACCESS_KEY}" "$${S3MP_SECRET_KEY}" 2>/dev/null || true
+        mc admin policy attach local s3mp-app-policy --user "$${S3MP_ACCESS_KEY}"
+
+volumes:
+  minio-data:

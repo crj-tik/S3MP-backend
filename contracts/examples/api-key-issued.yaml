@@ -1,0 +1,12 @@
+api_key:
+  id: key_01J5YR27JJE2B3RH5AJKV5BQ46
+  application_id: app_01J5YR0JEX0Y94XHHT5FAPWYEF
+  name: nightly-ingest
+  prefix: s3mp_k_7N2P
+  scopes: [files.list, files.write]
+  status: active
+  created_at: '2026-08-10T09:30:00Z'
+  expires_at: '2026-11-08T09:30:00Z'
+  last_used_at: null
+  etag: '"key-v1"'
+credential: s3mp_k_7N2P.ZDEMO_ONLY_ONETIME_SECRET_REDACT_AFTER_RESPONSE

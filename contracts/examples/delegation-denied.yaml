@@ -1,0 +1,7 @@
+code: delegation_exceeds_authority
+message: The proposed role binding exceeds your delegable authority.
+request_id: req_01J5YQ8AZP6BFA2VZY80K4XKXM
+details:
+  permission: files.delete
+  storage_space_id: spc_01J5YR3P6NP3V6KK7S4YRHTAZA
+  canonical_prefix: finance/
