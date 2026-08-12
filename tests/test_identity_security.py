@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from s3mp.common.auth_middleware import _resolve_api_key
 from s3mp.common.config import Settings
 from s3mp.identity.application.security import (
     AuthenticationFailed,
@@ -16,7 +17,7 @@ from s3mp.identity.application.security import (
     SessionCookiePolicy,
     SessionTokenService,
 )
-from s3mp.identity.domain.context import is_session_usable, select_membership
+from s3mp.identity.domain.context import PrincipalContext, is_session_usable, select_membership
 from s3mp.identity.domain.entities import Membership, Session
 from s3mp.main import create_app
 
@@ -166,7 +167,7 @@ async def test_me_returns_server_derived_tenant_context() -> None:
     membership = Membership(uuid4(), uuid4(), uuid4(), uuid4(), "active", 2, None)
     context = select_membership([membership], membership.tenant_id)
 
-    class Provider:
+    class IdentityManagement:
         async def get_me(self, _context):
             return {
                 "principal": {
@@ -180,7 +181,7 @@ async def test_me_returns_server_derived_tenant_context() -> None:
                 "authorization_version": context.authorization_version,
             }
 
-    app.state.identity_context_provider = Provider()
+    app.state.identity_management = IdentityManagement()
 
     @app.middleware("http")
     async def inject_context(request, call_next):
@@ -192,3 +193,33 @@ async def test_me_returns_server_derived_tenant_context() -> None:
 
     assert response.status_code == 200
     assert response.json()["authorization_version"] == 2
+
+
+def test_application_context_has_no_synthetic_membership() -> None:
+    context = PrincipalContext.for_application(uuid4(), uuid4())
+
+    assert context.subject_kind == "application"
+    assert context.membership_id is None
+
+
+@pytest.mark.asyncio
+async def test_api_key_resolution_produces_application_subject() -> None:
+    tenant_id, application_id = uuid4(), uuid4()
+
+    class ApiKeyService:
+        async def authenticate(self, header: str):
+            assert header == "S3MP-Key key-id.secret"
+            return tenant_id, uuid4(), {"application_id": application_id, "authorization_version": 7}
+
+    class App:
+        class State:
+            api_key_service = ApiKeyService()
+
+        state = State()
+
+    class Request:
+        app = App()
+
+    context = await _resolve_api_key(Request(), "S3MP-Key key-id.secret")
+
+    assert context == PrincipalContext.for_application(tenant_id, application_id, 7)

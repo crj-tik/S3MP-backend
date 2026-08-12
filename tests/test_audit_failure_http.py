@@ -112,7 +112,8 @@ async def test_audit_unavailable_returns_503_and_does_not_touch_storage() -> Non
     app = make_app({"file_service": svc}, context=_ctx())
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.delete(
-            f"/api/v1/storage_spaces/{uuid4()}/files/{uuid4()}"
+            f"/api/v1/storage_spaces/{uuid4()}/files/{uuid4()}",
+            headers={"Idempotency-Key": "audit-fail-close-1", "If-Match": "etag-current"},
         )
 
     assert response.status_code == 503

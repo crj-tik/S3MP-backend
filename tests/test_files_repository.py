@@ -4,9 +4,12 @@ from collections.abc import AsyncIterator
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from _infrastructure import delete_tenant, real_engine, real_session_factory, seed_tenant
+from s3mp.audit.infrastructure.models import AuditEventModel
+from s3mp.common.errors import ApiError
 from s3mp.files.infrastructure.models import FileObjectModel
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
 from s3mp.identity.infrastructure.models import PrincipalModel, PrincipalType
@@ -118,3 +121,45 @@ async def test_create_upload_and_get_upload_round_trip(engine: AsyncEngine) -> N
         assert missing is None
     finally:
         await delete_tenant(engine, tenant_a)
+
+
+async def test_delete_queues_recoverable_intent_only_after_etag_match(engine: AsyncEngine) -> None:
+    factory = real_session_factory(engine)
+    store = SqlAlchemyFileStore(factory)
+    tenant_id, principal_id = uuid4(), uuid4()
+    await seed_tenant(engine, tenant_id)
+    try:
+        async with factory() as session:
+            space_id, _ = await _seed_space(session, tenant_id)
+            session.add(PrincipalModel(
+                id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Delete",
+            ))
+            file_obj = FileObjectModel(
+                tenant_id=tenant_id, storage_space_id=space_id, object_key="private/deleteme.txt",
+                content_length=1, content_type="text/plain", etag="current",
+            )
+            session.add(file_obj)
+            await session.commit()
+        with pytest.raises(ApiError) as exc_info:
+            await store.delete_file(
+                tenant_id, space_id, file_obj.id, if_match="stale", actor_principal_id=principal_id,
+            )
+        assert exc_info.value.code == "etag_mismatch"
+        found = await store.get_file(tenant_id, space_id, file_obj.id)
+        assert found is not None and found["status"] == "available"
+        await store.delete_file(
+            tenant_id, space_id, file_obj.id, if_match="current", actor_principal_id=principal_id,
+            request_id="delete-request", object_key="private/deleteme.txt",
+        )
+        assert await store.get_file(tenant_id, space_id, file_obj.id) is None
+        pending = await store.list_pending_deletions()
+        assert [row["id"] for row in pending if row["tenant_id"] == str(tenant_id)] == [str(file_obj.id)]
+        async with factory() as session:
+            audit = await session.scalar(
+                select(AuditEventModel).where(AuditEventModel.resource_id == str(file_obj.id))
+            )
+        assert audit is not None and "private/deleteme.txt" not in str(audit.details)
+        await store.finalize_file_delete(tenant_id, file_obj.id)
+        assert not [row for row in await store.list_pending_deletions() if row["id"] == str(file_obj.id)]
+    finally:
+        await delete_tenant(engine, tenant_id)

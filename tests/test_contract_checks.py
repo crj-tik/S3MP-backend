@@ -78,3 +78,26 @@ def test_forward_check_fails_when_baseline_lacks_runtime_endpoint(tmp_path: Path
         assert check_openapi.main() == 1
     finally:
         check_openapi.BASELINE = original
+
+
+def test_schema_check_fails_for_nested_success_response_drift(tmp_path: Path) -> None:
+    """Strict management schemas reject deleted nested DTO properties."""
+    baseline = copy.deepcopy(_runtime_openapi())
+    del baseline["components"]["schemas"]["MembershipResponse"]["properties"]["principal"]
+    baseline_file = _write_baseline(tmp_path, baseline)
+
+    original = check_openapi.BASELINE
+    check_openapi.BASELINE = baseline_file
+    try:
+        assert check_openapi.main() == 1
+    finally:
+        check_openapi.BASELINE = original
+
+
+def test_management_permission_binding_check_rejects_contract_drift() -> None:
+    from scripts.check_contracts import validate_management_permission_bindings
+
+    baseline = copy.deepcopy(_runtime_openapi())
+    baseline["paths"]["/api/v1/roles"]["get"]["x-permission"] = "roles.manage"
+
+    assert validate_management_permission_bindings(baseline)

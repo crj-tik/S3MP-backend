@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Header, Path, Request
+from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from s3mp.common.errors import ApiError
@@ -76,7 +76,6 @@ async def list_applications(request: Request) -> Any:
 async def create_application(
     request: Request,
     body: ApplicationCreate,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _app_service(request).create_app(
         _context(request).tenant_id, body.name, _context(request).principal_id
@@ -96,7 +95,6 @@ async def update_application(
     request: Request,
     body: ApplicationUpdate,
     application_id: str = Path(min_length=1),
-    if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> Any:
     return await _app_service(request).update_app(
         _context(request).tenant_id, application_id, body.name
@@ -119,7 +117,6 @@ async def create_api_key(
     request: Request,
     body: ApiKeyCreate,
     application_id: str = Path(min_length=1),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _key_service(request).issue(
         _context(request).tenant_id, application_id, body.scopes, body.ttl_days
@@ -134,7 +131,7 @@ async def get_api_key(
     return await _key_service(request).get_key(_context(request).tenant_id, api_key_id)
 
 
-@router.get("/api_keys/{api_key_id}/secret", operation_id="get_api_key_secret")
+@router.get("/api_keys/{api_key_id}/secret", status_code=410, operation_id="get_api_key_secret")
 async def get_api_key_secret(
     request: Request,
     api_key_id: str = Path(min_length=1),
@@ -147,7 +144,6 @@ async def rotate_api_key(
     request: Request,
     body: ApiKeyRotate,
     api_key_id: str = Path(min_length=1),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _key_service(request).rotate(
         _context(request).tenant_id, api_key_id, body.overlap_seconds

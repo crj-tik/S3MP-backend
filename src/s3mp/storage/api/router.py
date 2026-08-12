@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Header, Path, Request
+from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from s3mp.common.errors import ApiError
@@ -65,7 +65,6 @@ async def list_storage_connections(request: Request) -> Any:
 async def create_storage_connection(
     request: Request,
     body: StorageConnectionCreate,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     return await _svc(request).create_connection(_context(request).tenant_id, body)
 

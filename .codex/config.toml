@@ -1,4 +1,6 @@
-sandbox_mode = "danger-full-access"
+# D:\publicProgram\S3MP\S3MP-backend\.codex\config.toml
+
+sandbox_mode = "workspace-write"
 approval_policy = "never"
 
 [windows]

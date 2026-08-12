@@ -87,7 +87,7 @@ class FakeFileService:
         return {"multipart_id": multipart_id, "part_number": body.part_number}
 
     async def confirm_multipart_part(
-        self, tenant_id: Any, multipart_id: str, part_number: int, body: Any
+        self, tenant_id: Any, multipart_id: str, part_number: int, body: Any, **kwargs: Any
     ) -> dict[str, Any]:
         return {"multipart_id": multipart_id, "part_number": part_number, "etag": body.etag}
 
@@ -122,6 +122,7 @@ async def test_create_upload_returns_201() -> None:
                 "content_length": 100,
                 "content_type": "text/plain",
             },
+            headers={"Idempotency-Key": "upload-create-1"},
         )
 
     assert response.status_code == 201
@@ -134,6 +135,7 @@ async def test_create_file_operation_returns_202() -> None:
         response = await client.post(
             f"/api/v1/storage_spaces/{uuid4()}/file_operations",
             json={"operation_type": "copy", "source_key": "a.txt", "destination_key": "b.txt"},
+            headers={"Idempotency-Key": "operation-create-1"},
         )
 
     assert response.status_code == 202
@@ -144,7 +146,9 @@ async def test_complete_upload_returns_etag() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            f"/api/v1/uploads/{uuid4()}/completion", json={"checksum": "sha256:abc"}
+            f"/api/v1/uploads/{uuid4()}/completion",
+            json={"checksum": "sha256:abc"},
+            headers={"Idempotency-Key": "upload-complete-1"},
         )
 
     assert response.status_code == 200
@@ -191,8 +195,47 @@ async def test_etag_mismatch_returns_412() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.delete(
             f"/api/v1/storage_spaces/{uuid4()}/files/{uuid4()}",
-            headers={"If-Match": '"stale-etag"'},
+            headers={"If-Match": '"stale-etag"', "Idempotency-Key": "file-delete-1"},
         )
 
     assert response.status_code == 412
     assert response.json()["code"] == "etag_mismatch"
+
+
+async def test_multipart_part_confirmation_forwards_idempotency_key() -> None:
+    class CapturingService(FakeFileService):
+        key: str | None = None
+
+        async def confirm_multipart_part(
+            self, ctx: PrincipalContext, multipart_id: str, part_number: int, body: Any, **kwargs: Any
+        ) -> dict[str, Any]:
+            self.key = kwargs.get("idempotency_key")
+            return {"multipart_id": multipart_id, "part_number": part_number}
+
+    service = CapturingService()
+    app = make_app({"file_service": service}, context=_ctx())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.put(
+            f"/api/v1/multipart_uploads/{uuid4()}/parts/1",
+            json={"etag": "part-1", "content_length": 1},
+            headers={"Idempotency-Key": "part-confirm-1"},
+        )
+
+    assert response.status_code == 200
+    assert service.key == "part-confirm-1"
+
+
+async def test_file_mutation_rejects_missing_idempotency_key_before_service() -> None:
+    app = _app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/storage_spaces/{uuid4()}/uploads",
+            json={
+                "object_key": "docs/readme.txt",
+                "content_length": 100,
+                "content_type": "text/plain",
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_idempotency_key"

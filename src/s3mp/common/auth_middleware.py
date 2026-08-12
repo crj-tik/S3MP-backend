@@ -76,10 +76,8 @@ async def _resolve_api_key(request: Request, header: str) -> PrincipalContext:
     if svc is None:
         raise ApiError("internal_error", "API key service not configured", status_code=500)
     tenant_id, key_id, record = await svc.authenticate(header)
-    context = PrincipalContext(
+    return PrincipalContext.for_application(
         tenant_id=tenant_id,
-        principal_id=record["application_id"],
-        membership_id=record["application_id"],
+        application_id=record["application_id"],
         authorization_version=record.get("authorization_version", 1),
     )
-    return context

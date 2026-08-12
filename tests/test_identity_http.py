@@ -19,32 +19,56 @@ class FakeIdentityManagement:
     def __init__(self, *, cross_tenant_member: bool = False) -> None:
         self.cross_tenant_member = cross_tenant_member
 
-    async def list_users(self, _ctx: PrincipalContext) -> list[dict[str, Any]]:
-        return [{"id": str(_ctx.principal_id), "display_name": "U"}]
+    async def list_users(
+        self, _ctx: PrincipalContext, **_page: Any
+    ) -> tuple[list[dict[str, Any]], None]:
+        return (
+            [
+                {
+                    "id": str(_ctx.principal_id),
+                    "email": "u@example.test",
+                    "display_name": "U",
+                    "status": "active",
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ],
+            None,
+        )
+
+    async def get_me(self, ctx: PrincipalContext) -> dict[str, Any]:
+        return await FakeContextProvider().get_me(ctx)
 
     async def get_user(self, _ctx: PrincipalContext, user_id: str) -> dict[str, Any]:
-        return {"id": user_id, "display_name": "U"}
+        return {
+            "id": user_id,
+            "email": "u@example.test",
+            "display_name": "U",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
 
-    async def list_members(self, _ctx: PrincipalContext) -> list[dict[str, Any]]:
-        return [{"id": str(_ctx.membership_id), "status": "active"}]
+    async def list_members(
+        self, _ctx: PrincipalContext, **_page: Any
+    ) -> tuple[list[dict[str, Any]], None]:
+        return ([self._member(str(_ctx.membership_id))], None)
 
     async def create_member(self, _ctx: PrincipalContext, body: Any) -> dict[str, Any]:
-        return {"id": str(uuid4()), "email": body.email, "status": "active"}
+        return self._member(str(uuid4()), email=body.email)
 
     async def get_member(self, _ctx: PrincipalContext, membership_id: str) -> dict[str, Any]:
         if self.cross_tenant_member:
             raise ApiError("resource_not_found", "Member not found", status_code=404)
-        return {"id": membership_id, "status": "active"}
+        return self._member(membership_id)
 
     async def update_member(
         self, _ctx: PrincipalContext, membership_id: str, body: Any
     ) -> dict[str, Any]:
-        return {"id": membership_id, "status": body.status}
+        return self._member(membership_id, status=body.status)
 
     async def list_group_members(
-        self, _ctx: PrincipalContext, group_id: str
-    ) -> list[dict[str, Any]]:
-        return [{"id": str(_ctx.membership_id)}]
+        self, _ctx: PrincipalContext, group_id: str, **_page: Any
+    ) -> tuple[list[dict[str, Any]], None]:
+        return ([self._member(str(_ctx.membership_id))], None)
 
     async def add_group_member(
         self, _ctx: PrincipalContext, group_id: str, membership_id: str
@@ -56,18 +80,46 @@ class FakeIdentityManagement:
     ) -> None:
         return None
 
+    @staticmethod
+    def _member(
+        member_id: str, *, email: str = "u@example.test", status: str = "active"
+    ) -> dict[str, Any]:
+        return {
+            "id": member_id,
+            "user": {
+                "id": str(uuid4()),
+                "email": email,
+                "display_name": "U",
+                "status": "active",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            "principal": {"id": str(uuid4()), "type": "user", "display_name": "U"},
+            "status": status,
+            "authorization_version": 1,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "etag": "test",
+        }
+
 
 class FakeContextProvider:
     async def get_me(self, ctx: PrincipalContext) -> dict[str, Any]:
         return {
             "principal": {"id": str(ctx.principal_id), "type": "user", "display_name": "U"},
             "current_tenant": {
-                "id": str(ctx.tenant_id), "name": "T", "membership_status": "active",
+                "id": str(ctx.tenant_id),
+                "name": "T",
+                "membership_status": "active",
             },
             "available_tenants": [],
             "coarse_permissions": ["files.read"],
             "authorization_version": ctx.authorization_version,
         }
+
+
+class FakeAuthorizationManagement:
+    async def require_permission(self, _ctx: PrincipalContext, _permission: str) -> None:
+        return None
 
 
 async def test_get_me_returns_server_derived_context() -> None:
@@ -76,6 +128,7 @@ async def test_get_me_returns_server_derived_context() -> None:
         {
             "identity_context_provider": FakeContextProvider(),
             "identity_management": FakeIdentityManagement(),
+            "authorization_management": FakeAuthorizationManagement(),
         },
         context=ctx,
     )
@@ -94,6 +147,7 @@ async def test_list_users_returns_principal_scoped_results() -> None:
         {
             "identity_context_provider": FakeContextProvider(),
             "identity_management": FakeIdentityManagement(),
+            "authorization_management": FakeAuthorizationManagement(),
         },
         context=ctx,
     )
@@ -101,7 +155,7 @@ async def test_list_users_returns_principal_scoped_results() -> None:
         response = await client.get("/api/v1/users")
 
     assert response.status_code == 200
-    assert response.json()[0]["id"] == str(ctx.principal_id)
+    assert response.json()["items"][0]["id"] == str(ctx.principal_id)
 
 
 async def test_create_member_returns_201() -> None:
@@ -110,6 +164,7 @@ async def test_create_member_returns_201() -> None:
         {
             "identity_context_provider": FakeContextProvider(),
             "identity_management": FakeIdentityManagement(),
+            "authorization_management": FakeAuthorizationManagement(),
         },
         context=ctx,
     )
@@ -117,13 +172,15 @@ async def test_create_member_returns_201() -> None:
         response = await client.post("/api/v1/members", json={"email": "new@example.test"})
 
     assert response.status_code == 201
-    assert response.json()["email"] == "new@example.test"
+    assert response.headers["Location"].startswith("/api/v1/members/")
+    assert response.json()["user"]["email"] == "new@example.test"
 
 
 async def test_unauthenticated_request_returns_401() -> None:
     app = create_app()
     app.state.identity_context_provider = FakeContextProvider()
     app.state.identity_management = FakeIdentityManagement()
+    app.state.authorization_management = FakeAuthorizationManagement()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/v1/me")
 
@@ -134,8 +191,11 @@ async def test_unauthenticated_request_returns_401() -> None:
 async def test_cross_tenant_member_returns_404_without_leaking() -> None:
     ctx = _ctx()
     app = make_app(
-        {"identity_context_provider": FakeContextProvider(),
-         "identity_management": FakeIdentityManagement(cross_tenant_member=True)},
+        {
+            "identity_context_provider": FakeContextProvider(),
+            "identity_management": FakeIdentityManagement(cross_tenant_member=True),
+            "authorization_management": FakeAuthorizationManagement(),
+        },
         context=ctx,
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

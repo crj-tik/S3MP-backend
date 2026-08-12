@@ -86,7 +86,7 @@ def test_migration_history_has_single_head() -> None:
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(migration_config())
-    assert scripts.get_heads() == ["0008_file_ingestion_provenance"]
+    assert scripts.get_heads() == ["0012_file_delete_outbox"]
 
 
 def test_upgrade_downgrade_upgrade_cycle() -> None:
@@ -102,4 +102,4 @@ def test_upgrade_downgrade_upgrade_cycle() -> None:
     assert _get_version() is None
 
     command.upgrade(config, "head")
-    assert _get_version() == "0008_file_ingestion_provenance"
+    assert _get_version() == "0012_file_delete_outbox"

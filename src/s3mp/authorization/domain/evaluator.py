@@ -20,6 +20,7 @@ class Binding:
     starts_at: datetime
     expires_at: datetime
     reason: str
+    storage_space_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ def evaluate(
     permission: str,
     bindings: list[Binding],
     *,
+    storage_space_id: UUID | None = None,
     object_key: str = "",
     now: datetime | None = None,
 ) -> AuthorizationDecision:
@@ -71,6 +73,7 @@ def evaluate(
         for binding in bindings
         if binding.permission == permission
         and binding.starts_at <= current < binding.expires_at
+        and (binding.storage_space_id is None or binding.storage_space_id == storage_space_id)
         and _scope_matches(binding.canonical_prefix, object_key)
     ]
     sources = tuple(

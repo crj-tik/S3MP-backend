@@ -35,13 +35,21 @@ def explain_permissions(
     bindings: list[Binding],
     *,
     authorization_version: int,
+    storage_space_id: UUID | None = None,
     object_key: str = "",
     now: datetime | None = None,
 ) -> EffectivePermissions:
     evaluated_at = now or datetime.now(UTC)
     results = tuple(
         _to_effective(
-            permission, evaluate(permission, bindings, object_key=object_key, now=evaluated_at)
+            permission,
+            evaluate(
+                permission,
+                bindings,
+                storage_space_id=storage_space_id,
+                object_key=object_key,
+                now=evaluated_at,
+            ),
         )
         for permission in sorted(set(permissions))
     )
@@ -53,11 +61,18 @@ def simulate(
     bindings: list[Binding],
     *,
     authorization_version: int,
+    storage_space_id: UUID | None = None,
     object_key: str = "",
     now: datetime | None = None,
 ) -> dict[str, object]:
     evaluated_at = now or datetime.now(UTC)
-    decision = evaluate(permission, bindings, object_key=object_key, now=evaluated_at)
+    decision = evaluate(
+        permission,
+        bindings,
+        storage_space_id=storage_space_id,
+        object_key=object_key,
+        now=evaluated_at,
+    )
     return {
         "permission": permission,
         "decision": decision.decision,

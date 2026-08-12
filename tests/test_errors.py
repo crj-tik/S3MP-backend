@@ -1,13 +1,27 @@
+from uuid import uuid4
+
 from fastapi import APIRouter, Query
 from fastapi.testclient import TestClient
 
 from s3mp.common.config import Settings
 from s3mp.common.errors import ApiError
+from s3mp.identity.domain.context import PrincipalContext
 from s3mp.main import create_app
 
 
-def test_stable_api_error_includes_request_id() -> None:
+def _authenticated_app() -> object:
     app = create_app(Settings())
+
+    @app.middleware("http")
+    async def inject_context(request: object, call_next: object) -> object:
+        request.state.principal_context = PrincipalContext(uuid4(), uuid4(), uuid4(), 1)  # type: ignore[attr-defined,union-attr]
+        return await call_next(request)  # type: ignore[misc]
+
+    return app
+
+
+def test_stable_api_error_includes_request_id() -> None:
+    app = _authenticated_app()
     router = APIRouter()
 
     @router.get("/failure")
@@ -27,7 +41,7 @@ def test_stable_api_error_includes_request_id() -> None:
 
 
 def test_validation_error_is_json_serializable() -> None:
-    app = create_app(Settings())
+    app = _authenticated_app()
     router = APIRouter()
 
     @router.get("/validated")
@@ -43,7 +57,7 @@ def test_validation_error_is_json_serializable() -> None:
 
 
 def test_not_found_and_method_not_allowed_use_stable_envelope() -> None:
-    with TestClient(create_app(Settings())) as client:
+    with TestClient(_authenticated_app()) as client:
         not_found = client.get("/missing")
         method_not_allowed = client.post("/health/live")
     assert not_found.status_code == 404

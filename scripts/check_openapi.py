@@ -14,6 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "contracts" / "openapi.yaml"
 HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
 RUNTIME_ONLY_PATHS = frozenset({"/health/live", "/health/ready"})
+# FastAPI auto-generates 422 for any endpoint with validation (path/query/body params).
+# It is not a meaningful contract difference — exclude it from comparison.
+IGNORED_RESPONSE_STATUSES = frozenset({"422"})
+SCHEMA_ENFORCED_PATHS = frozenset({
+    "/api/v1/me", "/api/v1/users", "/api/v1/users/{user_id}", "/api/v1/members",
+    "/api/v1/members/{membership_id}", "/api/v1/groups", "/api/v1/groups/{group_id}",
+    "/api/v1/groups/{group_id}/members", "/api/v1/roles", "/api/v1/roles/{role_id}",
+    "/api/v1/role_bindings", "/api/v1/role_bindings/{role_binding_id}",
+    "/api/v1/principals/{principal_id}/effective_permissions", "/api/v1/authorization/simulations",
+})
 
 
 def operation_signatures(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -26,13 +36,117 @@ def operation_signatures(document: dict[str, Any]) -> dict[tuple[str, str], dict
             continue
         for method, operation in path_item.items():
             if method.lower() in HTTP_METHODS and isinstance(operation, dict):
-                signatures[(str(path), method.lower())] = operation
+                merged_operation = dict(operation)
+                merged_operation["parameters"] = [
+                    *path_item.get("parameters", []),
+                    *operation.get("parameters", []),
+                ]
+                signatures[(str(path), method.lower())] = merged_operation
     return signatures
 
 
 def response_statuses(operation: dict[str, Any]) -> set[str]:
     responses = operation.get("responses", {})
     return {str(status) for status in responses} if isinstance(responses, dict) else set()
+
+
+def _resolve(document: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Resolve local component references used by parameters and request bodies."""
+    while isinstance(value, dict) and isinstance(value.get("$ref"), str):
+        reference = value["$ref"]
+        if not reference.startswith("#/"):
+            break
+        target: Any = document
+        for part in reference[2:].split("/"):
+            if not isinstance(target, dict) or part not in target:
+                return {}
+            target = target[part]
+        if not isinstance(target, dict):
+            return {}
+        value = target
+    return value if isinstance(value, dict) else {}
+
+
+def _operation_parameters(document: dict[str, Any], operation: dict[str, Any]) -> set[tuple[str, str]]:
+    """Return declared parameter identities.
+
+    Idempotency and precondition headers deliberately stay optional in FastAPI
+    parsing so the application can return its registered 400 error envelope
+    rather than framework-generated 422 responses. Their business-required
+    semantics are exercised by HTTP tests, while this check ensures both
+    documents expose the same parameter names and locations.
+    """
+    parameters: set[tuple[str, str]] = set()
+    for raw_parameter in operation.get("parameters", []):
+        parameter = _resolve(document, raw_parameter)
+        name, location = parameter.get("name"), parameter.get("in")
+        if isinstance(name, str) and isinstance(location, str):
+            parameters.add((name, location))
+    return parameters
+
+
+def _request_body_media_types(document: dict[str, Any], operation: dict[str, Any]) -> tuple[bool, set[str]]:
+    raw_body = operation.get("requestBody")
+    if raw_body is None:
+        return False, set()
+    body = _resolve(document, raw_body)
+    content = body.get("content", {})
+    return bool(body.get("required")), set(content) if isinstance(content, dict) else set()
+
+
+def _success_schemas(document: dict[str, Any], operation: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    schemas: dict[str, dict[str, Any]] = {}
+    for status, response in operation.get("responses", {}).items():
+        if not str(status).startswith("2"):
+            continue
+        resolved_response = _resolve(document, response)
+        content = resolved_response.get("content", {})
+        if not isinstance(content, dict):
+            continue
+        json_content = content.get("application/json")
+        if isinstance(json_content, dict) and isinstance(json_content.get("schema"), dict):
+            schemas[str(status)] = _normalise_schema(document, json_content["schema"])
+    return schemas
+
+
+def _normalise_schema(document: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Expand local references and drop generator-only schema metadata."""
+    resolved = _resolve(document, value)
+    result: dict[str, Any] = {}
+    for key, item in resolved.items():
+        if key in {"title", "description", "examples", "example", "default", "pattern"}:
+            continue
+        if key == "properties" and isinstance(item, dict):
+            result[key] = {name: _normalise_schema(document, child) for name, child in sorted(item.items())}
+        elif key == "items" and isinstance(item, dict):
+            result[key] = _normalise_schema(document, item)
+        elif key in {"allOf", "anyOf", "oneOf"} and isinstance(item, list):
+            result[key] = [_normalise_schema(document, child) for child in item]
+        elif isinstance(item, dict):
+            result[key] = _normalise_schema(document, item)
+        elif isinstance(item, list):
+            result[key] = sorted(item) if key in {"required", "enum"} else item
+        else:
+            result[key] = int(item) if key in {"minimum", "maximum"} and isinstance(item, float) and item.is_integer() else item
+    all_of = result.pop("allOf", None)
+    if isinstance(all_of, list) and all(isinstance(entry, dict) for entry in all_of):
+        merged: dict[str, Any] = {}
+        for entry in all_of:
+            incoming_required = entry.pop("required", [])
+            merged.update({key: value for key, value in entry.items() if key != "properties"})
+            if "properties" in entry:
+                merged.setdefault("properties", {}).update(entry["properties"])
+            if incoming_required:
+                merged.setdefault("required", []).extend(incoming_required)
+        if "required" in merged:
+            merged["required"] = sorted(set(merged["required"]))
+        result = merged
+    nullable = result.get("anyOf")
+    if isinstance(nullable, list) and len(nullable) == 2 and {entry.get("type") for entry in nullable} == {"string", "null"}:
+        return {"type": ["string", "null"]}
+    if result.get("format") == "uuid":
+        result.pop("format")
+    return result
 
 
 def main() -> int:
@@ -49,7 +163,8 @@ def main() -> int:
         print("contracts/openapi.yaml must contain an object", file=sys.stderr)
         return 1
 
-    runtime_operations = operation_signatures(app.openapi())
+    runtime = app.openapi()
+    runtime_operations = operation_signatures(runtime)
     baseline_operations = operation_signatures(baseline)
     errors: list[str] = []
     for signature, runtime_operation in runtime_operations.items():
@@ -63,12 +178,32 @@ def main() -> int:
             continue
         missing_statuses = response_statuses(runtime_operation) - response_statuses(
             baseline_operation
-        )
+        ) - IGNORED_RESPONSE_STATUSES
         if missing_statuses:
             errors.append(
                 f"Baseline {signature[1].upper()} {signature[0]} lacks runtime responses "
                 + ", ".join(sorted(missing_statuses))
             )
+        baseline_parameters = _operation_parameters(baseline, baseline_operation)
+        runtime_parameters = _operation_parameters(runtime, runtime_operation)
+        if baseline_parameters != runtime_parameters:
+            errors.append(
+                f"Parameter contract differs for {signature[1].upper()} {signature[0]}"
+            )
+        baseline_body = _request_body_media_types(baseline, baseline_operation)
+        runtime_body = _request_body_media_types(runtime, runtime_operation)
+        if baseline_body != runtime_body:
+            errors.append(
+                f"Request body contract differs for {signature[1].upper()} {signature[0]}"
+            )
+        if signature[0] in SCHEMA_ENFORCED_PATHS:
+            baseline_schemas = _success_schemas(baseline, baseline_operation)
+            runtime_schemas = _success_schemas(runtime, runtime_operation)
+            for status in sorted(set(baseline_schemas) | set(runtime_schemas)):
+                if baseline_schemas.get(status) != runtime_schemas.get(status):
+                    errors.append(
+                        f"Success response schema differs for {signature[1].upper()} {signature[0]} {status}"
+                    )
     for signature in baseline_operations:
         if signature[0] in RUNTIME_ONLY_PATHS:
             continue

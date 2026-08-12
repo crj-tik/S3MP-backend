@@ -3,19 +3,21 @@
 Design: see openspec/changes/close-file-security-and-ingestion-gaps/design.md §4.
 """
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
 from s3mp.files.domain.ingestion import (
+    VALID_TRANSITIONS,
     IngestionEventType,
     IngestionStatus,
-    VALID_TRANSITIONS,
 )
 from s3mp.files.infrastructure.ingestion_models import (
     FileIngestionEventModel,
@@ -26,6 +28,8 @@ from s3mp.files.infrastructure.models import (
     MultipartSessionModel,
     UploadSessionModel,
 )
+from s3mp.files.infrastructure.repositories import _mp_dict, _upload_dict
+from s3mp.governance.infrastructure.models import QuotaModel, QuotaReservationModel
 
 
 class SqlAlchemyIngestionStore:
@@ -37,6 +41,98 @@ class SqlAlchemyIngestionStore:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
+
+    async def create_upload_intent(
+        self, tenant_id: UUID, session_data: dict[str, Any], ingestion_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Atomically create or replay an upload session and its ingestion intent."""
+        async with self._sf.begin() as session:
+            existing = await _find_replay_or_conflict(session, tenant_id, ingestion_data)
+            if existing is not None:
+                if existing.upload_session_id is None:
+                    raise ApiError("invalid_transition", "Ingestion does not reference an upload", 409)
+                upload = await session.get(UploadSessionModel, existing.upload_session_id)
+                if upload is None:
+                    raise ApiError("invalid_transition", "Ingestion upload is unavailable", 409)
+                result = _upload_dict(upload)
+                result.update({"ingestion_id": str(existing.id), "replayed": True})
+                return result
+
+            quota_reservation_id = await _reserve_quota(
+                session, tenant_id, UUID(session_data["storage_space_id"]), session_data["content_length"]
+            )
+            upload = UploadSessionModel(
+                tenant_id=tenant_id,
+                principal_id=UUID(session_data["principal_id"]),
+                storage_space_id=UUID(session_data["storage_space_id"]),
+                object_key=session_data["object_key"],
+                declared_length=session_data["content_length"],
+                content_type=session_data["content_type"],
+                checksum=session_data.get("checksum"),
+                expires_at=session_data["expires_at"],
+                status="pending",
+            )
+            session.add(upload)
+            await session.flush()
+            ingestion_data = {
+                **ingestion_data,
+                "upload_session_id": str(upload.id),
+                "quota_reservation_id": str(quota_reservation_id) if quota_reservation_id else None,
+            }
+            record = _build_ingestion_model(tenant_id, ingestion_data)
+            session.add(record)
+            await session.flush()
+            _append_created_event(session, record)
+            await session.flush()
+            result = _upload_dict(upload)
+            result.update({"ingestion_id": str(record.id), "replayed": False})
+            return result
+
+    async def create_multipart_intent(
+        self, tenant_id: UUID, session_data: dict[str, Any], ingestion_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Atomically create or replay a multipart session and ingestion intent."""
+        async with self._sf.begin() as session:
+            existing = await _find_replay_or_conflict(session, tenant_id, ingestion_data)
+            if existing is not None:
+                if existing.multipart_session_id is None:
+                    raise ApiError("invalid_transition", "Ingestion does not reference multipart", 409)
+                multipart = await session.get(MultipartSessionModel, existing.multipart_session_id)
+                if multipart is None:
+                    raise ApiError("invalid_transition", "Ingestion multipart is unavailable", 409)
+                result = _mp_dict(multipart)
+                result.update({"ingestion_id": str(existing.id), "replayed": True})
+                return result
+
+            quota_reservation_id = await _reserve_quota(
+                session, tenant_id, UUID(session_data["storage_space_id"]), session_data["content_length"]
+            )
+            multipart = MultipartSessionModel(
+                tenant_id=tenant_id,
+                principal_id=UUID(session_data["principal_id"]),
+                storage_space_id=UUID(session_data["storage_space_id"]),
+                object_key=session_data["object_key"],
+                declared_length=session_data["content_length"],
+                content_type=session_data["content_type"],
+                quota_reservation_id=quota_reservation_id or uuid4(),
+                expires_at=session_data["expires_at"],
+                status="pending",
+            )
+            session.add(multipart)
+            await session.flush()
+            ingestion_data = {
+                **ingestion_data,
+                "multipart_session_id": str(multipart.id),
+                "quota_reservation_id": str(quota_reservation_id) if quota_reservation_id else None,
+            }
+            record = _build_ingestion_model(tenant_id, ingestion_data)
+            session.add(record)
+            await session.flush()
+            _append_created_event(session, record)
+            await session.flush()
+            result = _mp_dict(multipart)
+            result.update({"ingestion_id": str(record.id), "replayed": False})
+            return result
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -50,35 +146,10 @@ class SqlAlchemyIngestionStore:
         - Same idempotency_key,
           different fingerprint → reject with 409 (client reused key with different payload).
         """
-        fingerprint: str | None = data.get("idempotency_fingerprint")
-        idempotency_key: str | None = data.get("idempotency_key")
-
         async with self._sf.begin() as session:
-            # 1. Replay: fingerprint already seen → return the existing record
-            if fingerprint:
-                existing = await session.scalar(
-                    select(FileIngestionRecordModel).where(
-                        FileIngestionRecordModel.tenant_id == tenant_id,
-                        FileIngestionRecordModel.idempotency_fingerprint == fingerprint,
-                    )
-                )
-                if existing is not None:
-                    return _ingestion_dict(existing)
-
-            # 2. Conflict detection: same key, different payload
-            if idempotency_key:
-                conflict = await session.scalar(
-                    select(FileIngestionRecordModel).where(
-                        FileIngestionRecordModel.tenant_id == tenant_id,
-                        FileIngestionRecordModel.idempotency_key == idempotency_key,
-                    )
-                )
-                if conflict is not None and conflict.idempotency_fingerprint != fingerprint:
-                    raise ApiError(
-                        "idempotency_conflict",
-                        "A different request with the same idempotency key was already processed",
-                        status_code=409,
-                    )
+            existing = await _find_replay_or_conflict(session, tenant_id, data)
+            if existing is not None:
+                return _ingestion_dict(existing)
 
             # 3. Insert
             model = _build_ingestion_model(tenant_id, data)
@@ -88,10 +159,12 @@ class SqlAlchemyIngestionStore:
             except IntegrityError:
                 await session.rollback()
                 raise ApiError(
-                    "idempotency_conflict",
+                    "idempotency_key_reused",
                     "A conflicting request was processed concurrently",
                     status_code=409,
                 ) from None
+            _append_created_event(session, model)
+            await session.flush()
             return _ingestion_dict(model)
 
     async def get_record(
@@ -106,6 +179,51 @@ class SqlAlchemyIngestionStore:
                 )
             )
             return _ingestion_dict(row) if row else None
+
+    async def get_for_session(
+        self,
+        tenant_id: UUID,
+        *,
+        upload_session_id: UUID | None = None,
+        multipart_session_id: UUID | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the original durable intent linked to exactly one session."""
+        if (upload_session_id is None) == (multipart_session_id is None):
+            raise ValueError("exactly one session id is required")
+        column = (
+            FileIngestionRecordModel.upload_session_id
+            if upload_session_id is not None
+            else FileIngestionRecordModel.multipart_session_id
+        )
+        session_id = upload_session_id or multipart_session_id
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(FileIngestionRecordModel)
+                .where(
+                    FileIngestionRecordModel.tenant_id == tenant_id,
+                    column == session_id,
+                )
+                .order_by(FileIngestionRecordModel.created_at.desc())
+            )
+            return _ingestion_dict(row) if row else None
+
+    async def list_pending(
+        self, tenant_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
+        """List records which require provider re-verification or cleanup."""
+        pending_statuses = (
+            IngestionStatus.INITIATED.value,
+            IngestionStatus.VERIFIED.value,
+            IngestionStatus.RECONCILIATION_REQUIRED.value,
+        )
+        async with self._sf() as session:
+            stmt = select(FileIngestionRecordModel).where(
+                FileIngestionRecordModel.status.in_(pending_statuses)
+            )
+            if tenant_id is not None:
+                stmt = stmt.where(FileIngestionRecordModel.tenant_id == tenant_id)
+            rows = await session.scalars(stmt.order_by(FileIngestionRecordModel.created_at))
+            return [_ingestion_dict(row) for row in rows]
 
     # ── Provider result ──────────────────────────────────────────────────────
 
@@ -164,6 +282,8 @@ class SqlAlchemyIngestionStore:
         """
         async with self._sf.begin() as session:
             row = await _lock_ingestion_row(session, tenant_id, ingestion_id)
+            if row.status == IngestionStatus.COMMITTED.value:
+                return await _committed_result(session, row)
             _validate_transition(row, IngestionStatus.COMMITTED)
 
             # Create the file object so it becomes visible in list_files
@@ -183,6 +303,7 @@ class SqlAlchemyIngestionStore:
             row.status = IngestionStatus.COMMITTED.value
             row.file_object_id = file_obj.id
             row.committed_at = datetime.now(UTC)
+            await _settle_quota_reservation(session, tenant_id, row)
 
             # Settle the linked upload session
             if row.upload_session_id is not None:
@@ -222,11 +343,26 @@ class SqlAlchemyIngestionStore:
                 },
             )
             session.add(event)
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=row.acting_principal_id,
+                    action="file.ingestion.committed",
+                    resource_type="file_object",
+                    resource_id=str(file_obj.id),
+                    details={
+                        "request_id": row.request_id,
+                        "storage_space_id": str(row.storage_space_id),
+                        "object_key_fingerprint": hashlib.sha256(
+                            row.physical_key.encode("utf-8")
+                        ).hexdigest(),
+                        "ingestion_id": str(row.id),
+                    },
+                )
+            )
             await session.flush()
 
-            result = _ingestion_dict(row)
-            result["file_object"] = _file_dict(file_obj)
-            return result
+            return await _committed_result(session, row)
 
     # ── Terminal states ──────────────────────────────────────────────────────
 
@@ -250,6 +386,8 @@ class SqlAlchemyIngestionStore:
             _validate_transition(row, status)
 
             row.status = status.value
+            if status is IngestionStatus.FAILED:
+                await _release_quota_reservation(session, tenant_id, row)
 
             event_type = (
                 IngestionEventType.FAILED_PERMANENTLY
@@ -268,6 +406,26 @@ class SqlAlchemyIngestionStore:
                 details=event_details,
             )
             session.add(event)
+            await session.flush()
+            return _ingestion_dict(row)
+
+    async def expire(self, tenant_id: UUID, ingestion_id: UUID) -> dict[str, Any]:
+        """Expire a pending intent and release any unconsumed reservation."""
+        async with self._sf.begin() as session:
+            row = await _lock_ingestion_row(session, tenant_id, ingestion_id)
+            if row.status == IngestionStatus.EXPIRED.value:
+                return _ingestion_dict(row)
+            _validate_transition(row, IngestionStatus.EXPIRED)
+            row.status = IngestionStatus.EXPIRED.value
+            await _release_quota_reservation(session, tenant_id, row)
+            session.add(
+                FileIngestionEventModel(
+                    ingestion_record_id=ingestion_id,
+                    tenant_id=tenant_id,
+                    event_type=IngestionEventType.EXPIRED.value,
+                    details={"reason": "session_expired"},
+                )
+            )
             await session.flush()
             return _ingestion_dict(row)
 
@@ -311,6 +469,139 @@ class SqlAlchemyIngestionStore:
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
 
+async def _find_replay_or_conflict(
+    session: AsyncSession, tenant_id: UUID, data: dict[str, Any]
+) -> FileIngestionRecordModel | None:
+    """Return a matching idempotent intent or reject conflicting key reuse."""
+    fingerprint = data.get("idempotency_fingerprint")
+    idempotency_key = data.get("idempotency_key")
+    if fingerprint:
+        existing = await session.scalar(
+            select(FileIngestionRecordModel).where(
+                FileIngestionRecordModel.tenant_id == tenant_id,
+                FileIngestionRecordModel.idempotency_fingerprint == fingerprint,
+            )
+        )
+        if existing is not None:
+            return existing
+    if idempotency_key:
+        conflicting = await session.scalar(
+            select(FileIngestionRecordModel).where(
+                FileIngestionRecordModel.tenant_id == tenant_id,
+                FileIngestionRecordModel.idempotency_key == idempotency_key,
+            )
+        )
+        if conflicting is not None:
+            raise ApiError(
+                "idempotency_key_reused",
+                "Idempotency-Key was already used with different request semantics",
+                status_code=409,
+            )
+    return None
+
+
+def _append_created_event(session: AsyncSession, record: FileIngestionRecordModel) -> None:
+    """Write immutable creation evidence in the same transaction as the intent."""
+    session.add(
+        FileIngestionEventModel(
+            ingestion_record_id=record.id,
+            tenant_id=record.tenant_id,
+            event_type=IngestionEventType.CREATED.value,
+            details={
+                "request_id": record.request_id,
+                "idempotency_key": record.idempotency_key,
+                "authorization_version": record.authorization_version,
+            },
+        )
+    )
+
+
+async def _reserve_quota(
+    session: AsyncSession, tenant_id: UUID, storage_space_id: UUID, requested_bytes: int
+) -> UUID | None:
+    """Reserve configured space quota under the caller's transaction lock."""
+    quota = await session.scalar(
+        select(QuotaModel)
+        .where(
+            QuotaModel.tenant_id == tenant_id,
+            QuotaModel.storage_space_id == storage_space_id,
+        )
+        .with_for_update()
+    )
+    if quota is None:
+        return None
+    if requested_bytes < 0 or quota.used_bytes + quota.reserved_bytes + requested_bytes > quota.limit_bytes:
+        raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
+    reservation = QuotaReservationModel(
+        tenant_id=tenant_id,
+        quota_id=quota.id,
+        requested_bytes=requested_bytes,
+        status="reserved",
+    )
+    quota.reserved_bytes += requested_bytes
+    session.add(reservation)
+    await session.flush()
+    return reservation.id
+
+
+async def _settle_quota_reservation(
+    session: AsyncSession, tenant_id: UUID, row: FileIngestionRecordModel
+) -> None:
+    if row.quota_reservation_id is None:
+        return
+    reservation = await session.scalar(
+        select(QuotaReservationModel)
+        .where(
+            QuotaReservationModel.tenant_id == tenant_id,
+            QuotaReservationModel.id == row.quota_reservation_id,
+        )
+        .with_for_update()
+    )
+    if reservation is None or reservation.status != "reserved":
+        return
+    quota = await session.scalar(
+        select(QuotaModel)
+        .where(QuotaModel.tenant_id == tenant_id, QuotaModel.id == reservation.quota_id)
+        .with_for_update()
+    )
+    if quota is None:
+        raise ApiError("quota_exceeded", "Quota is unavailable", status_code=409)
+    actual_size = row.actual_size or 0
+    if quota.used_bytes + actual_size > quota.limit_bytes:
+        raise ApiError("quota_exceeded", "Verified object exceeds quota", status_code=409)
+    quota.reserved_bytes -= reservation.requested_bytes
+    quota.used_bytes += actual_size
+    reservation.actual_bytes = actual_size
+    reservation.status = "settled"
+    reservation.settled_at = datetime.now(UTC)
+
+
+async def _release_quota_reservation(
+    session: AsyncSession, tenant_id: UUID, row: FileIngestionRecordModel
+) -> None:
+    if row.quota_reservation_id is None:
+        return
+    reservation = await session.scalar(
+        select(QuotaReservationModel)
+        .where(
+            QuotaReservationModel.tenant_id == tenant_id,
+            QuotaReservationModel.id == row.quota_reservation_id,
+        )
+        .with_for_update()
+    )
+    if reservation is None or reservation.status != "reserved":
+        return
+    quota = await session.scalar(
+        select(QuotaModel)
+        .where(QuotaModel.tenant_id == tenant_id, QuotaModel.id == reservation.quota_id)
+        .with_for_update()
+    )
+    if quota is not None:
+        quota.reserved_bytes -= reservation.requested_bytes
+    reservation.status = "released"
+    reservation.settled_at = datetime.now(UTC)
+
+
 async def _lock_ingestion_row(
     session: AsyncSession, tenant_id: UUID, ingestion_id: UUID
 ) -> FileIngestionRecordModel:
@@ -326,6 +617,17 @@ async def _lock_ingestion_row(
     if row is None:
         raise ApiError("resource_not_found", "Ingestion record not found", status_code=404)
     return row
+
+
+async def _committed_result(
+    session: AsyncSession, row: FileIngestionRecordModel
+) -> dict[str, Any]:
+    result = _ingestion_dict(row)
+    if row.file_object_id is not None:
+        file_obj = await session.get(FileObjectModel, row.file_object_id)
+        if file_obj is not None:
+            result["file_object"] = _file_dict(file_obj)
+    return result
 
 
 def _validate_transition(
@@ -367,6 +669,11 @@ def _build_ingestion_model(
             if data.get("multipart_session_id")
             else None
         ),
+        quota_reservation_id=(
+            UUID(data["quota_reservation_id"])
+            if data.get("quota_reservation_id")
+            else None
+        ),
         status="initiated",
     )
 
@@ -389,6 +696,7 @@ def _ingestion_dict(m: FileIngestionRecordModel) -> dict[str, Any]:
         "status": m.status,
         "upload_session_id": str(m.upload_session_id) if m.upload_session_id else None,
         "multipart_session_id": str(m.multipart_session_id) if m.multipart_session_id else None,
+        "quota_reservation_id": str(m.quota_reservation_id) if m.quota_reservation_id else None,
         "file_object_id": str(m.file_object_id) if m.file_object_id else None,
         "provider_etag": m.provider_etag,
         "provider_version_id": m.provider_version_id,

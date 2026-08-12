@@ -80,11 +80,6 @@ async def test_get_app_returns_none_for_cross_tenant(engine: AsyncEngine) -> Non
         await delete_tenant(engine, tenant_b)
 
 
-@pytest.mark.xfail(
-    reason="store create_app references model.id before flush; application_owner."
-    "application_id is null → NOT NULL violation (real store bug, not a test issue)",
-    strict=True,
-)
 async def test_create_app_persists_and_round_trips(engine: AsyncEngine) -> None:
     factory = real_session_factory(engine)
     store = SqlAlchemyApplicationStore(factory)
@@ -99,6 +94,9 @@ async def test_create_app_persists_and_round_trips(engine: AsyncEngine) -> None:
         assert created["name"] == "app-gamma"
         fetched = await store.get_app(tenant_a, UUID(str(created["id"])))
         assert fetched is not None and fetched["name"] == "app-gamma"
+        assert await store.list_owners(tenant_a, UUID(str(created["id"]))) == [
+            UUID(principal_id)
+        ]
     finally:
         await delete_tenant(engine, tenant_a)
 

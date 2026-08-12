@@ -1,8 +1,16 @@
 """HTTP middleware shared by all API modules."""
 
+from contextvars import ContextVar
 from uuid import uuid4
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+request_id_context: ContextVar[str] = ContextVar("request_id", default="")
+
+
+def current_request_id() -> str:
+    """Return the request identifier for the active ASGI task, if any."""
+    return request_id_context.get()
 
 
 class RequestIDMiddleware:
@@ -17,6 +25,7 @@ class RequestIDMiddleware:
             return
         request_id = uuid4().hex
         scope.setdefault("state", {})["request_id"] = request_id
+        token = request_id_context.set(request_id)
 
         async def send_with_request_id(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -25,4 +34,7 @@ class RequestIDMiddleware:
                 message["headers"] = headers
             await send(message)
 
-        await self.app(scope, receive, send_with_request_id)
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            request_id_context.reset(token)

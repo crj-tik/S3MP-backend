@@ -9,6 +9,8 @@ from s3mp.authorization.domain.evaluator import (
     evaluate,
     validate_canonical_prefix,
 )
+from s3mp.files.application.authorized_command import AuthorizedFileCommand
+from s3mp.identity.domain.context import PrincipalContext
 
 
 def binding(permission: str, effect: Decision, prefix: str | None = None) -> Binding:
@@ -56,6 +58,34 @@ def test_explicit_deny_wins_and_default_is_deny() -> None:
     assert default.reason_code == "default_deny"
 
 
+def test_storage_space_scoped_binding_does_not_match_another_space() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    allowed_space, other_space = uuid4(), uuid4()
+    scoped = Binding(
+        uuid4(),
+        "files.read",
+        Decision.ALLOW,
+        "docs",
+        now - timedelta(minutes=1),
+        now + timedelta(hours=1),
+        "test",
+        allowed_space,
+    )
+
+    assert (
+        evaluate(
+            "files.read", [scoped], storage_space_id=allowed_space, object_key="docs/a.txt", now=now
+        ).decision
+        == Decision.ALLOW
+    )
+    assert (
+        evaluate(
+            "files.read", [scoped], storage_space_id=other_space, object_key="docs/a.txt", now=now
+        ).decision
+        == Decision.DENY
+    )
+
+
 def test_expired_binding_and_unlisted_platform_permission_are_denied() -> None:
     now = datetime(2026, 1, 1, tzinfo=UTC)
     expired = Binding(
@@ -75,3 +105,27 @@ def test_expired_binding_and_unlisted_platform_permission_are_denied() -> None:
 def test_canonical_prefix_rejects_ambiguous_paths(prefix: str) -> None:
     with pytest.raises(ValueError):
         validate_canonical_prefix(prefix)
+
+
+def test_authorized_command_evidence_is_json_serializable() -> None:
+    tenant_id, principal_id, space_id = uuid4(), uuid4(), uuid4()
+    now = datetime.now(UTC)
+    active_binding = Binding(
+        uuid4(),
+        "files.read",
+        Decision.ALLOW,
+        "docs",
+        now - timedelta(minutes=1),
+        now + timedelta(hours=1),
+        "test",
+    )
+    command = AuthorizedFileCommand.create(
+        PrincipalContext(tenant_id, principal_id, uuid4(), 1),
+        {"id": str(space_id), "bucket": "s3mp-dev", "root_prefix": "tenant"},
+        "docs/readme.txt",
+        "files.read",
+        [active_binding],
+    )
+    import json
+
+    assert json.loads(json.dumps(command.authorization_evidence))["decision"] == "allow"

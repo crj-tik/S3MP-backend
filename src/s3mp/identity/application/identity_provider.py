@@ -7,7 +7,6 @@ from uuid import UUID
 
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
-from s3mp.identity.domain.entities import Membership, Session
 
 
 class SessionStore(Protocol):
@@ -63,31 +62,31 @@ class IdentityContextProvider:
         if principal is None or not principal.get("enabled", False):
             raise ApiError("authentication_required", "Principal is not active", status_code=401)
 
-        auth_version = max(
-            session.get("authorization_version", 1),
-            membership.get("authorization_version", 1),
-        )
+        session_version = session.get("authorization_version", 1)
+        membership_version = membership.get("authorization_version", 1)
+        if session_version != membership_version:
+            raise ApiError(
+                "authentication_required",
+                "Session authorization is stale",
+                status_code=401,
+            )
 
         return PrincipalContext(
             tenant_id=tid,
             principal_id=pid,
             membership_id=mid,
-            authorization_version=auth_version,
+            authorization_version=membership_version,
         )
 
     async def resolve_api_key(self, tenant_id: UUID, application_id: UUID) -> PrincipalContext:
         """Resolve an API Key to a PrincipalContext for the application principal.
 
-        API Key contexts have the application principal as both principal and
-        membership, with subject_kind='application'.
+        API Key contexts have an application subject and never a synthetic
+        membership. Application role bindings therefore remain distinct from
+        human membership semantics.
         """
         principal = await self.principal_store.get_principal(tenant_id, application_id)
         if principal is None or not principal.get("enabled", False):
             raise ApiError("authentication_required", "Application principal is not active", status_code=401)
 
-        return PrincipalContext(
-            tenant_id=tenant_id,
-            principal_id=application_id,
-            membership_id=application_id,
-            authorization_version=1,
-        )
+        return PrincipalContext.for_application(tenant_id, application_id)

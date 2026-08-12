@@ -5,11 +5,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     ForeignKeyConstraint,
     Index,
     Integer,
-    JSON,
     String,
     UniqueConstraint,
     func,
@@ -25,23 +25,22 @@ class FileIngestionRecordModel(Base):
         UniqueConstraint("tenant_id", "id"),
         UniqueConstraint("tenant_id", "idempotency_fingerprint"),
         ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
-        ForeignKeyConstraint(
-            ["tenant_id", "upload_session_id"],
-            ["upload_session.tenant_id", "upload_session.id"],
-            ondelete="SET NULL",
-        ),
-        ForeignKeyConstraint(
-            ["tenant_id", "file_object_id"],
-            ["file_object.tenant_id", "file_object.id"],
-            ondelete="SET NULL",
-        ),
+        # Terminal provenance is retained: session/file references may be
+        # removed independently, but tenant scope is never nulled.
+        ForeignKeyConstraint(["upload_session_id"], ["upload_session.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["multipart_session_id"], ["multipart_session.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["quota_reservation_id"], ["quota_reservation.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["file_object_id"], ["file_object.id"], ondelete="SET NULL"),
         Index("ix_ingestion_tenant_status", "tenant_id", "status"),
         Index("ix_ingestion_tenant_session", "tenant_id", "upload_session_id"),
+        Index("ix_ingestion_tenant_multipart_session", "tenant_id", "multipart_session_id"),
+        Index("ix_ingestion_tenant_quota_reservation", "tenant_id", "quota_reservation_id"),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     upload_session_id: Mapped[UUID | None] = mapped_column()
     multipart_session_id: Mapped[UUID | None] = mapped_column()
+    quota_reservation_id: Mapped[UUID | None] = mapped_column()
     file_object_id: Mapped[UUID | None] = mapped_column()
     creator_principal_id: Mapped[UUID] = mapped_column(nullable=False)
     acting_principal_id: Mapped[UUID] = mapped_column(nullable=False)
