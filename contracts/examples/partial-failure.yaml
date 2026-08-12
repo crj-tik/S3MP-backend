@@ -1,0 +1,20 @@
+id: op_01J5YS2FVDYKFF3HQX04QXZR51
+type: move
+status: partial_failure
+created_at: '2026-08-10T09:30:00Z'
+updated_at: '2026-08-10T09:30:08Z'
+items:
+  - source_key: inbox/a.csv
+    destination_key: archive/a.csv
+    status: succeeded
+    error: null
+  - source_key: inbox/b.csv
+    destination_key: archive/b.csv
+    status: copied_source_delete_failed
+    error:
+      code: partial_failure
+      message: Destination copy was verified but the source could not be deleted.
+      request_id: req_01J5YS2JY2BXAKB5KQDC60CMZW
+      details:
+        recovery_action: retry_source_delete
+        destination_verified: true

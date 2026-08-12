@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run alembic *)",
+      "Bash(uv run python scripts/*)",
+      "Bash(docker exec platform-infra-postgres-1 *)"
+    ]
+  }
+}

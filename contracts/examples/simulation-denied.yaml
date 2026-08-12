@@ -1,0 +1,13 @@
+decision: deny
+reason_code: explicit_deny
+authorization_version: 42
+evaluated_at: '2026-08-10T09:30:00Z'
+sources:
+  - source_type: role_binding
+    source_id: rb_01J5YRPQ3HWRJF05HXVMV4PQ7E
+    effect: allow
+    reason_code: group_role_allow
+  - source_type: directory_policy
+    source_id: pol_01J5YRQKFD7VE9N8T5QACMEG1V
+    effect: deny
+    reason_code: explicit_deny

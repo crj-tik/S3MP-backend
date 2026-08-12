@@ -1,0 +1,85 @@
+version: 1.0.0
+error_envelope:
+  required: [code, message, request_id]
+  optional: [details]
+error_codes:
+  - code: authentication_required
+    http_status: 401
+    description: No valid session or API key was supplied.
+  - code: invalid_credentials
+    http_status: 401
+    description: Credentials are malformed or cannot be verified.
+  - code: api_key_expired
+    http_status: 401
+    description: The API key has reached its expiry.
+  - code: api_key_revoked
+    http_status: 401
+    description: The API key was revoked or disabled.
+  - code: membership_inactive
+    http_status: 403
+    description: The tenant membership is not active.
+  - code: permission_denied
+    http_status: 403
+    description: The principal lacks the required effective permission.
+  - code: delegation_exceeds_authority
+    http_status: 403
+    description: A proposed binding exceeds the delegator's operation or resource scope.
+  - code: resource_not_found
+    http_status: 404
+    description: The resource does not exist in the authenticated tenant or is intentionally concealed.
+  - code: validation_failed
+    http_status: 422
+    description: Request fields violate schema or business validation.
+    details: {fields: 'Array of {pointer, reason}.'}
+  - code: invalid_cursor
+    http_status: 400
+    description: Cursor is malformed, expired, or does not match principal, tenant, authorization version or filters.
+  - code: invalid_object_key
+    http_status: 422
+    description: Object key or canonical prefix is unsafe or ambiguous.
+  - code: conflict
+    http_status: 409
+    description: Current resource state conflicts with the requested transition.
+  - code: duplicate_resource
+    http_status: 409
+    description: A tenant-scoped unique value already exists.
+  - code: idempotency_key_reused
+    http_status: 409
+    description: The idempotency key was previously used with a different request fingerprint.
+  - code: etag_mismatch
+    http_status: 412
+    description: If-Match does not identify the current resource version.
+  - code: resource_expired
+    http_status: 410
+    description: The addressed binding, upload, multipart session or operation has expired.
+  - code: secret_not_retrievable
+    http_status: 410
+    description: An API key secret cannot be shown after its one-time response.
+  - code: quota_exceeded
+    http_status: 409
+    description: Required capacity cannot be reserved or actual usage exceeds the allowed quota.
+  - code: upload_verification_failed
+    http_status: 409
+    description: Stored object metadata does not match the declared upload contract.
+  - code: multipart_parts_invalid
+    http_status: 409
+    description: Submitted parts are missing, unordered, duplicated or do not match stored part metadata.
+  - code: storage_unavailable
+    http_status: 503
+    description: The selected storage connection is unavailable.
+  - code: storage_capability_unsupported
+    http_status: 422
+    description: The storage connection does not advertise a required capability.
+  - code: rate_limit_exceeded
+    http_status: 429
+    description: A key, application or tenant rate limit was exceeded.
+    details: {retry_after_seconds: integer}
+  - code: partial_failure
+    http_status: 207
+    description: A multi-step operation completed only some steps and requires inspection or recovery.
+  - code: audit_unavailable
+    http_status: 503
+    description: A high-risk operation was rejected because its audit event could not be durably recorded.
+  - code: internal_error
+    http_status: 500
+    description: An unexpected failure occurred; no sensitive internal detail is exposed.

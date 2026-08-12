@@ -1,0 +1,52 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      S3MP_ENVIRONMENT: development
+      S3MP_LOG_LEVEL: INFO
+      S3MP_DATABASE_URL_FILE: /run/secrets/database_url
+      S3MP_REDIS_URL: redis://redis:6379/0
+      S3MP_READINESS_TIMEOUT_SECONDS: "2"
+    secrets: [database_url]
+    ports: ["8000:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: s3mp
+      POSTGRES_USER: s3mp
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3mp -d s3mp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+secrets:
+  postgres_password:
+    file: ./secrets.example/postgres_password
+  database_url:
+    file: ./secrets.example/database_url
+
+volumes:
+  postgres-data:
+  redis-data:

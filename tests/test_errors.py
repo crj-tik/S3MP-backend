@@ -1,0 +1,53 @@
+from fastapi import APIRouter, Query
+from fastapi.testclient import TestClient
+
+from s3mp.common.config import Settings
+from s3mp.common.errors import ApiError
+from s3mp.main import create_app
+
+
+def test_stable_api_error_includes_request_id() -> None:
+    app = create_app(Settings())
+    router = APIRouter()
+
+    @router.get("/failure")
+    async def failure() -> None:
+        raise ApiError("conflict", "Conflict", 409, {"field": "name"})
+
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/failure")
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "conflict",
+        "message": "Conflict",
+        "request_id": response.headers["x-request-id"],
+        "details": {"field": "name"},
+    }
+
+
+def test_validation_error_is_json_serializable() -> None:
+    app = create_app(Settings())
+    router = APIRouter()
+
+    @router.get("/validated")
+    async def validated(value: int = Query(gt=0)) -> dict[str, int]:
+        return {"value": value}
+
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/validated", params={"value": "invalid"})
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_failed"
+    assert response.json()["request_id"] == response.headers["x-request-id"]
+
+
+def test_not_found_and_method_not_allowed_use_stable_envelope() -> None:
+    with TestClient(create_app(Settings())) as client:
+        not_found = client.get("/missing")
+        method_not_allowed = client.post("/health/live")
+    assert not_found.status_code == 404
+    assert not_found.json()["code"] == "resource_not_found"
+    assert not_found.json()["request_id"] == not_found.headers["x-request-id"]
+    assert method_not_allowed.status_code == 405
+    assert method_not_allowed.json()["code"] == "method_not_allowed"

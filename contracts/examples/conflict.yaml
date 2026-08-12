@@ -1,0 +1,8 @@
+code: conflict
+message: The requested transition conflicts with the current resource state.
+request_id: req_01J5YQC63XCPTR24BKX9Z5T2V7
+details:
+  resource_type: upload
+  resource_id: upl_01J5YR5Q6VWDN44WTPX5VHV7MB
+  current_status: completed
+  requested_transition: complete

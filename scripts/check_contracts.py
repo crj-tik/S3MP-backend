@@ -1,0 +1,155 @@
+"""Validate contract files when the backend-owned contracts directory is present."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+CONTRACTS = ROOT / "contracts"
+REQUIRED = ("openapi.yaml", "error-codes.yaml", "permission-catalog.yaml")
+
+
+def load_document(path: Path) -> Any:
+    with path.open(encoding="utf-8") as stream:
+        if path.suffix == ".json":
+            return json.load(stream)
+        return yaml.safe_load(stream)
+
+
+def validate_openapi(document: Any) -> list[str]:
+    if not isinstance(document, dict):
+        return ["openapi.yaml must contain an object"]
+    errors = []
+    if not str(document.get("openapi", "")).startswith("3."):
+        errors.append("openapi.yaml must declare OpenAPI 3.x")
+    if not isinstance(document.get("info"), dict):
+        errors.append("openapi.yaml must contain info")
+    if not isinstance(document.get("paths"), dict):
+        errors.append("openapi.yaml must contain paths")
+    return errors
+
+
+def catalog_entries(document: Any, candidates: tuple[str, ...]) -> list[Any] | None:
+    if isinstance(document, list):
+        return document
+    if isinstance(document, dict):
+        for candidate in candidates:
+            entries = document.get(candidate)
+            if isinstance(entries, list):
+                return list(entries)
+    return None
+
+
+def catalog_identifiers(document: Any, candidates: tuple[str, ...]) -> set[str]:
+    entries = catalog_entries(document, candidates) or []
+    return {
+        str(
+            entry
+            if isinstance(entry, str)
+            else entry.get("code") or entry.get("name") or entry.get("id")
+        )
+        for entry in entries
+        if isinstance(entry, str | dict)
+    }
+
+
+def collect_key_values(document: Any, key: str) -> set[str]:
+    values: set[str] = set()
+    if isinstance(document, dict):
+        for item_key, value in document.items():
+            if item_key == key and isinstance(value, str):
+                values.add(value)
+            values.update(collect_key_values(value, key))
+    elif isinstance(document, list):
+        for value in document:
+            values.update(collect_key_values(value, key))
+    return values
+
+
+def collect_example_error_codes(contracts: Path) -> set[str]:
+    codes: set[str] = set()
+    examples = contracts / "examples"
+    if examples.is_dir():
+        for path in examples.iterdir():
+            if path.suffix.lower() not in {".yaml", ".yml", ".json"}:
+                continue
+            document = load_document(path)
+            if isinstance(document, dict):
+                value = document.get("value", document)
+                if isinstance(value, dict) and isinstance(value.get("code"), str):
+                    codes.add(value["code"])
+    return codes
+
+
+def validate_catalog(path: Path, candidates: tuple[str, ...]) -> list[str]:
+    document = load_document(path)
+    entries = catalog_entries(document, candidates)
+    if entries is None:
+        return [f"{path.name} must contain a list catalog"]
+    errors = []
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        if isinstance(entry, str):
+            identifier = entry
+        elif isinstance(entry, dict):
+            identifier = str(entry.get("code") or entry.get("name") or entry.get("id") or "")
+        else:
+            identifier = ""
+        if not identifier:
+            errors.append(f"{path.name} entry {index} needs code/name/id")
+        elif identifier in seen:
+            errors.append(f"{path.name} contains duplicate {identifier}")
+        seen.add(identifier)
+    return errors
+
+
+def main() -> int:
+    if not CONTRACTS.exists():
+        print("contracts/ is absent; contract validation deferred")
+        return 0
+    missing = [name for name in REQUIRED if not (CONTRACTS / name).is_file()]
+    if missing:
+        print("Missing contract files: " + ", ".join(missing), file=sys.stderr)
+        return 1
+    try:
+        openapi = load_document(CONTRACTS / "openapi.yaml")
+        error_catalog = load_document(CONTRACTS / "error-codes.yaml")
+        permission_catalog = load_document(CONTRACTS / "permission-catalog.yaml")
+        errors = validate_openapi(openapi)
+        errors += validate_catalog(CONTRACTS / "error-codes.yaml", ("errors", "error_codes"))
+        errors += validate_catalog(
+            CONTRACTS / "permission-catalog.yaml", ("permissions", "operations")
+        )
+        known_permissions = catalog_identifiers(permission_catalog, ("permissions", "operations"))
+        referenced_permissions = collect_key_values(openapi, "x-permission")
+        unknown_permissions = referenced_permissions - known_permissions
+        if unknown_permissions:
+            errors.append(
+                "OpenAPI references unknown permissions: " + ", ".join(sorted(unknown_permissions))
+            )
+        known_errors = catalog_identifiers(error_catalog, ("errors", "error_codes"))
+        referenced_errors = collect_key_values(openapi, "x-error-code")
+        referenced_errors.update(collect_example_error_codes(CONTRACTS))
+        unknown_errors = referenced_errors - known_errors
+        if unknown_errors:
+            errors.append(
+                "OpenAPI/examples reference unknown error codes: "
+                + ", ".join(sorted(unknown_errors))
+            )
+    except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
+        print(f"Unable to parse contracts: {exc}", file=sys.stderr)
+        return 1
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    print("Contract structure, error codes, and permission catalog are valid")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
