@@ -1,6 +1,8 @@
 """S3 bucket acceptance and multi-tenant security drill tests."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -47,17 +49,30 @@ from s3mp.storage.domain.policy import (
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 def _now() -> datetime:
     return datetime(2026, 8, 1, tzinfo=UTC)
 
 
-def _config(**kwargs: object) -> S3ConnectionConfig:
-    defaults = {
-        "endpoint": "https://s3.example.com",
-        "region": "us-east-1",
-        "path_style": True,
-    }
-    return S3ConnectionConfig(**{**defaults, **kwargs})
+def _config(
+    *,
+    endpoint: str = "https://s3.example.com",
+    region: str = "us-east-1",
+    path_style: bool = True,
+    max_presign_ttl_seconds: int = 3600,
+) -> S3ConnectionConfig:
+    return S3ConnectionConfig(endpoint, region, path_style, max_presign_ttl_seconds)
+
+
+class NoopFileStore:
+    async def list(self, prefix: str) -> list[ObjectMetadata]:
+        return []
+
+    async def head(self, key: str) -> ObjectMetadata | None:
+        return None
+
+    async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
+        return ObjectMetadata(key, len(body), content_type)
 
 
 def _adapter() -> S3Adapter:
@@ -66,12 +81,15 @@ def _adapter() -> S3Adapter:
 
 # ── 10.3: S3 Bucket Acceptance ───────────────────────────────────────────────
 
+
 class TestS3Connection:
     """Region, TLS, gateway, presigned TTL, and network conditions."""
 
     def test_requires_https(self) -> None:
         with pytest.raises(ValueError, match="TLS"):
-            S3ConnectionConfig(endpoint="http://s3.example.com", region="us-east-1", path_style=True)
+            S3ConnectionConfig(
+                endpoint="http://s3.example.com", region="us-east-1", path_style=True
+            )
 
     def test_requires_endpoint_and_region(self) -> None:
         with pytest.raises(ValueError, match="endpoint and region"):
@@ -80,12 +98,16 @@ class TestS3Connection:
     def test_presigned_ttl_within_service_limit(self) -> None:
         with pytest.raises(ValueError, match="presigned TTL"):
             S3ConnectionConfig(
-                endpoint="https://s3.example.com", region="us-east-1", path_style=True,
+                endpoint="https://s3.example.com",
+                region="us-east-1",
+                path_style=True,
                 max_presign_ttl_seconds=0,
             )
         with pytest.raises(ValueError, match="presigned TTL"):
             S3ConnectionConfig(
-                endpoint="https://s3.example.com", region="us-east-1", path_style=True,
+                endpoint="https://s3.example.com",
+                region="us-east-1",
+                path_style=True,
                 max_presign_ttl_seconds=3601,
             )
 
@@ -103,8 +125,10 @@ class TestS3Connection:
     def test_sigv4_request_is_explicit_and_signed(self) -> None:
         signer = SigV4Signer(S3Credentials("AKID", "secret"))
         signed = signer.sign(
-            "GET", "https://s3.example.com/bucket/key",
-            region="us-east-1", now=_now(),
+            "GET",
+            "https://s3.example.com/bucket/key",
+            region="us-east-1",
+            now=_now(),
         )
         assert "authorization" in signed.headers
         assert "AWS4-HMAC-SHA256" in signed.headers["authorization"]
@@ -115,8 +139,11 @@ class TestS3Connection:
     def test_presigned_url_contains_required_params(self) -> None:
         signer = SigV4Signer(S3Credentials("AKID", "secret"))
         presigned = signer.presign(
-            "GET", "https://s3.example.com/bucket/key",
-            region="us-east-1", expires_seconds=900, now=_now(),
+            "GET",
+            "https://s3.example.com/bucket/key",
+            region="us-east-1",
+            expires_seconds=900,
+            now=_now(),
         )
         assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in presigned.url
         assert "X-Amz-Credential=" in presigned.url
@@ -138,9 +165,14 @@ class TestS3Capabilities:
 
     def test_operation_allowlist_is_connection_scoped(self) -> None:
         caps = StorageCapabilities(
-            list_objects=True, head_object=True, presigned_get=True,
-            proxy_upload=False, presigned_put=False,
-            multipart=False, copy_object=False, delete_object=False,
+            list_objects=True,
+            head_object=True,
+            presigned_get=True,
+            proxy_upload=False,
+            presigned_put=False,
+            multipart=False,
+            copy_object=False,
+            delete_object=False,
         )
         assert caps.supports(StorageOperation.LIST)
         assert caps.supports(StorageOperation.HEAD)
@@ -171,9 +203,18 @@ class TestS3Capabilities:
             async def head(self, bucket: str, key: str) -> object:
                 raise ConnectionError("unreachable")
 
-        async def run():
+            async def put(self, bucket: str, key: str, body: bytes, content_type: str) -> object:
+                raise AssertionError("read probe must not write")
+
+            async def get(self, bucket: str, key: str) -> bytes:
+                raise AssertionError("read probe must not fetch content")
+
+            async def delete(self, bucket: str, key: str) -> object:
+                raise AssertionError("read probe must not delete")
+
+        async def run() -> bool:
             return await read_probe(FailingProbe(), "bucket", "key")
-        import asyncio
+
         result = asyncio.run(run())
         assert result is False
 
@@ -195,11 +236,11 @@ class TestS3Capabilities:
                 stored.pop(key, None)
                 return None
 
-        async def run():
+        async def run() -> bool:
             return await acceptance_prefix_round_trip(
                 InMemoryProbe(), "bucket", "test-prefix/probe-key"
             )
-        import asyncio
+
         result = asyncio.run(run())
         assert result is True
         assert not stored  # probe key cleaned up
@@ -222,39 +263,28 @@ class TestFileOperations:
         assert cmd.object_key == ""
 
     def test_file_service_authorizes_key_within_prefix(self) -> None:
-        class NoopStore:
-            async def list(self, prefix: str) -> list[ObjectMetadata]:
-                return []
-            async def head(self, key: str) -> ObjectMetadata | None:
-                return None
-            async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
-                return ObjectMetadata(key, len(body), content_type)
-
-        svc = FileService(NoopStore(), _adapter(), "bucket", max_presign_ttl=900)
+        svc = FileService(NoopFileStore(), _adapter(), "bucket", max_presign_ttl=900)
         with pytest.raises(FileValidationError, match="outside authorized prefix"):
             svc.presign_get("other/file.txt", "team")
 
     def test_presigned_get_returns_fingerprint(self) -> None:
-        class NoopStore:
-            async def list(self, prefix: str) -> list[ObjectMetadata]:
-                return []
-            async def head(self, key: str) -> ObjectMetadata | None:
-                return None
-            async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
-                return ObjectMetadata(key, len(body), content_type)
-
-        svc = FileService(NoopStore(), _adapter(), "bucket", max_presign_ttl=900)
+        svc = FileService(NoopFileStore(), _adapter(), "bucket", max_presign_ttl=900)
         _, fingerprint = svc.presign_get("team/file.txt", "team", ttl_seconds=300)
         assert len(fingerprint) == 64  # SHA-256 hex
 
     def test_disabled_subject_cannot_create_upload(self) -> None:
         svc = FileService(
-            None, _adapter(), "bucket",  # type: ignore[arg-type]
-            subject_is_active=lambda _pid: False,
+            NoopFileStore(), _adapter(), "bucket", subject_is_active=lambda _pid: False
         )
         with pytest.raises(FileValidationError, match="disabled principal"):
             svc.create_upload_session(
-                uuid4(), uuid4(), uuid4(), "team/file.txt", "team", 100, "text/plain",
+                uuid4(),
+                uuid4(),
+                uuid4(),
+                "team/file.txt",
+                "team",
+                100,
+                "text/plain",
             )
 
     def test_secure_cursor_binds_tenant_principal_and_prefix(self) -> None:
@@ -274,20 +304,29 @@ class TestFileOperations:
         class VerifyingStore:
             async def list(self, prefix: str) -> list[ObjectMetadata]:
                 return []
+
             async def head(self, key: str) -> ObjectMetadata | None:
                 return head_result
+
             async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
                 return ObjectMetadata(key, len(body), content_type)
 
         svc = FileService(VerifyingStore(), _adapter(), "bucket")
         session = UploadSession(
-            uuid4(), uuid4(), uuid4(), uuid4(), "team/file.txt", 100, "text/plain",
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            "team/file.txt",
+            100,
+            "text/plain",
             datetime.now(UTC) + timedelta(hours=1),
         )
         # Object not found
         head_result = None
         with pytest.raises(FileValidationError, match="metadata"):
             import asyncio
+
             asyncio.run(svc.complete_upload(session))
 
         # Object size mismatch
@@ -306,26 +345,39 @@ class TestMultipartLifecycle:
             async def create_multipart(self, key: str, content_type: str) -> str:
                 store_calls.append("create")
                 return "upload-1"
-            async def upload_part(self, upload_id: str, number: int, body: bytes):
+
+            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
                 return None
-            async def list_parts(self, upload_id: str):
+
+            async def list_parts(self, upload_id: str) -> list[Any]:
                 return []
-            async def complete_multipart(self, upload_id: str, parts):
+
+            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
                 return ObjectMetadata("key", 100, "text/plain")
+
             async def abort_multipart(self, upload_id: str) -> None:
                 store_calls.append("abort")
-            async def copy(self, source_key: str, destination_key: str):
+
+            async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
                 return ObjectMetadata(destination_key, 100, "text/plain")
+
             async def delete(self, key: str) -> None:
-                pass
+                return None
 
         svc = MultipartService(RecordingStore())
         session = MultipartSession(
-            uuid4(), uuid4(), uuid4(), uuid4(), "team/file.bin", 100, "application/octet-stream",
-            uuid4(), datetime.now(UTC) + timedelta(hours=1),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            "team/file.bin",
+            100,
+            "application/octet-stream",
+            uuid4(),
+            datetime.now(UTC) + timedelta(hours=1),
         )
 
-        async def run():
+        async def run() -> None:
             created = await svc.create(session)
             assert created.provider_upload_id == "upload-1"
             # Cross-principal access rejected
@@ -338,7 +390,6 @@ class TestMultipartLifecycle:
             aborted = await svc.abort(created, session.principal_id)
             assert aborted.status is MultipartStatus.ABORTED
 
-        import asyncio
         asyncio.run(run())
 
     def test_cleanup_expired_sessions(self) -> None:
@@ -347,37 +398,58 @@ class TestMultipartLifecycle:
         class CleanupStore:
             async def create_multipart(self, key: str, content_type: str) -> str:
                 return "upload-1"
-            async def upload_part(self, upload_id: str, number: int, body: bytes):
+
+            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
                 return None
-            async def list_parts(self, upload_id: str):
+
+            async def list_parts(self, upload_id: str) -> list[Any]:
                 return []
-            async def complete_multipart(self, upload_id: str, parts):
+
+            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
                 return ObjectMetadata("key", 100, "text/plain")
+
             async def abort_multipart(self, upload_id: str) -> None:
                 aborted.append(upload_id)
-            async def copy(self, source_key: str, destination_key: str):
+
+            async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
                 return ObjectMetadata(destination_key, 100, "text/plain")
+
             async def delete(self, key: str) -> None:
-                pass
+                return None
 
         svc = MultipartService(CleanupStore())
         expired = MultipartSession(
-            uuid4(), uuid4(), uuid4(), uuid4(), "old.bin", 100, "text/plain",
-            uuid4(), _now() - timedelta(hours=1), provider_upload_id="upload-old",
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            "old.bin",
+            100,
+            "text/plain",
+            uuid4(),
+            _now() - timedelta(hours=1),
+            provider_upload_id="upload-old",
         )
         active = MultipartSession(
-            uuid4(), uuid4(), uuid4(), uuid4(), "new.bin", 100, "text/plain",
-            uuid4(), _now() + timedelta(hours=1), provider_upload_id="upload-new",
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            "new.bin",
+            100,
+            "text/plain",
+            uuid4(),
+            _now() + timedelta(hours=1),
+            provider_upload_id="upload-new",
         )
 
-        async def run():
+        async def run() -> None:
             cleaned = await svc.cleanup_expired([expired, active], _now())
             assert len(cleaned) == 1
             assert cleaned[0].status is MultipartStatus.EXPIRED
             assert "upload-old" in aborted
             assert "upload-new" not in aborted
 
-        import asyncio
         asyncio.run(run())
 
     def test_move_partial_failure_and_batch_delete_confirmation(self) -> None:
@@ -386,22 +458,28 @@ class TestMultipartLifecycle:
         class MoveStore:
             async def create_multipart(self, key: str, content_type: str) -> str:
                 return "upload-1"
-            async def upload_part(self, upload_id: str, number: int, body: bytes):
+
+            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
                 return None
-            async def list_parts(self, upload_id: str):
+
+            async def list_parts(self, upload_id: str) -> list[Any]:
                 return []
-            async def complete_multipart(self, upload_id: str, parts):
+
+            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
                 return ObjectMetadata("key", 100, "text/plain")
+
             async def abort_multipart(self, upload_id: str) -> None:
                 pass
+
             async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
                 return ObjectMetadata(destination_key, 100, "text/plain")
+
             async def delete(self, key: str) -> None:
                 delete_called.append(key)
 
         svc = MultipartService(MoveStore())
 
-        async def run():
+        async def run() -> None:
             # Successful move
             op = ObjectOperation(uuid4(), uuid4(), uuid4(), "move", "src/a.txt", "dst/a.txt")
             result = await svc.move(op)
@@ -411,13 +489,15 @@ class TestMultipartLifecycle:
             # Batch delete with mismatch
             op_id = uuid4()
             with pytest.raises(FileValidationError, match="confirmation"):
-                await svc.delete_batch(["a.txt", "b.txt"], ["a.txt"], op_id, tenant_id=uuid4(), principal_id=uuid4())
+                await svc.delete_batch(
+                    ["a.txt", "b.txt"], ["a.txt"], op_id, tenant_id=uuid4(), principal_id=uuid4()
+                )
 
-        import asyncio
         asyncio.run(run())
 
 
 # ── 10.4: Multi-tenant Security Drills ───────────────────────────────────────
+
 
 class TestIDORAndDirectoryTraversal:
     """Cross-tenant IDOR, directory bypass, and path traversal attacks."""
@@ -439,30 +519,16 @@ class TestIDORAndDirectoryTraversal:
 
     def test_prefix_bypass_rejected(self) -> None:
         """A key outside the authorized prefix must be rejected."""
-        class NoopStore:
-            async def list(self, prefix: str) -> list[ObjectMetadata]:
-                return []
-            async def head(self, key: str) -> ObjectMetadata | None:
-                return None
-            async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
-                return ObjectMetadata(key, len(body), content_type)
 
-        svc = FileService(NoopStore(), _adapter(), "bucket")
+        svc = FileService(NoopFileStore(), _adapter(), "bucket")
         # team/private is not within team/public
         with pytest.raises(FileValidationError, match="outside authorized prefix"):
             svc.presign_get("team/private/secrets.txt", "team/public")
 
     def test_similar_prefix_not_authorized(self) -> None:
         """team-a is not a child of team."""
-        class NoopStore:
-            async def list(self, prefix: str) -> list[ObjectMetadata]:
-                return []
-            async def head(self, key: str) -> ObjectMetadata | None:
-                return None
-            async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
-                return ObjectMetadata(key, len(body), content_type)
 
-        svc = FileService(NoopStore(), _adapter(), "bucket")
+        svc = FileService(NoopFileStore(), _adapter(), "bucket")
         with pytest.raises(FileValidationError, match="outside authorized prefix"):
             svc.presign_get("team-a/file.txt", "team")
 
@@ -483,23 +549,23 @@ class TestDelegationAndAPIKey:
             )
         # Invalid: prefix broader than delegator's
         with pytest.raises(ValueError, match="exceed"):
-            validate_delegated_scope(
-                DelegationScope(frozenset({"files.read"}), "team"), delegator
-            )
+            validate_delegated_scope(DelegationScope(frozenset({"files.read"}), "team"), delegator)
         # Invalid: prefix outside delegator's tree
         with pytest.raises(ValueError, match="exceed"):
-            validate_delegated_scope(
-                DelegationScope(frozenset({"files.read"}), "other"), delegator
-            )
+            validate_delegated_scope(DelegationScope(frozenset({"files.read"}), "other"), delegator)
 
     def test_self_grant_is_rejected(self) -> None:
         from s3mp.authorization.domain.delegation import validate_direct_grant
+
         pid = uuid4()
         future = _now() + timedelta(days=30)
         with pytest.raises(ValueError, match="itself"):
             validate_direct_grant(
-                actor_principal_id=pid, target_principal_id=pid,
-                permission="files.read", reason="test", expires_at=future,
+                actor_principal_id=pid,
+                target_principal_id=pid,
+                permission="files.read",
+                reason="test",
+                expires_at=future,
             )
 
     def test_key_scope_vs_directory_intersection(self) -> None:
@@ -507,7 +573,15 @@ class TestDelegationAndAPIKey:
         # Key scope: upload allowed
         # Directory policy: no write permission on target prefix
         bindings = [
-            Binding(uuid4(), "files.read", Decision.ALLOW, "team", _now(), _now() + timedelta(hours=1), "key"),
+            Binding(
+                uuid4(),
+                "files.read",
+                Decision.ALLOW,
+                "team",
+                _now(),
+                _now() + timedelta(hours=1),
+                "key",
+            ),
         ]
         # Key has upload scope but no write binding → denied
         decision = evaluate("files.write", bindings, object_key="team/data.csv", now=_now())
@@ -516,11 +590,16 @@ class TestDelegationAndAPIKey:
     def test_revoked_key_cannot_presign(self) -> None:
         """Disabled subject cannot receive new presigned URLs."""
         svc = FileService(
-            None, _adapter(), "bucket",  # type: ignore[arg-type]
-            subject_is_active=lambda _pid: False,
+            NoopFileStore(), _adapter(), "bucket", subject_is_active=lambda _pid: False
         )
         session = UploadSession(
-            uuid4(), uuid4(), uuid4(), uuid4(), "team/file.txt", 100, "text/plain",
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            uuid4(),
+            "team/file.txt",
+            100,
+            "text/plain",
             datetime.now(UTC) + timedelta(hours=1),
         )
         with pytest.raises(FileValidationError, match="disabled principal"):
@@ -570,41 +649,70 @@ class TestFailureScenarios:
         class FailingDeleteStore:
             async def create_multipart(self, key: str, content_type: str) -> str:
                 return "upload-1"
-            async def upload_part(self, upload_id: str, number: int, body: bytes):
+
+            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
                 return None
-            async def list_parts(self, upload_id: str):
+
+            async def list_parts(self, upload_id: str) -> list[Any]:
                 return []
-            async def complete_multipart(self, upload_id: str, parts):
+
+            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
                 return ObjectMetadata("key", 100, "text/plain")
+
             async def abort_multipart(self, upload_id: str) -> None:
-                pass
+                return None
+
             async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
                 return ObjectMetadata(destination_key, 100, "text/plain")
+
             async def delete(self, key: str) -> None:
                 if delete_fails:
                     raise RuntimeError("delete failed")
 
         svc = MultipartService(FailingDeleteStore())
 
-        async def run():
+        async def run() -> None:
             op = ObjectOperation(uuid4(), uuid4(), uuid4(), "move", "src/a.txt", "dst/a.txt")
             result = await svc.move(op)
             assert result.status is OperationStatus.PARTIAL_FAILURE
             assert "delete failed" in (result.failure_reason or "")
 
-        import asyncio
         asyncio.run(run())
 
     def test_batch_delete_requires_exact_confirmation(self) -> None:
         """Batch delete must confirm the exact set of keys."""
-        svc = MultipartService(None)  # type: ignore[arg-type]
+
+        class UnusedStore:
+            async def create_multipart(self, key: str, content_type: str) -> str:
+                raise AssertionError("batch confirmation must precede storage access")
+
+            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
+                raise AssertionError("batch confirmation must precede storage access")
+
+            async def list_parts(self, upload_id: str) -> list[Any]:
+                raise AssertionError("batch confirmation must precede storage access")
+
+            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
+                raise AssertionError("batch confirmation must precede storage access")
+
+            async def abort_multipart(self, upload_id: str) -> None:
+                raise AssertionError("batch confirmation must precede storage access")
+
+            async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
+                raise AssertionError("batch confirmation must precede storage access")
+
+            async def delete(self, key: str) -> None:
+                raise AssertionError("batch confirmation must precede storage access")
+
+        svc = MultipartService(UnusedStore())
         op_id = uuid4()
 
-        async def run():
+        async def run() -> None:
             with pytest.raises(FileValidationError, match="confirmation"):
-                await svc.delete_batch(["a.txt", "b.txt"], ["a.txt"], op_id, tenant_id=uuid4(), principal_id=uuid4())
+                await svc.delete_batch(
+                    ["a.txt", "b.txt"], ["a.txt"], op_id, tenant_id=uuid4(), principal_id=uuid4()
+                )
 
-        import asyncio
         asyncio.run(run())
 
 
@@ -613,9 +721,12 @@ class TestAuditTrailIntegrity:
 
     def test_audit_event_strips_credentials(self) -> None:
         from s3mp.audit.domain.events import AuditWriter
+
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "api_key.create", "api_key",
+            uuid4(),
+            "api_key.create",
+            "api_key",
             actor_principal_id=uuid4(),
             resource_id="key-1",
             details={"secret": "sk-abc", "key_id": "k-1", "scope": "files.read"},
@@ -626,6 +737,7 @@ class TestAuditTrailIntegrity:
 
     def test_audit_event_fingerprint_is_one_way(self) -> None:
         from s3mp.audit.domain.events import AuditWriter
+
         fp = AuditWriter.fingerprint("presigned-url-content")
         assert len(fp) == 64
         # Cannot reverse

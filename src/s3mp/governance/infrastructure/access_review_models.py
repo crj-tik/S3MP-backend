@@ -37,9 +37,7 @@ class AccessReviewModel(Base):
     created_by_principal_id: Mapped[UUID | None] = mapped_column()
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ReviewItemModel(Base):
@@ -68,9 +66,7 @@ class ReviewItemModel(Base):
     verdict: Mapped[str] = mapped_column(String(32), nullable=False, default="unreviewed")
     reviewer_principal_id: Mapped[UUID | None] = mapped_column()
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ApprovalRequestModel(Base):
@@ -103,6 +99,4 @@ class ApprovalRequestModel(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

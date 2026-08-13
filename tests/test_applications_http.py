@@ -29,9 +29,7 @@ class FakeApplicationService:
         self.create_calls += 1
         return {"id": str(uuid4()), "name": name, "status": "active"}
 
-    async def update_app(
-        self, context: Any, app_id: Any, name: str | None
-    ) -> dict[str, Any]:
+    async def update_app(self, context: Any, app_id: Any, name: str | None) -> dict[str, Any]:
         return {"id": str(app_id), "name": name or "renamed", "status": "active"}
 
     async def takeover_app(self, context: Any, app_id: Any, reason: str) -> dict[str, Any]:
@@ -193,7 +191,10 @@ async def test_api_key_cannot_manage_applications_before_service() -> None:
 async def test_human_without_permission_cannot_manage_applications_before_service() -> None:
     application_service = FakeApplicationService()
     app = make_app(
-        {"application_service": application_service, "authorization_management": DenyingAuthorizationManagement()},
+        {
+            "application_service": application_service,
+            "authorization_management": DenyingAuthorizationManagement(),
+        },
         context=_ctx(),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

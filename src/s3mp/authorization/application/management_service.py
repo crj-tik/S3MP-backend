@@ -84,9 +84,7 @@ class AuthorizationManagementService:
             self._validate_delegable_permissions(body.permissions)
             await self._require_delegable_subset(context, body.permissions, None, None)
             if role is not None:
-                added = sorted(
-                    set(body.permissions) - set(cast(list[str], role["permissions"]))
-                )
+                added = sorted(set(body.permissions) - set(cast(list[str], role["permissions"])))
                 for binding in await self.store.bindings_for_role(context.tenant_id, role_id):
                     await self._require_delegable_subset(
                         context, added, binding["storage_space_id"], binding["canonical_prefix"]
@@ -118,7 +116,9 @@ class AuthorizationManagementService:
             raise ApiError("resource_not_found", "Role or principal not found", status_code=404)
         if body.principal_id == context.principal_id:
             await self._audit_delegation_denial(context, "self_grant")
-            raise ApiError("delegation_exceeds_authority", "Self-grants are forbidden", status_code=403)
+            raise ApiError(
+                "delegation_exceeds_authority", "Self-grants are forbidden", status_code=403
+            )
         self._validate_delegable_permissions(role["permissions"])
         scope = body.scope
         if scope.type == "tenant" and (
@@ -168,7 +168,11 @@ class AuthorizationManagementService:
         if body.expires_at <= datetime.now(UTC):
             raise ApiError("validation_failed", "expires_at must be in the future", status_code=422)
         await self._require_delegation_expiry_bound(
-            context, role["permissions"], scope.storage_space_id, scope.canonical_prefix, body.expires_at
+            context,
+            role["permissions"],
+            scope.storage_space_id,
+            scope.canonical_prefix,
+            body.expires_at,
         )
         result = await self.store.create_role_binding(
             context.tenant_id,
@@ -260,27 +264,47 @@ class AuthorizationManagementService:
                 ).decision
                 != Decision.ALLOW
             ):
-                await self._audit_delegation_denial(context, "permission_or_scope_exceeds_authority")
+                await self._audit_delegation_denial(
+                    context, "permission_or_scope_exceeds_authority"
+                )
                 raise ApiError(
                     "delegation_exceeds_authority", "Delegation exceeds authority", status_code=403
                 )
 
     async def _require_delegation_expiry_bound(
-        self, context: PrincipalContext, permissions: list[str], storage_space_id: UUID | None,
-        prefix: str | None, expires_at: datetime,
+        self,
+        context: PrincipalContext,
+        permissions: list[str],
+        storage_space_id: UUID | None,
+        prefix: str | None,
+        expires_at: datetime,
     ) -> None:
         bindings = await self._bindings(context.tenant_id, context.principal_id)
         for permission in permissions:
-            matching = [binding for binding in bindings if binding.permission == permission and binding.effect == "allow"
-                        and binding.expires_at is not None and binding.expires_at >= expires_at
-                        and evaluate(permission, [binding], storage_space_id=storage_space_id, object_key=prefix or "").decision == Decision.ALLOW]
+            matching = [
+                binding
+                for binding in bindings
+                if binding.permission == permission
+                and binding.effect == "allow"
+                and binding.expires_at is not None
+                and binding.expires_at >= expires_at
+                and evaluate(
+                    permission,
+                    [binding],
+                    storage_space_id=storage_space_id,
+                    object_key=prefix or "",
+                ).decision
+                == Decision.ALLOW
+            ]
             if not matching:
                 await self._audit_delegation_denial(context, "expiry_exceeds_authority")
-                raise ApiError("delegation_exceeds_authority", "Delegation expiry exceeds authority", status_code=403)
+                raise ApiError(
+                    "delegation_exceeds_authority",
+                    "Delegation expiry exceeds authority",
+                    status_code=403,
+                )
 
-    async def _audit_delegation_denial(
-        self, context: PrincipalContext, reason_code: str
-    ) -> None:
+    async def _audit_delegation_denial(self, context: PrincipalContext, reason_code: str) -> None:
         writer = getattr(self.store, "record_security_audit", None)
         if writer is None:
             return
@@ -312,7 +336,9 @@ class AuthorizationManagementService:
             return
         forbidden = set(permissions) - self.delegable_permissions
         if forbidden:
-            raise ApiError("delegation_exceeds_authority", "Permission is not delegable", status_code=403)
+            raise ApiError(
+                "delegation_exceeds_authority", "Permission is not delegable", status_code=403
+            )
 
 
 def _found(value: dict[str, Any] | None, label: str) -> dict[str, Any]:

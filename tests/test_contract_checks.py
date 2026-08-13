@@ -17,8 +17,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
 import pytest
+import yaml
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -125,9 +125,10 @@ def test_management_route_enforcement_check_accepts_current_routes() -> None:
 )
 async def test_api_key_is_rejected_for_each_management_category(path: str) -> None:
     """Management denial is operation classification based, not URL-prefix based."""
+    from uuid import uuid4
+
     from _http import make_app
     from s3mp.identity.domain.context import PrincipalContext
-    from uuid import uuid4
 
     context = PrincipalContext.for_application(uuid4(), uuid4(), application_id=uuid4())
     app = make_app(context=context)

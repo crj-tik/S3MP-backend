@@ -25,18 +25,17 @@ class FailCloseFileService:
     def __init__(self) -> None:
         self.storage_touched = False
 
-    async def list_files(
-        self, tenant_id: Any, space_id: str, prefix: str
-    ) -> list[dict[str, Any]]:
+    async def list_files(self, tenant_id: Any, space_id: str, prefix: str) -> list[dict[str, Any]]:
         return []
 
-    async def get_file(
-        self, tenant_id: Any, space_id: str, file_id: str
-    ) -> dict[str, Any]:
+    async def get_file(self, tenant_id: Any, space_id: str, file_id: str) -> dict[str, Any]:
         return {"id": file_id, "object_key": "a.txt", "etag": "v1"}
 
     async def delete_file(
-        self, tenant_id: Any, space_id: str, file_id: str,
+        self,
+        tenant_id: Any,
+        space_id: str,
+        file_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
         # Audit cannot be persisted → reject before touching storage.
@@ -47,7 +46,10 @@ class FailCloseFileService:
         )
 
     async def create_file_operation(
-        self, tenant_id: Any, space_id: str, body: Any,
+        self,
+        tenant_id: Any,
+        space_id: str,
+        body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "status": "pending"}
@@ -56,7 +58,10 @@ class FailCloseFileService:
         return {"id": op_id, "status": "pending"}
 
     async def create_upload(
-        self, ctx: PrincipalContext, space_id: str, body: Any,
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "status": "pending"}
@@ -64,9 +69,7 @@ class FailCloseFileService:
     async def get_upload(self, tenant_id: Any, upload_id: str) -> dict[str, Any]:
         return {"id": upload_id, "status": "pending"}
 
-    async def complete_upload(
-        self, tenant_id: Any, upload_id: str, body: Any
-    ) -> dict[str, Any]:
+    async def complete_upload(self, tenant_id: Any, upload_id: str, body: Any) -> dict[str, Any]:
         return {"id": upload_id, "status": "completed"}
 
     async def create_presigned_download(
@@ -75,7 +78,10 @@ class FailCloseFileService:
         return {"url": "https://x", "expires_in": 900}
 
     async def create_multipart_upload(
-        self, ctx: PrincipalContext, space_id: str, body: Any,
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "status": "pending"}
@@ -86,14 +92,10 @@ class FailCloseFileService:
     async def abort_multipart_upload(self, tenant_id: Any, mp_id: str, **kwargs: Any) -> None:
         return None
 
-    async def list_multipart_parts(
-        self, tenant_id: Any, mp_id: str
-    ) -> list[dict[str, Any]]:
+    async def list_multipart_parts(self, tenant_id: Any, mp_id: str) -> list[dict[str, Any]]:
         return []
 
-    async def create_multipart_part(
-        self, tenant_id: Any, mp_id: str, body: Any
-    ) -> dict[str, Any]:
+    async def create_multipart_part(self, tenant_id: Any, mp_id: str, body: Any) -> dict[str, Any]:
         return {"part_number": body.part_number}
 
     async def confirm_multipart_part(

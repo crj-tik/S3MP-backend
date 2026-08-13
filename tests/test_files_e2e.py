@@ -41,14 +41,21 @@ from s3mp.storage.infrastructure.models import StorageConnectionModel, StorageSp
 
 async def _seed_space(session: Any, tenant_id: Any) -> str:
     connection = StorageConnectionModel(
-        tenant_id=tenant_id, name="group-test", endpoint="https://s3.example.com",
-        region="us-east-1", path_style=True, credential_reference="vault/s3",
+        tenant_id=tenant_id,
+        name="group-test",
+        endpoint="https://s3.example.com",
+        region="us-east-1",
+        path_style=True,
+        credential_reference="vault/s3",
     )
     session.add(connection)
     await session.flush()
     space = StorageSpaceModel(
-        tenant_id=tenant_id, connection_id=connection.id, name="group-test",
-        bucket="s3mp-dev", root_prefix="",
+        tenant_id=tenant_id,
+        connection_id=connection.id,
+        name="group-test",
+        bucket="s3mp-dev",
+        root_prefix="",
     )
     session.add(space)
     await session.flush()
@@ -66,21 +73,32 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
             principal_id = uuid4()
             async with factory() as session:
                 conn = StorageConnectionModel(
-                    tenant_id=tenant_id, name="primary", endpoint="https://s3.example.com",
-                    region="us-east-1", path_style=True, credential_reference="vault/s3",
+                    tenant_id=tenant_id,
+                    name="primary",
+                    endpoint="https://s3.example.com",
+                    region="us-east-1",
+                    path_style=True,
+                    credential_reference="vault/s3",
                 )
                 session.add(conn)
                 await session.flush()
                 space = StorageSpaceModel(
-                    tenant_id=tenant_id, connection_id=conn.id, name="default",
-                    bucket="s3mp-dev", root_prefix="",
+                    tenant_id=tenant_id,
+                    connection_id=conn.id,
+                    name="default",
+                    bucket="s3mp-dev",
+                    root_prefix="",
                 )
                 session.add(space)
                 await session.flush()
-                session.add(PrincipalModel(
-                    id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER,
-                    display_name="E2E",
-                ))
+                session.add(
+                    PrincipalModel(
+                        id=principal_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.USER,
+                        display_name="E2E",
+                    )
+                )
                 permission = await session.scalar(
                     select(PermissionModel).where(PermissionModel.name == "files.write")
                 )
@@ -96,18 +114,20 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
                 session.add(role)
                 await session.flush()
                 session.add(RolePermissionModel(role_id=role.id, permission_id=permission.id))
-                session.add(RoleBindingModel(
-                    tenant_id=tenant_id,
-                    principal_id=principal_id,
-                    role_id=role.id,
-                    effect=BindingEffect.ALLOW,
-                    storage_space_id=space.id,
-                    canonical_prefix=None,
-                    reason="E2E fixture",
-                    starts_at=datetime.now(UTC) - timedelta(minutes=1),
-                    expires_at=datetime.now(UTC) + timedelta(hours=1),
-                    created_by_principal_id=principal_id,
-                ))
+                session.add(
+                    RoleBindingModel(
+                        tenant_id=tenant_id,
+                        principal_id=principal_id,
+                        role_id=role.id,
+                        effect=BindingEffect.ALLOW,
+                        storage_space_id=space.id,
+                        canonical_prefix=None,
+                        reason="E2E fixture",
+                        starts_at=datetime.now(UTC) - timedelta(minutes=1),
+                        expires_at=datetime.now(UTC) + timedelta(hours=1),
+                        created_by_principal_id=principal_id,
+                    )
+                )
                 await session.commit()
                 space_id = str(space.id)
 
@@ -152,14 +172,14 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
             assert fetched.json()["object_key"] == "e2e/test.txt"
             async with factory() as session:
                 upload_count = await session.scalar(
-                    select(func.count()).select_from(UploadSessionModel).where(
-                        UploadSessionModel.tenant_id == tenant_id
-                    )
+                    select(func.count())
+                    .select_from(UploadSessionModel)
+                    .where(UploadSessionModel.tenant_id == tenant_id)
                 )
                 ingestion_count = await session.scalar(
-                    select(func.count()).select_from(FileIngestionRecordModel).where(
-                        FileIngestionRecordModel.tenant_id == tenant_id
-                    )
+                    select(func.count())
+                    .select_from(FileIngestionRecordModel)
+                    .where(FileIngestionRecordModel.tenant_id == tenant_id)
                 )
             assert upload_count == 1
             assert ingestion_count == 1
@@ -182,32 +202,65 @@ async def test_human_group_binding_is_loaded_but_application_is_direct_only() ->
     try:
         async with factory() as session:
             space_id = await _seed_space(session, tenant_id)
-            session.add_all([
-                PrincipalModel(id=human_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Human"),
-                PrincipalModel(id=application_id, tenant_id=tenant_id, type=PrincipalType.APPLICATION, display_name="App"),
-                PrincipalModel(id=group_principal_id, tenant_id=tenant_id, type=PrincipalType.GROUP, display_name="Group"),
-            ])
+            session.add_all(
+                [
+                    PrincipalModel(
+                        id=human_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.USER,
+                        display_name="Human",
+                    ),
+                    PrincipalModel(
+                        id=application_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.APPLICATION,
+                        display_name="App",
+                    ),
+                    PrincipalModel(
+                        id=group_principal_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.GROUP,
+                        display_name="Group",
+                    ),
+                ]
+            )
             await session.flush()
             group = GroupModel(tenant_id=tenant_id, principal_id=group_principal_id, name="writers")
             session.add(group)
             await session.flush()
-            session.add(GroupMemberModel(tenant_id=tenant_id, group_id=group.id, principal_id=human_id))
-            permission = await session.scalar(select(PermissionModel).where(PermissionModel.name == "files.write"))
+            session.add(
+                GroupMemberModel(tenant_id=tenant_id, group_id=group.id, principal_id=human_id)
+            )
+            permission = await session.scalar(
+                select(PermissionModel).where(PermissionModel.name == "files.write")
+            )
             assert permission is not None
             role = RoleModel(tenant_id=tenant_id, name="group-writer")
             session.add(role)
             await session.flush()
             session.add(RolePermissionModel(role_id=role.id, permission_id=permission.id))
-            session.add(RoleBindingModel(
-                tenant_id=tenant_id, principal_id=group_principal_id, role_id=role.id,
-                effect=BindingEffect.ALLOW, storage_space_id=UUID(space_id), canonical_prefix=None,
-                reason="group fixture", starts_at=datetime.now(UTC) - timedelta(minutes=1),
-                expires_at=datetime.now(UTC) + timedelta(hours=1), created_by_principal_id=human_id,
-            ))
+            session.add(
+                RoleBindingModel(
+                    tenant_id=tenant_id,
+                    principal_id=group_principal_id,
+                    role_id=role.id,
+                    effect=BindingEffect.ALLOW,
+                    storage_space_id=UUID(space_id),
+                    canonical_prefix=None,
+                    reason="group fixture",
+                    starts_at=datetime.now(UTC) - timedelta(minutes=1),
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    created_by_principal_id=human_id,
+                )
+            )
             await session.commit()
         store = SqlAlchemyFileAuthorizationStore(factory)
-        human_bindings = await store.bindings_for(tenant_id, human_id, UUID(space_id), subject_kind="human")
-        application_bindings = await store.bindings_for(tenant_id, application_id, UUID(space_id), subject_kind="application")
+        human_bindings = await store.bindings_for(
+            tenant_id, human_id, UUID(space_id), subject_kind="human"
+        )
+        application_bindings = await store.bindings_for(
+            tenant_id, application_id, UUID(space_id), subject_kind="application"
+        )
         assert [binding.permission for binding in human_bindings] == ["files.write"]
         assert application_bindings == []
     finally:
@@ -225,9 +278,14 @@ async def test_ingestion_commit_writes_redacted_audit_evidence() -> None:
         try:
             async with factory.begin() as session:
                 space_id = UUID(await _seed_space(session, tenant_id))
-                session.add(PrincipalModel(
-                    id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Audit",
-                ))
+                session.add(
+                    PrincipalModel(
+                        id=principal_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.USER,
+                        display_name="Audit",
+                    )
+                )
                 await session.flush()
             from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 
@@ -235,21 +293,33 @@ async def test_ingestion_commit_writes_redacted_audit_evidence() -> None:
             created = await store.create_upload_intent(
                 tenant_id,
                 {
-                    "principal_id": str(principal_id), "storage_space_id": str(space_id),
-                    "object_key": "tenant/secret/report.csv", "content_length": 3,
-                    "content_type": "text/csv", "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                    "principal_id": str(principal_id),
+                    "storage_space_id": str(space_id),
+                    "object_key": "tenant/secret/report.csv",
+                    "content_length": 3,
+                    "content_type": "text/csv",
+                    "expires_at": datetime.now(UTC) + timedelta(hours=1),
                 },
                 {
-                    "creator_principal_id": str(principal_id), "acting_principal_id": str(principal_id),
-                    "storage_space_id": str(space_id), "bucket": "s3mp-dev", "relative_key": "report.csv",
-                    "physical_key": "tenant/secret/report.csv", "authorization_evidence": {"decision": "allow"},
-                    "authorization_version": 1, "request_id": "audit-request", "idempotency_key": "audit-intent-1",
+                    "creator_principal_id": str(principal_id),
+                    "acting_principal_id": str(principal_id),
+                    "storage_space_id": str(space_id),
+                    "bucket": "s3mp-dev",
+                    "relative_key": "report.csv",
+                    "physical_key": "tenant/secret/report.csv",
+                    "authorization_evidence": {"decision": "allow"},
+                    "authorization_version": 1,
+                    "request_id": "audit-request",
+                    "idempotency_key": "audit-intent-1",
                     "idempotency_fingerprint": "a" * 64,
                 },
             )
             ingestion_id = UUID(created["ingestion_id"])
             await store.record_provider_result(
-                tenant_id, ingestion_id, provider_etag="etag", actual_size=3,
+                tenant_id,
+                ingestion_id,
+                provider_etag="etag",
+                actual_size=3,
                 actual_content_type="text/csv",
             )
             committed = await store.commit_verified_file(tenant_id, ingestion_id)
@@ -276,33 +346,54 @@ async def test_ingestion_reserves_and_settles_configured_space_quota() -> None:
     try:
         async with factory.begin() as session:
             space_id = UUID(await _seed_space(session, tenant_id))
-            session.add(PrincipalModel(
-                id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Quota",
-            ))
-            session.add(QuotaModel(
-                tenant_id=tenant_id, storage_space_id=space_id, limit_bytes=10,
-                used_bytes=0, reserved_bytes=0,
-            ))
+            session.add(
+                PrincipalModel(
+                    id=principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.USER,
+                    display_name="Quota",
+                )
+            )
+            session.add(
+                QuotaModel(
+                    tenant_id=tenant_id,
+                    storage_space_id=space_id,
+                    limit_bytes=10,
+                    used_bytes=0,
+                    reserved_bytes=0,
+                )
+            )
         from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 
         store = SqlAlchemyIngestionStore(factory)
         created = await store.create_upload_intent(
             tenant_id,
             {
-                "principal_id": str(principal_id), "storage_space_id": str(space_id),
-                "object_key": "quota/a.txt", "content_length": 3, "content_type": "text/plain",
+                "principal_id": str(principal_id),
+                "storage_space_id": str(space_id),
+                "object_key": "quota/a.txt",
+                "content_length": 3,
+                "content_type": "text/plain",
                 "expires_at": datetime.now(UTC) + timedelta(hours=1),
             },
             {
-                "creator_principal_id": str(principal_id), "acting_principal_id": str(principal_id),
-                "storage_space_id": str(space_id), "bucket": "s3mp-dev", "relative_key": "a.txt",
-                "physical_key": "quota/a.txt", "authorization_evidence": {"decision": "allow"},
-                "authorization_version": 1, "request_id": "quota-request", "idempotency_key": "quota-intent-1",
+                "creator_principal_id": str(principal_id),
+                "acting_principal_id": str(principal_id),
+                "storage_space_id": str(space_id),
+                "bucket": "s3mp-dev",
+                "relative_key": "a.txt",
+                "physical_key": "quota/a.txt",
+                "authorization_evidence": {"decision": "allow"},
+                "authorization_version": 1,
+                "request_id": "quota-request",
+                "idempotency_key": "quota-intent-1",
                 "idempotency_fingerprint": "b" * 64,
             },
         )
         async with factory() as session:
-            quota = await session.scalar(select(QuotaModel).where(QuotaModel.tenant_id == tenant_id))
+            quota = await session.scalar(
+                select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
+            )
             reservation = await session.scalar(
                 select(QuotaReservationModel).where(QuotaReservationModel.tenant_id == tenant_id)
             )
@@ -310,17 +401,25 @@ async def test_ingestion_reserves_and_settles_configured_space_quota() -> None:
         assert reservation is not None and reservation.status == "reserved"
         ingestion_id = UUID(created["ingestion_id"])
         await store.record_provider_result(
-            tenant_id, ingestion_id, provider_etag="quota-etag", actual_size=3,
+            tenant_id,
+            ingestion_id,
+            provider_etag="quota-etag",
+            actual_size=3,
             actual_content_type="text/plain",
         )
         await store.commit_verified_file(tenant_id, ingestion_id)
         async with factory() as session:
-            quota = await session.scalar(select(QuotaModel).where(QuotaModel.tenant_id == tenant_id))
+            quota = await session.scalar(
+                select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
+            )
             reservation = await session.scalar(
                 select(QuotaReservationModel).where(QuotaReservationModel.tenant_id == tenant_id)
             )
         assert quota is not None and (quota.used_bytes, quota.reserved_bytes) == (3, 0)
-        assert reservation is not None and (reservation.status, reservation.actual_bytes) == ("settled", 3)
+        assert reservation is not None and (reservation.status, reservation.actual_bytes) == (
+            "settled",
+            3,
+        )
     finally:
         await delete_tenant(database_engine, tenant_id)
         await database_engine.dispose()
@@ -334,27 +433,45 @@ async def test_ingestion_rejects_conflicting_idempotency_reuse() -> None:
     try:
         async with factory.begin() as session:
             space_id = UUID(await _seed_space(session, tenant_id))
-            session.add(PrincipalModel(
-                id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Idempotency",
-            ))
+            session.add(
+                PrincipalModel(
+                    id=principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.USER,
+                    display_name="Idempotency",
+                )
+            )
         from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 
         store = SqlAlchemyIngestionStore(factory)
         base = {
-            "creator_principal_id": str(principal_id), "acting_principal_id": str(principal_id),
-            "storage_space_id": str(space_id), "bucket": "s3mp-dev", "relative_key": "one.txt",
-            "physical_key": "idem/one.txt", "authorization_evidence": {"decision": "allow"},
-            "authorization_version": 1, "request_id": "idem-request", "idempotency_key": "same-key-1",
+            "creator_principal_id": str(principal_id),
+            "acting_principal_id": str(principal_id),
+            "storage_space_id": str(space_id),
+            "bucket": "s3mp-dev",
+            "relative_key": "one.txt",
+            "physical_key": "idem/one.txt",
+            "authorization_evidence": {"decision": "allow"},
+            "authorization_version": 1,
+            "request_id": "idem-request",
+            "idempotency_key": "same-key-1",
         }
         session_data = {
-            "principal_id": str(principal_id), "storage_space_id": str(space_id),
-            "object_key": "idem/one.txt", "content_length": 1, "content_type": "text/plain",
+            "principal_id": str(principal_id),
+            "storage_space_id": str(space_id),
+            "object_key": "idem/one.txt",
+            "content_length": 1,
+            "content_type": "text/plain",
             "expires_at": datetime.now(UTC) + timedelta(hours=1),
         }
-        await store.create_upload_intent(tenant_id, session_data, {**base, "idempotency_fingerprint": "c" * 64})
+        await store.create_upload_intent(
+            tenant_id, session_data, {**base, "idempotency_fingerprint": "c" * 64}
+        )
         with pytest.raises(Exception) as exc_info:
             await store.create_upload_intent(
-                tenant_id, session_data, {**base, "physical_key": "idem/two.txt", "idempotency_fingerprint": "d" * 64}
+                tenant_id,
+                session_data,
+                {**base, "physical_key": "idem/two.txt", "idempotency_fingerprint": "d" * 64},
             )
         assert getattr(exc_info.value, "code", None) == "idempotency_key_reused"
     finally:

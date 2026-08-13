@@ -9,7 +9,6 @@ from sqlalchemy import text
 from s3mp.common.config import get_settings
 from s3mp.common.database import create_engine
 
-
 INVARIANT_SQL = text(
     """
     SELECT

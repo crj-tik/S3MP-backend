@@ -20,8 +20,12 @@ async def engine() -> AsyncIterator[AsyncEngine]:
 
 async def _seed_connection(session: AsyncSession, tenant_id: UUID) -> str:
     conn = StorageConnectionModel(
-        tenant_id=tenant_id, name="primary", endpoint="https://s3.example.com",
-        region="us-east-1", path_style=True, credential_reference="vault/s3",
+        tenant_id=tenant_id,
+        name="primary",
+        endpoint="https://s3.example.com",
+        region="us-east-1",
+        path_style=True,
+        credential_reference="vault/s3",
     )
     session.add(conn)
     await session.flush()
@@ -32,8 +36,11 @@ async def _seed_space(session: AsyncSession, tenant_id: UUID, conn_id: str) -> s
     from uuid import UUID
 
     space = StorageSpaceModel(
-        tenant_id=tenant_id, connection_id=UUID(conn_id), name="default",
-        bucket="s3mp-dev", root_prefix="",
+        tenant_id=tenant_id,
+        connection_id=UUID(conn_id),
+        name="default",
+        bucket="s3mp-dev",
+        root_prefix="",
     )
     session.add(space)
     await session.flush()

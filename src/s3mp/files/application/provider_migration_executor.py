@@ -12,11 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from s3mp.files.infrastructure.ingestion_models import FileIngestionRecordModel
 from s3mp.files.infrastructure.models import ProviderMigrationManifestModel
 from s3mp.storage.domain.policy import ProviderTarget
+from s3mp.storage.infrastructure.minio import ObjectMetadata
 
 
 class ProviderStorage(Protocol):
-    async def head(self, target: ProviderTarget): ...
-    async def copy(self, source: ProviderTarget, destination: ProviderTarget): ...
+    async def head(self, target: ProviderTarget) -> ObjectMetadata | None: ...
+    async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> ObjectMetadata: ...
     async def delete(self, target: ProviderTarget) -> None: ...
 
 
@@ -32,30 +33,38 @@ def _target(bucket: str | None, key: str | None) -> ProviderTarget | None:
 
 
 def _same_metadata(source: object, target: object) -> bool:
-    return (
-        getattr(source, "content_length", None) == getattr(target, "content_length", None)
-        and getattr(source, "etag", None) == getattr(target, "etag", None)
-    )
+    return getattr(source, "content_length", None) == getattr(
+        target, "content_length", None
+    ) and getattr(source, "etag", None) == getattr(target, "etag", None)
 
 
 class ProviderMigrationExecutor:
     """Execute only reviewed manifests and retain the source until cleanup."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession], storage: ProviderStorage) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], storage: ProviderStorage
+    ) -> None:
         self._sf = session_factory
         self._storage = storage
 
     async def copy_verified(self, limit: int = 100) -> MigrationExecutionResult:
         migrated = quarantined = 0
         async with self._sf() as session:
-            manifests = list((await session.scalars(
-                select(ProviderMigrationManifestModel)
-                .where(ProviderMigrationManifestModel.state == "ready_for_verified_copy")
-                .order_by(ProviderMigrationManifestModel.created_at)
-                .limit(limit)
-            )).all())
+            manifests = list(
+                (
+                    await session.scalars(
+                        select(ProviderMigrationManifestModel)
+                        .where(ProviderMigrationManifestModel.state == "ready_for_verified_copy")
+                        .order_by(ProviderMigrationManifestModel.created_at)
+                        .limit(limit)
+                    )
+                ).all()
+            )
         for manifest in manifests:
-            source, target = _target(manifest.source_bucket, manifest.source_key), _target(manifest.target_bucket, manifest.target_key)
+            source, target = (
+                _target(manifest.source_bucket, manifest.source_key),
+                _target(manifest.target_bucket, manifest.target_key),
+            )
             if source is None or target is None or manifest.record_type != "ingestion":
                 await self._set_state(manifest.id, "quarantined", "manifest_not_executable")
                 quarantined += 1
@@ -83,14 +92,21 @@ class ProviderMigrationExecutor:
         """Delete old objects only after a prior verified copy and explicit call."""
         cleaned = 0
         async with self._sf() as session:
-            manifests = list((await session.scalars(
-                select(ProviderMigrationManifestModel)
-                .where(ProviderMigrationManifestModel.state == "copied_verified")
-                .order_by(ProviderMigrationManifestModel.updated_at)
-                .limit(limit)
-            )).all())
+            manifests = list(
+                (
+                    await session.scalars(
+                        select(ProviderMigrationManifestModel)
+                        .where(ProviderMigrationManifestModel.state == "copied_verified")
+                        .order_by(ProviderMigrationManifestModel.updated_at)
+                        .limit(limit)
+                    )
+                ).all()
+            )
         for manifest in manifests:
-            source, target = _target(manifest.source_bucket, manifest.source_key), _target(manifest.target_bucket, manifest.target_key)
+            source, target = (
+                _target(manifest.source_bucket, manifest.source_key),
+                _target(manifest.target_bucket, manifest.target_key),
+            )
             if source is None or target is None:
                 await self._set_state(manifest.id, "quarantined", "manifest_not_executable")
                 continue
@@ -105,16 +121,22 @@ class ProviderMigrationExecutor:
 
     async def _promote_ingestion(self, manifest_id: UUID, target: ProviderTarget) -> bool:
         async with self._sf.begin() as session:
-            manifest = await session.scalar(select(ProviderMigrationManifestModel).where(
-                ProviderMigrationManifestModel.id == manifest_id
-            ).with_for_update())
+            manifest = await session.scalar(
+                select(ProviderMigrationManifestModel)
+                .where(ProviderMigrationManifestModel.id == manifest_id)
+                .with_for_update()
+            )
             if manifest is None or manifest.state != "ready_for_verified_copy":
                 return False
-            row = await session.scalar(select(FileIngestionRecordModel).where(
-                FileIngestionRecordModel.tenant_id == manifest.tenant_id,
-                FileIngestionRecordModel.id == manifest.record_id,
-                FileIngestionRecordModel.provider_target_version == 0,
-            ).with_for_update())
+            row = await session.scalar(
+                select(FileIngestionRecordModel)
+                .where(
+                    FileIngestionRecordModel.tenant_id == manifest.tenant_id,
+                    FileIngestionRecordModel.id == manifest.record_id,
+                    FileIngestionRecordModel.provider_target_version == 0,
+                )
+                .with_for_update()
+            )
             if row is None:
                 return False
             row.bucket, row.physical_key, row.provider_target_version = target.bucket, target.key, 1
@@ -123,8 +145,10 @@ class ProviderMigrationExecutor:
 
     async def _set_state(self, manifest_id: UUID, state: str, reason: str | None) -> None:
         async with self._sf.begin() as session:
-            manifest = await session.scalar(select(ProviderMigrationManifestModel).where(
-                ProviderMigrationManifestModel.id == manifest_id
-            ).with_for_update())
+            manifest = await session.scalar(
+                select(ProviderMigrationManifestModel)
+                .where(ProviderMigrationManifestModel.id == manifest_id)
+                .with_for_update()
+            )
             if manifest is not None:
                 manifest.state, manifest.reason = state, reason

@@ -17,13 +17,24 @@ RUNTIME_ONLY_PATHS = frozenset({"/health/live", "/health/ready"})
 # FastAPI auto-generates 422 for any endpoint with validation (path/query/body params).
 # It is not a meaningful contract difference — exclude it from comparison.
 IGNORED_RESPONSE_STATUSES = frozenset({"422"})
-SCHEMA_ENFORCED_PATHS = frozenset({
-    "/api/v1/me", "/api/v1/users", "/api/v1/users/{user_id}", "/api/v1/members",
-    "/api/v1/members/{membership_id}", "/api/v1/groups", "/api/v1/groups/{group_id}",
-    "/api/v1/groups/{group_id}/members", "/api/v1/roles", "/api/v1/roles/{role_id}",
-    "/api/v1/role_bindings", "/api/v1/role_bindings/{role_binding_id}",
-    "/api/v1/principals/{principal_id}/effective_permissions", "/api/v1/authorization/simulations",
-})
+SCHEMA_ENFORCED_PATHS = frozenset(
+    {
+        "/api/v1/me",
+        "/api/v1/users",
+        "/api/v1/users/{user_id}",
+        "/api/v1/members",
+        "/api/v1/members/{membership_id}",
+        "/api/v1/groups",
+        "/api/v1/groups/{group_id}",
+        "/api/v1/groups/{group_id}/members",
+        "/api/v1/roles",
+        "/api/v1/roles/{role_id}",
+        "/api/v1/role_bindings",
+        "/api/v1/role_bindings/{role_binding_id}",
+        "/api/v1/principals/{principal_id}/effective_permissions",
+        "/api/v1/authorization/simulations",
+    }
+)
 
 
 def operation_signatures(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -67,7 +78,9 @@ def _resolve(document: dict[str, Any], value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _operation_parameters(document: dict[str, Any], operation: dict[str, Any]) -> set[tuple[str, str]]:
+def _operation_parameters(
+    document: dict[str, Any], operation: dict[str, Any]
+) -> set[tuple[str, str]]:
     """Return declared parameter identities.
 
     Idempotency and precondition headers deliberately stay optional in FastAPI
@@ -85,7 +98,9 @@ def _operation_parameters(document: dict[str, Any], operation: dict[str, Any]) -
     return parameters
 
 
-def _request_body_media_types(document: dict[str, Any], operation: dict[str, Any]) -> tuple[bool, set[str]]:
+def _request_body_media_types(
+    document: dict[str, Any], operation: dict[str, Any]
+) -> tuple[bool, set[str]]:
     raw_body = operation.get("requestBody")
     if raw_body is None:
         return False, set()
@@ -94,7 +109,9 @@ def _request_body_media_types(document: dict[str, Any], operation: dict[str, Any
     return bool(body.get("required")), set(content) if isinstance(content, dict) else set()
 
 
-def _success_schemas(document: dict[str, Any], operation: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _success_schemas(
+    document: dict[str, Any], operation: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
     schemas: dict[str, dict[str, Any]] = {}
     for status, response in operation.get("responses", {}).items():
         if not str(status).startswith("2"):
@@ -117,7 +134,9 @@ def _normalise_schema(document: dict[str, Any], value: Any) -> dict[str, Any]:
         if key in {"title", "description", "examples", "example", "default", "pattern"}:
             continue
         if key == "properties" and isinstance(item, dict):
-            result[key] = {name: _normalise_schema(document, child) for name, child in sorted(item.items())}
+            result[key] = {
+                name: _normalise_schema(document, child) for name, child in sorted(item.items())
+            }
         elif key == "items" and isinstance(item, dict):
             result[key] = _normalise_schema(document, item)
         elif key in {"allOf", "anyOf", "oneOf"} and isinstance(item, list):
@@ -127,7 +146,11 @@ def _normalise_schema(document: dict[str, Any], value: Any) -> dict[str, Any]:
         elif isinstance(item, list):
             result[key] = sorted(item) if key in {"required", "enum"} else item
         else:
-            result[key] = int(item) if key in {"minimum", "maximum"} and isinstance(item, float) and item.is_integer() else item
+            result[key] = (
+                int(item)
+                if key in {"minimum", "maximum"} and isinstance(item, float) and item.is_integer()
+                else item
+            )
     all_of = result.pop("allOf", None)
     if isinstance(all_of, list) and all(isinstance(entry, dict) for entry in all_of):
         merged: dict[str, Any] = {}
@@ -142,7 +165,11 @@ def _normalise_schema(document: dict[str, Any], value: Any) -> dict[str, Any]:
             merged["required"] = sorted(set(merged["required"]))
         result = merged
     nullable = result.get("anyOf")
-    if isinstance(nullable, list) and len(nullable) == 2 and {entry.get("type") for entry in nullable} == {"string", "null"}:
+    if (
+        isinstance(nullable, list)
+        and len(nullable) == 2
+        and {entry.get("type") for entry in nullable} == {"string", "null"}
+    ):
         return {"type": ["string", "null"]}
     if result.get("format") == "uuid":
         result.pop("format")
@@ -176,9 +203,11 @@ def main() -> int:
                 f"Runtime operation {signature[1].upper()} {signature[0]} is absent from baseline"
             )
             continue
-        missing_statuses = response_statuses(runtime_operation) - response_statuses(
-            baseline_operation
-        ) - IGNORED_RESPONSE_STATUSES
+        missing_statuses = (
+            response_statuses(runtime_operation)
+            - response_statuses(baseline_operation)
+            - IGNORED_RESPONSE_STATUSES
+        )
         if missing_statuses:
             errors.append(
                 f"Baseline {signature[1].upper()} {signature[0]} lacks runtime responses "
@@ -187,9 +216,7 @@ def main() -> int:
         baseline_parameters = _operation_parameters(baseline, baseline_operation)
         runtime_parameters = _operation_parameters(runtime, runtime_operation)
         if baseline_parameters != runtime_parameters:
-            errors.append(
-                f"Parameter contract differs for {signature[1].upper()} {signature[0]}"
-            )
+            errors.append(f"Parameter contract differs for {signature[1].upper()} {signature[0]}")
         baseline_body = _request_body_media_types(baseline, baseline_operation)
         runtime_body = _request_body_media_types(runtime, runtime_operation)
         if baseline_body != runtime_body:
@@ -202,7 +229,8 @@ def main() -> int:
             for status in sorted(set(baseline_schemas) | set(runtime_schemas)):
                 if baseline_schemas.get(status) != runtime_schemas.get(status):
                     errors.append(
-                        f"Success response schema differs for {signature[1].upper()} {signature[0]} {status}"
+                        "Success response schema differs for "
+                        f"{signature[1].upper()} {signature[0]} {status}"
                     )
     for signature in baseline_operations:
         if signature[0] in RUNTIME_ONLY_PATHS:

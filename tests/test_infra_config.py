@@ -1,6 +1,5 @@
 """Configuration validation for S3 profiles, secret requirements, and endpoint checks."""
 
-
 import pytest
 
 from s3mp.common.config import Settings
@@ -71,5 +70,5 @@ class TestSecretSafety:
 
     def test_env_file_loads_without_credentials(self) -> None:
         """.env file exists but does not embed raw credentials in source."""
-        s = Settings(_env_file="deploy/.env")  # type: ignore[call-arg]
+        s = Settings(_env_file="deploy/.env")
         assert s.environment == "development"

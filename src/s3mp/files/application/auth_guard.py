@@ -2,9 +2,13 @@
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
 
-from s3mp.authorization.domain.evaluator import Binding, Decision, evaluate, validate_canonical_prefix
+from s3mp.authorization.domain.evaluator import (
+    Binding,
+    Decision,
+    evaluate,
+    validate_canonical_prefix,
+)
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import canonical_object_key
@@ -50,7 +54,9 @@ class FileAuthGuard:
     ) -> bool:
         """Evaluate whether the current principal has the requested permission."""
         decision = evaluate(
-            permission, bindings, object_key=object_key,
+            permission,
+            bindings,
+            object_key=object_key,
             now=now or datetime.now(UTC),
         )
         if decision.decision is not Decision.ALLOW:

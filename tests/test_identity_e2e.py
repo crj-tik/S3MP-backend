@@ -40,20 +40,33 @@ async def test_me_returns_context_backed_by_real_pg() -> None:
             membership_id = uuid4()
             user_id = uuid4()
             async with factory() as session:
-                session.add(UserModel(
-                    id=user_id, email=f"{user_id}@test", normalized_email=f"{user_id}@test",
-                    display_name="E2E User",
-                ))
+                session.add(
+                    UserModel(
+                        id=user_id,
+                        email=f"{user_id}@test",
+                        normalized_email=f"{user_id}@test",
+                        display_name="E2E User",
+                    )
+                )
                 await session.flush()
-                session.add(PrincipalModel(
-                    id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER,
-                    display_name="E2E User",
-                ))
+                session.add(
+                    PrincipalModel(
+                        id=principal_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.USER,
+                        display_name="E2E User",
+                    )
+                )
                 await session.flush()
-                session.add(MembershipModel(
-                    id=membership_id, tenant_id=tenant_id, user_id=user_id,
-                    principal_id=principal_id, status=MembershipStatus.ACTIVE,
-                ))
+                session.add(
+                    MembershipModel(
+                        id=membership_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        principal_id=principal_id,
+                        status=MembershipStatus.ACTIVE,
+                    )
+                )
                 await session.commit()
 
             ctx = PrincipalContext(tenant_id, principal_id, membership_id, 1)
@@ -62,11 +75,13 @@ async def test_me_returns_context_backed_by_real_pg() -> None:
                 async def get_me(self, context: PrincipalContext) -> dict[str, Any]:
                     return {
                         "principal": {
-                            "id": str(context.principal_id), "type": "user",
+                            "id": str(context.principal_id),
+                            "type": "user",
                             "display_name": "E2E User",
                         },
                         "current_tenant": {
-                            "id": str(context.tenant_id), "name": "T",
+                            "id": str(context.tenant_id),
+                            "name": "T",
                             "membership_status": "active",
                         },
                         "available_tenants": [],

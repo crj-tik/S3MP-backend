@@ -27,9 +27,14 @@ async def test_list_quotas_is_tenant_scoped(engine: AsyncEngine) -> None:
     await seed_tenant(engine, tenant_b)
     try:
         async with factory() as session:
-            session.add(QuotaModel(
-                tenant_id=tenant_a, limit_bytes=1073741824, used_bytes=0, reserved_bytes=0,
-            ))
+            session.add(
+                QuotaModel(
+                    tenant_id=tenant_a,
+                    limit_bytes=1073741824,
+                    used_bytes=0,
+                    reserved_bytes=0,
+                )
+            )
             await session.commit()
 
         quotas_a = await store.list_quotas(tenant_a, None)
@@ -51,7 +56,10 @@ async def test_get_quota_returns_none_for_cross_tenant(engine: AsyncEngine) -> N
     try:
         async with factory() as session:
             quota = QuotaModel(
-                tenant_id=tenant_a, limit_bytes=1073741824, used_bytes=0, reserved_bytes=0,
+                tenant_id=tenant_a,
+                limit_bytes=1073741824,
+                used_bytes=0,
+                reserved_bytes=0,
             )
             session.add(quota)
             await session.commit()
@@ -74,10 +82,14 @@ async def test_list_audit_events_is_tenant_scoped(engine: AsyncEngine) -> None:
     await seed_tenant(engine, tenant_b)
     try:
         async with factory() as session:
-            session.add(AuditEventModel(
-                tenant_id=tenant_a, action="file.upload", resource_type="file_object",
-                details={"object_key": "a.txt"},
-            ))
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_a,
+                    action="file.upload",
+                    resource_type="file_object",
+                    details={"object_key": "a.txt"},
+                )
+            )
             await session.commit()
 
         events_a = await store.list_events(tenant_a, {})
@@ -99,7 +111,9 @@ async def test_get_audit_event_returns_none_for_cross_tenant(engine: AsyncEngine
     try:
         async with factory() as session:
             event = AuditEventModel(
-                tenant_id=tenant_a, action="file.delete", resource_type="file_object",
+                tenant_id=tenant_a,
+                action="file.delete",
+                resource_type="file_object",
                 details={},
             )
             session.add(event)

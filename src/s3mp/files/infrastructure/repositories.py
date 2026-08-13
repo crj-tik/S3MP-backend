@@ -36,10 +36,12 @@ class SqlAlchemyFileStore:
             if prefix:
                 # A directory prefix is a segment boundary, not a lexical
                 # prefix: `team` must not enumerate `team2`.
-                stmt = stmt.where(or_(
-                    FileObjectModel.object_key == prefix,
-                    FileObjectModel.object_key.startswith(prefix + "/", autoescape=True),
-                ))
+                stmt = stmt.where(
+                    or_(
+                        FileObjectModel.object_key == prefix,
+                        FileObjectModel.object_key.startswith(prefix + "/", autoescape=True),
+                    )
+                )
             rows = (await session.scalars(stmt.order_by(FileObjectModel.object_key))).all()
             return [_file_dict(r) for r in rows]
 
@@ -57,7 +59,9 @@ class SqlAlchemyFileStore:
             )
             return _file_dict(row) if row else None
 
-    async def delete_file(self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any) -> None:
+    async def delete_file(
+        self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
+    ) -> None:
         async with self._sf.begin() as session:
             row = await session.scalar(
                 select(FileObjectModel).where(
@@ -69,10 +73,12 @@ class SqlAlchemyFileStore:
             if row is not None:
                 if data.get("if_match") is None:
                     from s3mp.common.api.etag import require_if_match
+
                     require_if_match(None)
                 if row.etag != data.get("if_match"):
                     from s3mp.common.api.etag import check_etag
-                    check_etag(row.etag or "", data.get("if_match"))
+
+                    check_etag(row.etag or "", str(data.get("if_match")))
                 session.add(
                     AuditEventModel(
                         tenant_id=tenant_id,
@@ -112,11 +118,13 @@ class SqlAlchemyFileStore:
     ) -> None:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(FileObjectModel).where(
+                select(FileObjectModel)
+                .where(
                     FileObjectModel.tenant_id == tenant_id,
                     FileObjectModel.id == file_id,
                     FileObjectModel.status == "deleting",
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is None:
                 return
@@ -128,17 +136,19 @@ class SqlAlchemyFileStore:
             else:
                 row.deletion_failure_reason = "object_storage_unavailable"
                 row.deletion_next_retry_at = datetime.now(UTC) + timedelta(
-                    seconds=min(300, 2 ** row.deletion_attempt_count)
+                    seconds=min(300, 2**row.deletion_attempt_count)
                 )
 
     async def finalize_file_delete(self, tenant_id: UUID, file_id: UUID) -> None:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(FileObjectModel).where(
+                select(FileObjectModel)
+                .where(
                     FileObjectModel.tenant_id == tenant_id,
                     FileObjectModel.id == file_id,
                     FileObjectModel.status == "deleting",
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is not None:
                 await session.delete(row)
@@ -177,7 +187,10 @@ class SqlAlchemyFileStore:
                         (FileOperationModel.status == "running")
                         & (FileOperationModel.lease_expires_at < now),
                     ),
-                    or_(FileOperationModel.next_retry_at.is_(None), FileOperationModel.next_retry_at <= now),
+                    or_(
+                        FileOperationModel.next_retry_at.is_(None),
+                        FileOperationModel.next_retry_at <= now,
+                    ),
                 )
                 .order_by(FileOperationModel.created_at)
                 .limit(limit)
@@ -218,7 +231,9 @@ class SqlAlchemyFileStore:
         async with self._sf.begin() as session:
             row = await session.scalar(
                 select(FileOperationModel)
-                .where(FileOperationModel.tenant_id == tenant_id, FileOperationModel.id == operation_id)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id, FileOperationModel.id == operation_id
+                )
                 .with_for_update()
             )
             if row is None:
@@ -232,7 +247,7 @@ class SqlAlchemyFileStore:
                     reason = "retry_exhausted"
                 else:
                     row.next_retry_at = datetime.now(UTC) + timedelta(
-                        seconds=min(300, 2 ** row.attempt_count)
+                        seconds=min(300, 2**row.attempt_count)
                     )
             else:
                 row.next_retry_at = None
@@ -255,18 +270,23 @@ class SqlAlchemyFileStore:
         now = datetime.now(UTC)
         async with self._sf() as session:
             rows = await session.execute(
-                select(FileOperationModel.status, func.count())
-                .group_by(FileOperationModel.status)
+                select(FileOperationModel.status, func.count()).group_by(FileOperationModel.status)
             )
             metrics = {f"status_{status}": int(count) for status, count in rows}
-            metrics["stale_leases"] = int(await session.scalar(
-                select(func.count()).select_from(FileOperationModel).where(
-                    FileOperationModel.status == "running",
-                    FileOperationModel.lease_expires_at < now,
+            metrics["stale_leases"] = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(FileOperationModel)
+                    .where(
+                        FileOperationModel.status == "running",
+                        FileOperationModel.lease_expires_at < now,
+                    )
                 )
-            ) or 0)
+                or 0
+            )
             metrics["backlog"] = sum(
-                metrics.get(f"status_{status}", 0) for status in ("pending", "retry_wait", "running")
+                metrics.get(f"status_{status}", 0)
+                for status in ("pending", "retry_wait", "running")
             )
             return metrics
 
@@ -306,10 +326,12 @@ class SqlAlchemyFileStore:
     async def expire_upload(self, tenant_id: UUID, upload_id: UUID) -> None:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(UploadSessionModel).where(
+                select(UploadSessionModel)
+                .where(
                     UploadSessionModel.tenant_id == tenant_id,
                     UploadSessionModel.id == upload_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is not None and row.status == "pending":
                 row.status = "expired"
@@ -319,10 +341,12 @@ class SqlAlchemyFileStore:
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(UploadSessionModel).where(
+                select(UploadSessionModel)
+                .where(
                     UploadSessionModel.tenant_id == tenant_id,
                     UploadSessionModel.id == upload_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is None:
                 raise ValueError("upload not found")
@@ -373,10 +397,12 @@ class SqlAlchemyFileStore:
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(MultipartSessionModel).where(
+                select(MultipartSessionModel)
+                .where(
                     MultipartSessionModel.tenant_id == tenant_id,
                     MultipartSessionModel.id == multipart_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is None:
                 raise ValueError("multipart not found")
@@ -397,21 +423,27 @@ class SqlAlchemyFileStore:
     async def expire_multipart(self, tenant_id: UUID, mp_id: UUID) -> None:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(MultipartSessionModel).where(
+                select(MultipartSessionModel)
+                .where(
                     MultipartSessionModel.tenant_id == tenant_id,
                     MultipartSessionModel.id == mp_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is not None and row.status == "pending":
                 row.status = "expired"
 
-    async def abort_multipart(self, tenant_id: UUID, mp_id: UUID, *, idempotency_key: str | None = None) -> None:
+    async def abort_multipart(
+        self, tenant_id: UUID, mp_id: UUID, *, idempotency_key: str | None = None
+    ) -> None:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(MultipartSessionModel).where(
+                select(MultipartSessionModel)
+                .where(
                     MultipartSessionModel.tenant_id == tenant_id,
                     MultipartSessionModel.id == mp_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is not None:
                 row.status = "aborted"
@@ -420,10 +452,12 @@ class SqlAlchemyFileStore:
     async def list_multipart_parts(self, tenant_id: UUID, mp_id: UUID) -> list[dict[str, Any]]:
         async with self._sf() as session:
             rows = await session.scalars(
-                select(MultipartPartModel).where(
+                select(MultipartPartModel)
+                .where(
                     MultipartPartModel.tenant_id == tenant_id,
                     MultipartPartModel.multipart_session_id == mp_id,
-                ).order_by(MultipartPartModel.part_number)
+                )
+                .order_by(MultipartPartModel.part_number)
             )
             return [_part_dict(r) for r in rows]
 
@@ -447,11 +481,13 @@ class SqlAlchemyFileStore:
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(MultipartPartModel).where(
+                select(MultipartPartModel)
+                .where(
                     MultipartPartModel.tenant_id == tenant_id,
                     MultipartPartModel.multipart_session_id == mp_id,
                     MultipartPartModel.part_number == part_number,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is None:
                 raise ValueError("part not found")
@@ -465,10 +501,12 @@ class SqlAlchemyFileStore:
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
             row = await session.scalar(
-                select(MultipartSessionModel).where(
+                select(MultipartSessionModel)
+                .where(
                     MultipartSessionModel.tenant_id == tenant_id,
                     MultipartSessionModel.id == mp_id,
-                ).with_for_update()
+                )
+                .with_for_update()
             )
             if row is None:
                 raise ValueError("multipart not found")
@@ -479,11 +517,15 @@ class SqlAlchemyFileStore:
 
 def _file_dict(m: FileObjectModel) -> dict[str, Any]:
     return {
-        "id": str(m.id), "tenant_id": str(m.tenant_id),
-        "storage_space_id": str(m.storage_space_id), "object_key": m.object_key,
+        "id": str(m.id),
+        "tenant_id": str(m.tenant_id),
+        "storage_space_id": str(m.storage_space_id),
+        "object_key": m.object_key,
         "provider_target_version": m.provider_target_version,
-        "content_length": m.content_length, "content_type": m.content_type,
-        "etag": m.etag, "checksum": m.checksum,
+        "content_length": m.content_length,
+        "content_type": m.content_type,
+        "etag": m.etag,
+        "checksum": m.checksum,
         "status": m.status,
         "deletion_attempt_count": m.deletion_attempt_count,
         "deletion_principal_id": str(m.deletion_principal_id) if m.deletion_principal_id else None,
@@ -495,44 +537,57 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
 
 def _upload_dict(m: UploadSessionModel) -> dict[str, Any]:
     return {
-        "id": str(m.id), "tenant_id": str(m.tenant_id),
-        "principal_id": str(m.principal_id), "object_key": m.object_key,
+        "id": str(m.id),
+        "tenant_id": str(m.tenant_id),
+        "principal_id": str(m.principal_id),
+        "object_key": m.object_key,
         "membership_id": str(m.membership_id) if m.membership_id else None,
         "provider_target_version": m.provider_target_version,
         "storage_space_id": str(m.storage_space_id),
-        "content_length": m.declared_length, "content_type": m.content_type,
-        "status": m.status, "checksum": m.checksum,
+        "content_length": m.declared_length,
+        "content_type": m.content_type,
+        "status": m.status,
+        "checksum": m.checksum,
         "expires_at": m.expires_at.isoformat() if m.expires_at else None,
     }
 
 
 def _mp_dict(m: MultipartSessionModel) -> dict[str, Any]:
     return {
-        "id": str(m.id), "tenant_id": str(m.tenant_id),
-        "principal_id": str(m.principal_id), "object_key": m.object_key,
+        "id": str(m.id),
+        "tenant_id": str(m.tenant_id),
+        "principal_id": str(m.principal_id),
+        "object_key": m.object_key,
         "membership_id": str(m.membership_id) if m.membership_id else None,
         "provider_target_version": m.provider_target_version,
         "storage_space_id": str(m.storage_space_id),
-        "content_length": m.declared_length, "content_type": m.content_type,
-        "status": m.status, "provider_upload_id": m.provider_upload_id,
+        "content_length": m.declared_length,
+        "content_type": m.content_type,
+        "status": m.status,
+        "provider_upload_id": m.provider_upload_id,
         "expires_at": m.expires_at.isoformat() if m.expires_at else None,
     }
 
 
 def _part_dict(m: MultipartPartModel) -> dict[str, Any]:
     return {
-        "id": str(m.id), "part_number": m.part_number,
-        "etag": m.etag, "content_length": m.content_length,
+        "id": str(m.id),
+        "part_number": m.part_number,
+        "etag": m.etag,
+        "content_length": m.content_length,
     }
 
 
 def _op_dict(m: FileOperationModel) -> dict[str, Any]:
     return {
-        "id": str(m.id), "tenant_id": str(m.tenant_id),
+        "id": str(m.id),
+        "tenant_id": str(m.tenant_id),
         "principal_id": str(m.principal_id),
         "membership_id": str(m.membership_id) if m.membership_id else None,
-        "operation_type": m.operation_type, "status": m.status,
-        "source_key": m.source_key, "destination_key": m.destination_key,
+        "operation_type": m.operation_type,
+        "status": m.status,
+        "source_key": m.source_key,
+        "destination_key": m.destination_key,
         "keys": list(m.keys or ()),
         "idempotency_key": m.idempotency_key,
         "failure_reason": m.failure_reason,

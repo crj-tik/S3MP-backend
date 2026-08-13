@@ -53,9 +53,7 @@ async def list_quotas(
     context: Annotated[PrincipalContext, management_permission("list_quotas")],
     storage_space_id: str | None = None,
 ) -> Any:
-    return await _quota_svc(request).list_quotas(
-        context, storage_space_id
-    )
+    return await _quota_svc(request).list_quotas(context, storage_space_id)
 
 
 @router.get("/quotas/{quota_id}", operation_id="get_quota")
@@ -64,9 +62,7 @@ async def get_quota(
     context: Annotated[PrincipalContext, management_permission("get_quota")],
     quota_id: str = Path(min_length=1),
 ) -> Any:
-    return await _quota_svc(request).get_quota(
-        context, quota_id
-    )
+    return await _quota_svc(request).get_quota(context, quota_id)
 
 
 @router.patch("/quotas/{quota_id}", operation_id="update_quota")
@@ -76,9 +72,7 @@ async def update_quota(
     context: Annotated[PrincipalContext, management_permission("update_quota")],
     quota_id: str = Path(min_length=1),
 ) -> Any:
-    return await _quota_svc(request).update_quota(
-        context, quota_id, body.limit_bytes
-    )
+    return await _quota_svc(request).update_quota(context, quota_id, body.limit_bytes)
 
 
 # ── Audit ─────────────────────────────────────────────────────────────────────
@@ -108,6 +102,4 @@ async def get_audit_event(
     context: Annotated[PrincipalContext, management_permission("get_audit_event")],
     audit_event_id: str = Path(min_length=1),
 ) -> Any:
-    return await _audit_svc(request).get_audit_event(
-        context, audit_event_id
-    )
+    return await _audit_svc(request).get_audit_event(context, audit_event_id)

@@ -26,9 +26,7 @@ class FakeQuotaService:
     async def get_quota(self, tenant_id: Any, quota_id: Any) -> dict[str, Any]:
         return {"id": str(quota_id), "limit_bytes": 1073741824, "used_bytes": 0}
 
-    async def update_quota(
-        self, tenant_id: Any, quota_id: Any, limit_bytes: int
-    ) -> dict[str, Any]:
+    async def update_quota(self, tenant_id: Any, quota_id: Any, limit_bytes: int) -> dict[str, Any]:
         return {"id": str(quota_id), "limit_bytes": limit_bytes, "used_bytes": 0}
 
 
@@ -74,9 +72,7 @@ async def test_list_quotas_returns_200() -> None:
 async def test_update_quota_returns_200() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.patch(
-            f"/api/v1/quotas/{uuid4()}", json={"limit_bytes": 2147483648}
-        )
+        response = await client.patch(f"/api/v1/quotas/{uuid4()}", json={"limit_bytes": 2147483648})
 
     assert response.status_code == 200
     assert response.json()["limit_bytes"] == 2147483648
@@ -92,9 +88,7 @@ async def test_list_audit_events_returns_200() -> None:
 
 
 async def test_unauthenticated_request_returns_401() -> None:
-    app = make_app(
-        {"quota_service": FakeQuotaService(), "audit_service": FakeAuditService()}
-    )
+    app = make_app({"quota_service": FakeQuotaService(), "audit_service": FakeAuditService()})
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/v1/quotas")
 
@@ -117,7 +111,10 @@ async def test_api_key_cannot_call_quota_management_before_service() -> None:
 async def test_human_without_permission_cannot_call_audit_management_before_service() -> None:
     audit_service = FakeAuditService()
     app = make_app(
-        {"audit_service": audit_service, "authorization_management": DenyingAuthorizationManagement()},
+        {
+            "audit_service": audit_service,
+            "authorization_management": DenyingAuthorizationManagement(),
+        },
         context=_ctx(),
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

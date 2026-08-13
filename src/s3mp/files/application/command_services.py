@@ -13,9 +13,16 @@ class UploadCommandService:
     store: SqlAlchemyFileStore
 
     async def create_upload(
-        self, tenant_id: UUID, principal_id: UUID, space_id: UUID,
-        object_key: str, content_length: int, content_type: str,
-        *, checksum: str | None = None, direct_requested: bool = False,
+        self,
+        tenant_id: UUID,
+        principal_id: UUID,
+        space_id: UUID,
+        object_key: str,
+        content_length: int,
+        content_type: str,
+        *,
+        checksum: str | None = None,
+        direct_requested: bool = False,
     ) -> dict[str, Any]:
         data = {
             "principal_id": str(principal_id),
@@ -43,8 +50,13 @@ class MultipartCommandService:
     store: SqlAlchemyFileStore
 
     async def create_multipart(
-        self, tenant_id: UUID, principal_id: UUID, space_id: UUID,
-        object_key: str, content_length: int, content_type: str,
+        self,
+        tenant_id: UUID,
+        principal_id: UUID,
+        space_id: UUID,
+        object_key: str,
+        content_length: int,
+        content_type: str,
     ) -> dict[str, Any]:
         data = {
             "principal_id": str(principal_id),
@@ -55,16 +67,25 @@ class MultipartCommandService:
         return await self.store.create_multipart(tenant_id, space_id, data)
 
     async def add_part(
-        self, tenant_id: UUID, principal_id: UUID, multipart_id: UUID,
-        part_number: int, etag: str, content_length: int,
+        self,
+        tenant_id: UUID,
+        principal_id: UUID,
+        multipart_id: UUID,
+        part_number: int,
+        etag: str,
+        content_length: int,
     ) -> dict[str, Any]:
         mp = await self.store.get_multipart(tenant_id, multipart_id)
         if mp is None:
             raise ApiError("resource_not_found", "Multipart not found", status_code=404)
         if mp.get("principal_id") != str(principal_id):
-            raise ApiError("permission_denied", "Multipart belongs to different principal", status_code=403)
+            raise ApiError(
+                "permission_denied", "Multipart belongs to different principal", status_code=403
+            )
         return await self.store.confirm_multipart_part(
-            tenant_id, multipart_id, part_number,
+            tenant_id,
+            multipart_id,
+            part_number,
             {"etag": etag, "content_length": content_length},
         )
 
@@ -87,9 +108,15 @@ class ObjectOperationService:
     store: SqlAlchemyFileStore
 
     async def create_operation(
-        self, tenant_id: UUID, principal_id: UUID, space_id: UUID,
-        operation_type: str, source_key: str | None, destination_key: str | None,
-        keys: list[str] | None, idempotency_key: str,
+        self,
+        tenant_id: UUID,
+        principal_id: UUID,
+        space_id: UUID,
+        operation_type: str,
+        source_key: str | None,
+        destination_key: str | None,
+        keys: list[str] | None,
+        idempotency_key: str,
     ) -> dict[str, Any]:
         data = {
             "principal_id": str(principal_id),

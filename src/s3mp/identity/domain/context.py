@@ -34,7 +34,9 @@ class PrincipalContext:
         elif self.membership_id is not None:
             raise ValueError("application principals must not have a membership_id")
         if self.subject_kind == "human" and (
-            self.application_id is not None or self.api_key_id is not None or self.api_key_scopes is not None
+            self.application_id is not None
+            or self.api_key_id is not None
+            or self.api_key_scopes is not None
         ):
             raise ValueError("human principals must not carry API key attributes")
         if self.subject_kind == "application" and self.application_id is None:

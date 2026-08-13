@@ -21,10 +21,15 @@ def test_same_relative_key_in_different_tenants_has_distinct_provider_key() -> N
     assert first.key.endswith("/team/report.csv")
 
 
-@pytest.mark.parametrize("prefix", ["../escape", "team//reports", "team/../private", "team\\private"])
+@pytest.mark.parametrize(
+    "prefix", ["../escape", "team//reports", "team/../private", "team\\private"]
+)
 def test_operator_prefix_cannot_escape_server_owned_namespace(prefix: str) -> None:
     with pytest.raises(StoragePolicyError):
         derive_provider_target(
-            tenant_id=uuid4(), storage_space_id=uuid4(), bucket="s3mp-dev",
-            relative_key="report.csv", operator_prefix=prefix,
+            tenant_id=uuid4(),
+            storage_space_id=uuid4(),
+            bucket="s3mp-dev",
+            relative_key="report.csv",
+            operator_prefix=prefix,
         )

@@ -1,6 +1,8 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from typing import Any, cast
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -168,13 +170,13 @@ async def test_me_returns_server_derived_tenant_context() -> None:
     context = select_membership([membership], membership.tenant_id)
 
     class IdentityManagement:
-        async def get_me(self, _context):
+        async def get_me(self, _context: PrincipalContext) -> dict[str, Any]:
             return {
-                "principal": {
-                    "id": str(context.principal_id), "type": "user", "display_name": "U"
-                },
+                "principal": {"id": str(context.principal_id), "type": "user", "display_name": "U"},
                 "current_tenant": {
-                    "id": str(context.tenant_id), "name": "T", "membership_status": "active"
+                    "id": str(context.tenant_id),
+                    "name": "T",
+                    "membership_status": "active",
                 },
                 "available_tenants": [],
                 "coarse_permissions": ["files.read"],
@@ -184,7 +186,7 @@ async def test_me_returns_server_derived_tenant_context() -> None:
     app.state.identity_management = IdentityManagement()
 
     @app.middleware("http")
-    async def inject_context(request, call_next):
+    async def inject_context(request: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
         request.state.principal_context = context
         return await call_next(request)
 
@@ -207,14 +209,18 @@ async def test_api_key_resolution_produces_application_subject() -> None:
     tenant_id, application_id, principal_id, key_id = uuid4(), uuid4(), uuid4(), uuid4()
 
     class ApiKeyService:
-        async def authenticate(self, header: str):
+        async def authenticate(self, header: str) -> tuple[UUID, UUID, dict[str, Any]]:
             assert header == "S3MP-Key key-id.secret"
-            return tenant_id, key_id, {
-                "application_id": application_id,
-                "application_principal_id": principal_id,
-                "application_authorization_version": 7,
-                "scopes": ["files.read"],
-            }
+            return (
+                tenant_id,
+                key_id,
+                {
+                    "application_id": application_id,
+                    "application_principal_id": principal_id,
+                    "application_authorization_version": 7,
+                    "scopes": ["files.read"],
+                },
+            )
 
     class App:
         class State:
@@ -225,7 +231,7 @@ async def test_api_key_resolution_produces_application_subject() -> None:
     class Request:
         app = App()
 
-    context = await _resolve_api_key(Request(), "S3MP-Key key-id.secret")
+    context = await _resolve_api_key(cast(Any, Request()), "S3MP-Key key-id.secret")
 
     assert context == PrincipalContext.for_application(
         tenant_id,

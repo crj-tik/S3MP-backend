@@ -18,12 +18,25 @@ def upgrade() -> None:
         op.add_column(table, sa.Column("membership_id", sa.Uuid(), nullable=True))
         # Do not certify historical provider keys as namespaced.  New code
         # writes version 1 explicitly; pre-existing rows remain version 0.
-        op.add_column(table, sa.Column("provider_target_version", sa.Integer(), nullable=False, server_default="0"))
-    op.add_column("file_object", sa.Column("provider_target_version", sa.Integer(), nullable=False, server_default="0"))
+        op.add_column(
+            table,
+            sa.Column("provider_target_version", sa.Integer(), nullable=False, server_default="0"),
+        )
+    op.add_column(
+        "file_object",
+        sa.Column("provider_target_version", sa.Integer(), nullable=False, server_default="0"),
+    )
     op.add_column("file_ingestion_record", sa.Column("membership_id", sa.Uuid(), nullable=True))
-    op.add_column("file_ingestion_record", sa.Column("provider_target_version", sa.Integer(), nullable=False, server_default="0"))
-    op.create_index("ix_file_operation_tenant_membership", "file_operation", ["tenant_id", "membership_id"])
-    op.create_index("ix_ingestion_tenant_membership", "file_ingestion_record", ["tenant_id", "membership_id"])
+    op.add_column(
+        "file_ingestion_record",
+        sa.Column("provider_target_version", sa.Integer(), nullable=False, server_default="0"),
+    )
+    op.create_index(
+        "ix_file_operation_tenant_membership", "file_operation", ["tenant_id", "membership_id"]
+    )
+    op.create_index(
+        "ix_ingestion_tenant_membership", "file_ingestion_record", ["tenant_id", "membership_id"]
+    )
     op.create_table(
         "provider_migration_manifest",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -35,13 +48,21 @@ def upgrade() -> None:
         sa.Column("source_fingerprint", sa.String(64), nullable=False),
         sa.Column("target_fingerprint", sa.String(64), nullable=True),
         sa.Column("reason", sa.String(128), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP")
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("tenant_id", "record_type", "record_id"),
     )
-    op.create_index("ix_provider_migration_manifest_state", "provider_migration_manifest", ["state", "created_at"])
+    op.create_index(
+        "ix_provider_migration_manifest_state",
+        "provider_migration_manifest",
+        ["state", "created_at"],
+    )
 
 
 def downgrade() -> None:

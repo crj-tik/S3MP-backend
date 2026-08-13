@@ -37,7 +37,7 @@
 - [x] 5.3 Apply the validator before ingestion reconciliation, deletion reconciliation, and every file-operation worker provider mutation; persist a redacted cancelled/failed outcome on revocation.
 - [x] 5.4 Enforce creator-or-currently-delegated access for file-operation results, evaluate all affected paths for non-creators, and map internal records to contract-safe public response DTOs.
 - [x] 5.5 Replace lexical file-list prefix filtering with escaped canonical directory-boundary filtering and align repository prefix representation with authorized commands.
-- [ ] 5.6 Add HTTP and real-database tests for same-tenant operation IDOR, internal-field redaction, suspended membership before queued work, authorization-version change before reconciliation, and `team` versus `team2` listing isolation.
+- [x] 5.6 Add HTTP and real-database tests for same-tenant operation IDOR, internal-field redaction, suspended membership before queued work, authorization-version change before reconciliation, and `team` versus `team2` listing isolation.
 
 ## 6. Application Owner lifecycle containment
 
@@ -49,7 +49,7 @@
 
 ## 7. End-to-end verification and rollout evidence
 
-- [ ] 7.1 Run format, type, unit, contract, and adversarial HTTP tests; add focused PostgreSQL/Redis/MinIO integration coverage for the modified boundaries.
+- [x] 7.1 Run format, type, unit, contract, and adversarial HTTP tests; add focused PostgreSQL/Redis/MinIO integration coverage for the modified boundaries.
 - [x] 7.2 Execute migration audit and dry-run against the local infrastructure, record only aggregate counts and redacted conflict identifiers, and remediate/quarantine every unsafe record before enabling strict mode.
 - [x] 7.3 Verify `/health/ready`, worker reconciliation, and contract validation under the configured local PostgreSQL, Redis, and MinIO services.
 - [x] 7.4 Document rollout gates, verified rollback limitations, breaking provider-key migration behavior, and operational commands in the deployment guide.

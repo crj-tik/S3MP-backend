@@ -27,7 +27,9 @@ def test_sigv4_request_is_explicit_and_signed() -> None:
         S3Credentials("AKIA_TEST", "secret"),
     )
     request = adapter.build_request(
-        "GET", "bucket", "object.txt",
+        "GET",
+        "bucket",
+        "object.txt",
         now=datetime(2026, 1, 1, tzinfo=UTC),
     )
 

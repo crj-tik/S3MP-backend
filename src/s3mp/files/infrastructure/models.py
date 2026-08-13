@@ -37,13 +37,17 @@ class FileObjectModel(Base):
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     # Version 0 is reserved for rows that predate tenant-scoped provider keys.
     # The application always supplies version 1 for newly created rows.
-    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="0")
+    provider_target_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="0"
+    )
     content_length: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     etag: Mapped[str | None] = mapped_column(String(512))
     checksum: Mapped[str | None] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
-    deletion_attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    deletion_attempt_count: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
     deletion_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deletion_failure_reason: Mapped[str | None] = mapped_column(String(128))
     deletion_principal_id: Mapped[UUID | None] = mapped_column()
@@ -78,7 +82,9 @@ class UploadSessionModel(Base):
     membership_id: Mapped[UUID | None] = mapped_column()
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
-    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="0")
+    provider_target_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="0"
+    )
     declared_length: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     checksum: Mapped[str | None] = mapped_column(String(512))
@@ -107,7 +113,9 @@ class MultipartSessionModel(Base):
     membership_id: Mapped[UUID | None] = mapped_column()
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
-    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="0")
+    provider_target_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="0"
+    )
     provider_upload_id: Mapped[str | None] = mapped_column(String(512))
     declared_length: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -158,9 +166,15 @@ class FileOperationModel(Base):
     failure_reason: Mapped[str | None] = mapped_column(String(500))
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     storage_space_id: Mapped[UUID | None] = mapped_column()
-    authorization_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
-    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="0")
-    authorization_evidence: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    authorization_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="1"
+    )
+    provider_target_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="0"
+    )
+    authorization_evidence: Mapped[dict[str, object]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     lease_owner: Mapped[str | None] = mapped_column(String(128))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

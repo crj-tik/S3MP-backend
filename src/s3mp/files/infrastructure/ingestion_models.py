@@ -28,8 +28,12 @@ class FileIngestionRecordModel(Base):
         # Terminal provenance is retained: session/file references may be
         # removed independently, but tenant scope is never nulled.
         ForeignKeyConstraint(["upload_session_id"], ["upload_session.id"], ondelete="SET NULL"),
-        ForeignKeyConstraint(["multipart_session_id"], ["multipart_session.id"], ondelete="SET NULL"),
-        ForeignKeyConstraint(["quota_reservation_id"], ["quota_reservation.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(
+            ["multipart_session_id"], ["multipart_session.id"], ondelete="SET NULL"
+        ),
+        ForeignKeyConstraint(
+            ["quota_reservation_id"], ["quota_reservation.id"], ondelete="SET NULL"
+        ),
         ForeignKeyConstraint(["file_object_id"], ["file_object.id"], ondelete="SET NULL"),
         Index("ix_ingestion_tenant_status", "tenant_id", "status"),
         Index("ix_ingestion_tenant_session", "tenant_id", "upload_session_id"),
@@ -50,7 +54,9 @@ class FileIngestionRecordModel(Base):
     relative_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     physical_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     # Existing rows are legacy/unscoped (0); normal application writes pass 1.
-    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="0")
+    provider_target_version: Mapped[int] = mapped_column(
+        nullable=False, default=1, server_default="0"
+    )
     provider_etag: Mapped[str | None] = mapped_column(String(512))
     provider_version_id: Mapped[str | None] = mapped_column(String(512))
     actual_size: Mapped[int | None] = mapped_column(Integer())
@@ -63,9 +69,7 @@ class FileIngestionRecordModel(Base):
     idempotency_fingerprint: Mapped[str | None] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="initiated")
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class FileIngestionEventModel(Base):

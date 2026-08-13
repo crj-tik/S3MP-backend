@@ -39,9 +39,7 @@ class IdempotentApplicationService:
     async def get_app(self, tenant_id: Any, app_id: Any) -> dict[str, Any]:
         return {"id": str(app_id), "name": "app", "status": "active"}
 
-    async def create_app(
-        self, context: PrincipalContext, name: str
-    ) -> dict[str, Any]:
+    async def create_app(self, context: PrincipalContext, name: str) -> dict[str, Any]:
         if self._first_name is None:
             self._first_name = name
             self.successful_creates += 1
@@ -56,9 +54,7 @@ class IdempotentApplicationService:
         # Same name → idempotent replay (return the original result).
         return {"id": "replayed", "name": name, "status": "active"}
 
-    async def update_app(
-        self, tenant_id: Any, app_id: Any, name: str | None
-    ) -> dict[str, Any]:
+    async def update_app(self, tenant_id: Any, app_id: Any, name: str | None) -> dict[str, Any]:
         return {"id": str(app_id), "name": name or "x", "status": "active"}
 
 

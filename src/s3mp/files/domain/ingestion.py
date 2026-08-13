@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 
 class IngestionStatus(StrEnum):
@@ -43,9 +43,21 @@ VALID_TRANSITIONS: dict[IngestionStatus, set[IngestionStatus]] = {
         IngestionStatus.RECONCILIATION_REQUIRED,
         IngestionStatus.EXPIRED,
     },
-    IngestionStatus.UPLOADING: {IngestionStatus.VERIFICATION_PENDING, IngestionStatus.FAILED, IngestionStatus.EXPIRED},
-    IngestionStatus.VERIFICATION_PENDING: {IngestionStatus.VERIFIED, IngestionStatus.FAILED, IngestionStatus.EXPIRED},
-    IngestionStatus.VERIFIED: {IngestionStatus.COMMITTED, IngestionStatus.FAILED, IngestionStatus.RECONCILIATION_REQUIRED},
+    IngestionStatus.UPLOADING: {
+        IngestionStatus.VERIFICATION_PENDING,
+        IngestionStatus.FAILED,
+        IngestionStatus.EXPIRED,
+    },
+    IngestionStatus.VERIFICATION_PENDING: {
+        IngestionStatus.VERIFIED,
+        IngestionStatus.FAILED,
+        IngestionStatus.EXPIRED,
+    },
+    IngestionStatus.VERIFIED: {
+        IngestionStatus.COMMITTED,
+        IngestionStatus.FAILED,
+        IngestionStatus.RECONCILIATION_REQUIRED,
+    },
     IngestionStatus.COMMITTED: {IngestionStatus.AVAILABLE, IngestionStatus.RECONCILIATION_REQUIRED},
     IngestionStatus.AVAILABLE: set(),
     IngestionStatus.FAILED: {IngestionStatus.RECONCILIATION_REQUIRED},
@@ -88,9 +100,7 @@ class IngestionRecord:
     def transition(self, target: IngestionStatus) -> "IngestionRecord":
         allowed = VALID_TRANSITIONS.get(self.status, set())
         if target not in allowed:
-            raise ValueError(
-                f"Invalid ingestion transition: {self.status} → {target}"
-            )
+            raise ValueError(f"Invalid ingestion transition: {self.status} → {target}")
         updates: dict[str, Any] = {"status": target}
         if target is IngestionStatus.COMMITTED:
             updates["committed_at"] = datetime.now(UTC)

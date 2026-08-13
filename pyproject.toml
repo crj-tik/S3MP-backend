@@ -46,6 +46,10 @@ src = ["src", "tests", "scripts"]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
 ignore = ["S101"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/test_infra_config.py" = ["S106"]
+"tests/test_sensitive_data_hygiene.py" = ["S105"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

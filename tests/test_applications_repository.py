@@ -9,10 +9,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from _infrastructure import delete_tenant, real_engine, real_session_factory, seed_tenant
-from s3mp.applications.infrastructure.models import ApiKeyModel, ApplicationModel, ApplicationOwnerModel
+from s3mp.applications.infrastructure.models import (
+    ApiKeyModel,
+    ApplicationModel,
+)
 from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.audit.infrastructure.models import AuditEventModel
-from s3mp.identity.infrastructure.models import MembershipModel, MembershipStatus, PrincipalModel, PrincipalType, UserModel
+from s3mp.identity.infrastructure.models import (
+    MembershipModel,
+    MembershipStatus,
+    PrincipalModel,
+    PrincipalType,
+    UserModel,
+)
 
 
 @pytest.fixture
@@ -24,7 +33,9 @@ async def engine() -> AsyncIterator[AsyncEngine]:
 
 async def _seed_principal(session: AsyncSession, tenant_id: UUID) -> str:
     principal = PrincipalModel(
-        tenant_id=tenant_id, type=PrincipalType.USER, display_name="Owner",
+        tenant_id=tenant_id,
+        type=PrincipalType.USER,
+        display_name="Owner",
     )
     session.add(principal)
     await session.flush()
@@ -40,10 +51,14 @@ async def test_list_apps_is_tenant_scoped(engine: AsyncEngine) -> None:
     try:
         async with factory() as session:
             principal_id = await _seed_principal(session, tenant_a)
-            session.add(ApplicationModel(
-                tenant_id=tenant_a, principal_id=UUID(principal_id),
-                name="app-alpha", status="active",
-            ))
+            session.add(
+                ApplicationModel(
+                    tenant_id=tenant_a,
+                    principal_id=UUID(principal_id),
+                    name="app-alpha",
+                    status="active",
+                )
+            )
             await session.commit()
 
         apps_a, _ = await store.list_apps(tenant_a, 50, None)
@@ -66,8 +81,10 @@ async def test_get_app_returns_none_for_cross_tenant(engine: AsyncEngine) -> Non
         async with factory() as session:
             principal_id = await _seed_principal(session, tenant_a)
             app = ApplicationModel(
-                tenant_id=tenant_a, principal_id=UUID(principal_id),
-                name="app-beta", status="active",
+                tenant_id=tenant_a,
+                principal_id=UUID(principal_id),
+                name="app-beta",
+                status="active",
             )
             session.add(app)
             await session.commit()
@@ -96,9 +113,7 @@ async def test_create_app_persists_and_round_trips(engine: AsyncEngine) -> None:
         assert created["name"] == "app-gamma"
         fetched = await store.get_app(tenant_a, UUID(str(created["id"])))
         assert fetched is not None and fetched["name"] == "app-gamma"
-        assert await store.list_owners(tenant_a, UUID(str(created["id"]))) == [
-            UUID(principal_id)
-        ]
+        assert await store.list_owners(tenant_a, UUID(str(created["id"]))) == [UUID(principal_id)]
     finally:
         await delete_tenant(engine, tenant_a)
 
@@ -113,16 +128,25 @@ async def test_list_keys_is_tenant_scoped(engine: AsyncEngine) -> None:
         async with factory() as session:
             principal_id = await _seed_principal(session, tenant_a)
             app = ApplicationModel(
-                tenant_id=tenant_a, principal_id=UUID(principal_id),
-                name="app-keys", status="active",
+                tenant_id=tenant_a,
+                principal_id=UUID(principal_id),
+                name="app-keys",
+                status="active",
             )
             session.add(app)
             await session.flush()
-            session.add(ApiKeyModel(
-                tenant_id=tenant_a, application_id=app.id, key_id="sk_test_1",
-                secret_digest=b"x" * 32, pepper_version=1, scopes=["files.read"],
-                status="active", expires_at=datetime.now(UTC) + timedelta(days=90),
-            ))
+            session.add(
+                ApiKeyModel(
+                    tenant_id=tenant_a,
+                    application_id=app.id,
+                    key_id="sk_test_1",
+                    secret_digest=b"x" * 32,
+                    pepper_version=1,
+                    scopes=["files.read"],
+                    status="active",
+                    expires_at=datetime.now(UTC) + timedelta(days=90),
+                )
+            )
             await session.commit()
             app_id = str(app.id)
 
@@ -168,12 +192,14 @@ async def test_key_lifecycle_audit_is_redacted_and_atomic(engine: AsyncEngine) -
         )
         async with factory() as session:
             events = list(
-                (await session.scalars(
-                    select(AuditEventModel).where(
-                        AuditEventModel.tenant_id == tenant_id,
-                        AuditEventModel.resource_id == str(key["id"]),
+                (
+                    await session.scalars(
+                        select(AuditEventModel).where(
+                            AuditEventModel.tenant_id == tenant_id,
+                            AuditEventModel.resource_id == str(key["id"]),
+                        )
                     )
-                )).all()
+                ).all()
             )
         assert [event.action for event in events] == ["api_key.issued", "api_key.revoked"]
         assert "secret" not in str([event.details for event in events]).lower()
@@ -182,17 +208,38 @@ async def test_key_lifecycle_audit_is_redacted_and_atomic(engine: AsyncEngine) -
         await delete_tenant(engine, tenant_id)
 
 
-async def test_ownerless_application_is_contained_using_active_memberships(engine: AsyncEngine) -> None:
+async def test_ownerless_application_is_contained_using_active_memberships(
+    engine: AsyncEngine,
+) -> None:
     factory = real_session_factory(engine)
     store = SqlAlchemyApplicationStore(factory)
     tenant_id, owner_id, membership_id, user_id = uuid4(), uuid4(), uuid4(), uuid4()
     await seed_tenant(engine, tenant_id)
     try:
         async with factory.begin() as session:
-            session.add(UserModel(id=user_id, email=f"{user_id}@example.test", normalized_email=f"{user_id}@example.test", display_name="Owner"))
-            session.add(PrincipalModel(id=owner_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Owner"))
+            session.add(
+                UserModel(
+                    id=user_id,
+                    email=f"{user_id}@example.test",
+                    normalized_email=f"{user_id}@example.test",
+                    display_name="Owner",
+                )
+            )
+            session.add(
+                PrincipalModel(
+                    id=owner_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Owner"
+                )
+            )
             await session.flush()
-            session.add(MembershipModel(id=membership_id, tenant_id=tenant_id, user_id=user_id, principal_id=owner_id, status=MembershipStatus.SUSPENDED))
+            session.add(
+                MembershipModel(
+                    id=membership_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    principal_id=owner_id,
+                    status=MembershipStatus.SUSPENDED,
+                )
+            )
         app = await store.create_app(tenant_id, "orphaned", owner_id)
         app_id = UUID(str(app["id"]))
         assert await store.list_owners(tenant_id, app_id) == [owner_id]
@@ -223,19 +270,25 @@ async def test_removed_or_expired_last_owner_is_contained(
     try:
         async with factory.begin() as session:
             email = f"{user_id}@example.test"
-            session.add(UserModel(id=user_id, email=email, normalized_email=email, display_name="Owner"))
-            session.add(PrincipalModel(
-                id=owner_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Owner"
-            ))
+            session.add(
+                UserModel(id=user_id, email=email, normalized_email=email, display_name="Owner")
+            )
+            session.add(
+                PrincipalModel(
+                    id=owner_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Owner"
+                )
+            )
             await session.flush()
-            session.add(MembershipModel(
-                id=membership_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                principal_id=owner_id,
-                status=status,
-                expires_at=expires_at,
-            ))
+            session.add(
+                MembershipModel(
+                    id=membership_id,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    principal_id=owner_id,
+                    status=status,
+                    expires_at=expires_at,
+                )
+            )
         app = await store.create_app(tenant_id, "lifecycle", owner_id)
         app_id = UUID(str(app["id"]))
         assert await store.recompute_owner_state_for_principal(tenant_id, owner_id) == 1
@@ -256,13 +309,34 @@ async def test_pending_application_takeover_restores_owner_and_writes_redacted_a
         async with factory.begin() as session:
             for principal_id, label in ((old_owner_id, "Former"), (new_owner_id, "New")):
                 user_id, membership_id = uuid4(), uuid4()
-                session.add(UserModel(id=user_id, email=f"{user_id}@example.test", normalized_email=f"{user_id}@example.test", display_name=label))
-                session.add(PrincipalModel(id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name=label))
+                session.add(
+                    UserModel(
+                        id=user_id,
+                        email=f"{user_id}@example.test",
+                        normalized_email=f"{user_id}@example.test",
+                        display_name=label,
+                    )
+                )
+                session.add(
+                    PrincipalModel(
+                        id=principal_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.USER,
+                        display_name=label,
+                    )
+                )
                 await session.flush()
-                session.add(MembershipModel(
-                    id=membership_id, tenant_id=tenant_id, user_id=user_id, principal_id=principal_id,
-                    status=MembershipStatus.SUSPENDED if principal_id == old_owner_id else MembershipStatus.ACTIVE,
-                ))
+                session.add(
+                    MembershipModel(
+                        id=membership_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        principal_id=principal_id,
+                        status=MembershipStatus.SUSPENDED
+                        if principal_id == old_owner_id
+                        else MembershipStatus.ACTIVE,
+                    )
+                )
         app = await store.create_app(tenant_id, "recoverable", old_owner_id)
         app_id = UUID(str(app["id"]))
         assert await store.recompute_owner_state_for_principal(tenant_id, old_owner_id) == 1
@@ -271,10 +345,16 @@ async def test_pending_application_takeover_restores_owner_and_writes_redacted_a
         assert (recovered["status"], recovered["authorization_version"]) == ("active", 3)
         assert new_owner_id in await store.list_active_owners(tenant_id, app_id)
         async with factory() as session:
-            events = list((await session.scalars(select(AuditEventModel).where(
-                AuditEventModel.tenant_id == tenant_id,
-                AuditEventModel.resource_id == str(app_id),
-            ))).all())
+            events = list(
+                (
+                    await session.scalars(
+                        select(AuditEventModel).where(
+                            AuditEventModel.tenant_id == tenant_id,
+                            AuditEventModel.resource_id == str(app_id),
+                        )
+                    )
+                ).all()
+            )
         takeover = next(event for event in events if event.action == "application.taken_over")
         assert takeover.actor_principal_id == new_owner_id
         assert takeover.details == {"reason_code": "owner_departed"}
@@ -292,26 +372,42 @@ async def test_governance_scan_contains_unowned_application_with_audit(engine: A
     await seed_tenant(engine, tenant_id)
     try:
         async with factory.begin() as session:
-            session.add(PrincipalModel(
-                id=app_principal_id, tenant_id=tenant_id, type=PrincipalType.APPLICATION, display_name="unowned"
-            ))
+            session.add(
+                PrincipalModel(
+                    id=app_principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.APPLICATION,
+                    display_name="unowned",
+                )
+            )
             await session.flush()
-            session.add(ApplicationModel(
-                tenant_id=tenant_id, principal_id=app_principal_id, name="unowned", status="active"
-            ))
+            session.add(
+                ApplicationModel(
+                    tenant_id=tenant_id,
+                    principal_id=app_principal_id,
+                    name="unowned",
+                    status="active",
+                )
+            )
             await session.flush()
-            app_id = (await session.scalar(select(ApplicationModel.id).where(
-                ApplicationModel.tenant_id == tenant_id, ApplicationModel.principal_id == app_principal_id
-            )))
+            app_id = await session.scalar(
+                select(ApplicationModel.id).where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.principal_id == app_principal_id,
+                )
+            )
+        assert app_id is not None
         assert await store.scan_ownerless_applications(tenant_id) == 1
         app = await store.get_app(tenant_id, app_id)
         assert app is not None and app["status"] == "pending_takeover"
         async with factory() as session:
-            event = await session.scalar(select(AuditEventModel).where(
-                AuditEventModel.tenant_id == tenant_id,
-                AuditEventModel.resource_id == str(app_id),
-                AuditEventModel.action == "application.ownerless_contained",
-            ))
+            event = await session.scalar(
+                select(AuditEventModel).where(
+                    AuditEventModel.tenant_id == tenant_id,
+                    AuditEventModel.resource_id == str(app_id),
+                    AuditEventModel.action == "application.ownerless_contained",
+                )
+            )
         assert event is not None and event.details == {"reason_code": "no_owner_record"}
     finally:
         await delete_tenant(engine, tenant_id)

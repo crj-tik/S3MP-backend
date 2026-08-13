@@ -106,8 +106,12 @@ async def test_move_partial_failure_and_confirmed_idempotent_batch_delete() -> N
     result = await service.move(operation)
     assert result.status is OperationStatus.PARTIAL_FAILURE
     with pytest.raises(FileValidationError):
-        await service.delete_batch(["team/a"], ["team/b"], uuid4(), tenant_id=uuid4(), principal_id=uuid4())
-    result = await service.delete_batch(["team/a"], ["team/a"], uuid4(), tenant_id=uuid4(), principal_id=uuid4())
+        await service.delete_batch(
+            ["team/a"], ["team/b"], uuid4(), tenant_id=uuid4(), principal_id=uuid4()
+        )
+    result = await service.delete_batch(
+        ["team/a"], ["team/a"], uuid4(), tenant_id=uuid4(), principal_id=uuid4()
+    )
     assert result.status is OperationStatus.PARTIAL_FAILURE
 
 
@@ -136,9 +140,20 @@ def test_direct_upload_falls_back_and_disabled_subject_cannot_presign() -> None:
         S3ConnectionConfig("https://s3.example.test", "region", True),
         S3Credentials("key", "secret"),
     )
+
+    class UnusedStore:
+        async def list(self, prefix: str) -> list[ObjectMetadata]:
+            raise AssertionError("this test does not access file storage")
+
+        async def head(self, key: str) -> ObjectMetadata | None:
+            raise AssertionError("this test does not access file storage")
+
+        async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
+            raise AssertionError("this test does not access file storage")
+
     service = FileService(
-        object(), adapter, "bucket", subject_is_active=lambda value: value in active
-    )  # type: ignore[arg-type]
+        UnusedStore(), adapter, "bucket", subject_is_active=lambda value: value in active
+    )
     assert (
         service.choose_upload_mode(StorageCapabilities(presigned_put=False), direct_requested=True)
         == "proxy"

@@ -36,6 +36,7 @@ from s3mp.identity.domain.entities import Membership, Session
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 def _now() -> datetime:
     return datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -48,8 +49,13 @@ def _binding(
     expires_delta: timedelta = timedelta(hours=1),
 ) -> Binding:
     return Binding(
-        uuid4(), permission, effect, prefix,
-        _now() - timedelta(minutes=1), _now() + expires_delta, "test",
+        uuid4(),
+        permission,
+        effect,
+        prefix,
+        _now() - timedelta(minutes=1),
+        _now() + expires_delta,
+        "test",
     )
 
 
@@ -61,8 +67,13 @@ def _make_membership(
     expires_at: datetime | None = None,
 ) -> Membership:
     return Membership(
-        uuid4(), uuid4() if tenant_id is None else uuid4(), uuid4(), uuid4(),
-        status, auth_version, expires_at,
+        uuid4(),
+        uuid4() if tenant_id is None else uuid4(),
+        uuid4(),
+        uuid4(),
+        status,
+        auth_version,
+        expires_at,
     )
 
 
@@ -74,13 +85,18 @@ def _make_session(
     revoked_at: datetime | None = None,
 ) -> Session:
     return Session(
-        uuid4(), membership.tenant_id, membership.id, membership.principal_id,
+        uuid4(),
+        membership.tenant_id,
+        membership.id,
+        membership.principal_id,
         auth_version if auth_version is not None else membership.authorization_version,
-        _now() + expires_delta, revoked_at,
+        _now() + expires_delta,
+        revoked_at,
     )
 
 
 # ── Phase 1: Authentication & Context ────────────────────────────────────────
+
 
 class TestAuthenticationAndContext:
     """Login → session → PrincipalContext → /me."""
@@ -88,7 +104,6 @@ class TestAuthenticationAndContext:
     def test_password_auth_chain(self) -> None:
         """Full local auth: hash → verify → authenticate."""
         hasher = PasswordHasher()
-        user_id = uuid4()
         h = hasher.hash("correct")
         assert hasher.verify("correct", h)
         assert not hasher.verify("wrong", h)
@@ -126,6 +141,7 @@ class TestAuthenticationAndContext:
 
 
 # ── Phase 2: Authorization & Binding ─────────────────────────────────────────
+
 
 class TestAuthorizationBinding:
     """User → group → role → RoleBinding → effective permissions."""
@@ -169,8 +185,13 @@ class TestAuthorizationBinding:
 
     def test_expired_binding_is_ignored(self) -> None:
         expired = Binding(
-            uuid4(), "files.read", Decision.ALLOW, "team",
-            _now() - timedelta(hours=2), _now() - timedelta(minutes=1), "expired",
+            uuid4(),
+            "files.read",
+            Decision.ALLOW,
+            "team",
+            _now() - timedelta(hours=2),
+            _now() - timedelta(minutes=1),
+            "expired",
         )
         decision = evaluate("files.read", [expired], object_key="team/a.txt", now=_now())
         assert decision.decision == Decision.DENY
@@ -193,6 +214,7 @@ class TestAuthorizationBinding:
 
 
 # ── Phase 3: Suspend → Revoke ────────────────────────────────────────────────
+
 
 class TestSuspendAndRevoke:
     """Suspend user → authorization version bump → session invalid → no new presign."""
@@ -269,6 +291,7 @@ class TestSuspendAndRevoke:
 
 # ── Phase 4: Delegation & Separation of Duties ───────────────────────────────
 
+
 class TestDelegationAndSeparation:
     """Delegation subset checks and separation of duties."""
 
@@ -329,17 +352,14 @@ class TestDelegationAndSeparation:
         )
         # Permission not in delegator set
         with pytest.raises(ValueError, match="exceed"):
-            validate_delegated_scope(
-                DelegationScope(frozenset({"files.admin"}), "team"), delegator
-            )
+            validate_delegated_scope(DelegationScope(frozenset({"files.admin"}), "team"), delegator)
         # Prefix broader than delegator
         with pytest.raises(ValueError, match="exceed"):
-            validate_delegated_scope(
-                DelegationScope(frozenset({"files.read"}), "other"), delegator
-            )
+            validate_delegated_scope(DelegationScope(frozenset({"files.read"}), "other"), delegator)
 
 
 # ── Phase 5: Full Governance Lifecycle ───────────────────────────────────────
+
 
 class TestFullGovernanceLifecycle:
     """End-to-end: login → bind → suspend → verify revocation → recover."""
@@ -354,9 +374,7 @@ class TestFullGovernanceLifecycle:
         membership_id = uuid4()
 
         # ── Step 1: User logs in, active membership ──
-        membership = Membership(
-            membership_id, tenant_id, uuid4(), principal_id, "active", 1, None
-        )
+        membership = Membership(membership_id, tenant_id, uuid4(), principal_id, "active", 1, None)
         ctx = select_membership([membership], tenant_id, now=_now())
         assert ctx.principal_id == principal_id
         assert ctx.authorization_version == 1
@@ -466,10 +484,21 @@ class TestFullGovernanceLifecycle:
         """Invalid context construction must be rejected at the boundary."""
         nil = UUID(int=0)
         with pytest.raises(ValueError, match="nil"):
-            PrincipalContext(tenant_id=nil, principal_id=uuid4(), membership_id=uuid4(), authorization_version=1)
+            PrincipalContext(
+                tenant_id=nil, principal_id=uuid4(), membership_id=uuid4(), authorization_version=1
+            )
         with pytest.raises(ValueError, match="nil"):
-            PrincipalContext(tenant_id=uuid4(), principal_id=nil, membership_id=uuid4(), authorization_version=1)
+            PrincipalContext(
+                tenant_id=uuid4(), principal_id=nil, membership_id=uuid4(), authorization_version=1
+            )
         with pytest.raises(ValueError, match="nil"):
-            PrincipalContext(tenant_id=uuid4(), principal_id=uuid4(), membership_id=nil, authorization_version=1)
+            PrincipalContext(
+                tenant_id=uuid4(), principal_id=uuid4(), membership_id=nil, authorization_version=1
+            )
         with pytest.raises(ValueError, match="positive"):
-            PrincipalContext(tenant_id=uuid4(), principal_id=uuid4(), membership_id=uuid4(), authorization_version=0)
+            PrincipalContext(
+                tenant_id=uuid4(),
+                principal_id=uuid4(),
+                membership_id=uuid4(),
+                authorization_version=0,
+            )

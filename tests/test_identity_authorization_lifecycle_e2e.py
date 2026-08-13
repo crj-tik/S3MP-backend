@@ -1,7 +1,9 @@
 """Production-wired identity and authorization management checks on PostgreSQL."""
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -25,7 +27,7 @@ from s3mp.identity.infrastructure.models import (
 from s3mp.main import create_app
 
 
-async def _seed_admin(app: object, tenant_id: object) -> PrincipalContext:
+async def _seed_admin(app: Any, tenant_id: UUID) -> PrincipalContext:
     factory = real_session_factory(app.state.engine)
     user_id, principal_id, membership_id, role_id = uuid4(), uuid4(), uuid4(), uuid4()
     permissions = [
@@ -118,7 +120,7 @@ async def test_management_services_are_wired_and_execute_against_real_postgresql
             context = await _seed_admin(app, tenant_id)
 
             @app.middleware("http")
-            async def inject(request, call_next):
+            async def inject(request: Any, call_next: Callable[[Any], Awaitable[Any]]) -> Any:
                 request.state.principal_context = context
                 return await call_next(request)
 

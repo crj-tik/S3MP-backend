@@ -1,6 +1,8 @@
+from collections.abc import Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, FastAPI, Query, Request
 from fastapi.testclient import TestClient
 
 from s3mp.common.config import Settings
@@ -9,13 +11,15 @@ from s3mp.identity.domain.context import PrincipalContext
 from s3mp.main import create_app
 
 
-def _authenticated_app() -> object:
+def _authenticated_app() -> FastAPI:
     app = create_app(Settings())
 
     @app.middleware("http")
-    async def inject_context(request: object, call_next: object) -> object:
-        request.state.principal_context = PrincipalContext(uuid4(), uuid4(), uuid4(), 1)  # type: ignore[attr-defined,union-attr]
-        return await call_next(request)  # type: ignore[misc]
+    async def inject_context(
+        request: Request, call_next: Callable[[Request], Awaitable[Any]]
+    ) -> Any:
+        request.state.principal_context = PrincipalContext(uuid4(), uuid4(), uuid4(), 1)
+        return await call_next(request)
 
     return app
 

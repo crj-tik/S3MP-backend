@@ -55,14 +55,66 @@ def classify_legacy_target(
     """
     source = fingerprint(source_bucket or "", source_key or "")
     if storage_space is None:
-        return ProviderMigrationPlan(record_type, record_id, tenant_id, None, "quarantined", "storage_space_missing", source_bucket, source_key, None, None, source, None)
+        return ProviderMigrationPlan(
+            record_type,
+            record_id,
+            tenant_id,
+            None,
+            "quarantined",
+            "storage_space_missing",
+            source_bucket,
+            source_key,
+            None,
+            None,
+            source,
+            None,
+        )
     space_id = UUID(str(storage_space["id"]))
     if space_id in overlapping_space_ids:
-        return ProviderMigrationPlan(record_type, record_id, tenant_id, space_id, "quarantined", "overlapping_legacy_root", source_bucket, source_key, None, None, source, None)
+        return ProviderMigrationPlan(
+            record_type,
+            record_id,
+            tenant_id,
+            space_id,
+            "quarantined",
+            "overlapping_legacy_root",
+            source_bucket,
+            source_key,
+            None,
+            None,
+            source,
+            None,
+        )
     if not relative_key:
-        return ProviderMigrationPlan(record_type, record_id, tenant_id, space_id, "pending_review", "relative_key_not_proven", source_bucket, source_key, None, None, source, None)
+        return ProviderMigrationPlan(
+            record_type,
+            record_id,
+            tenant_id,
+            space_id,
+            "pending_review",
+            "relative_key_not_proven",
+            source_bucket,
+            source_key,
+            None,
+            None,
+            source,
+            None,
+        )
     if source_bucket is not None and source_bucket != str(storage_space["bucket"]):
-        return ProviderMigrationPlan(record_type, record_id, tenant_id, space_id, "quarantined", "source_bucket_mismatch", source_bucket, source_key, None, None, source, None)
+        return ProviderMigrationPlan(
+            record_type,
+            record_id,
+            tenant_id,
+            space_id,
+            "quarantined",
+            "source_bucket_mismatch",
+            source_bucket,
+            source_key,
+            None,
+            None,
+            source,
+            None,
+        )
     try:
         target = derive_provider_target(
             tenant_id=tenant_id,
@@ -73,9 +125,31 @@ def classify_legacy_target(
             version=1,
         )
     except (KeyError, TypeError, ValueError, StoragePolicyError):
-        return ProviderMigrationPlan(record_type, record_id, tenant_id, space_id, "quarantined", "relative_key_invalid", source_bucket, source_key, None, None, source, None)
+        return ProviderMigrationPlan(
+            record_type,
+            record_id,
+            tenant_id,
+            space_id,
+            "quarantined",
+            "relative_key_invalid",
+            source_bucket,
+            source_key,
+            None,
+            None,
+            source,
+            None,
+        )
     return ProviderMigrationPlan(
-        record_type, record_id, tenant_id, space_id, "ready_for_verified_copy",
-        "verified_mapping_required", source_bucket, source_key, target.bucket, target.key,
-        source, fingerprint(target.bucket, target.key),
+        record_type,
+        record_id,
+        tenant_id,
+        space_id,
+        "ready_for_verified_copy",
+        "verified_mapping_required",
+        source_bucket,
+        source_key,
+        target.bucket,
+        target.key,
+        source,
+        fingerprint(target.bucket, target.key),
     )

@@ -1,6 +1,6 @@
 """Shared FastAPI dependencies for tenant context, service wiring, and error conversion."""
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, Request
 
@@ -147,5 +147,5 @@ def management_permission(operation_id: str) -> Any:
 
     # Contract checks inspect FastAPI's dependency graph rather than relying on
     # a manually maintained list of routers.
-    setattr(resolver, "__s3mp_management_operation_id__", operation_id)
+    cast(Any, resolver).__s3mp_management_operation_id__ = operation_id
     return Depends(resolver)

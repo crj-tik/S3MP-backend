@@ -5,11 +5,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
-import yaml
 
 from s3mp.applications.api.router import router as applications_router
 from s3mp.applications.application.application_service import (
@@ -59,8 +59,11 @@ def _delegable_permissions() -> frozenset[str]:
     catalog_path = Path(__file__).resolve().parents[2] / "contracts" / "permission-catalog.yaml"
     with catalog_path.open(encoding="utf-8") as stream:
         catalog = yaml.safe_load(stream) or {}
-    return frozenset(entry["name"] for entry in catalog.get("permissions", [])
-                     if isinstance(entry, dict) and entry.get("delegable", False))
+    return frozenset(
+        entry["name"]
+        for entry in catalog.get("permissions", [])
+        if isinstance(entry, dict) and entry.get("delegable", False)
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -80,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         # ── Session token service ─────────────────────────────────────
         from s3mp.identity.application.security import SessionTokenService
+
         session_pepper = (configured.secret_value("api_key_pepper") or "p" * 32).encode()
         app.state.session_token_service = SessionTokenService(session_pepper)
 
@@ -97,17 +101,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             async def find_session(self, token_digest: bytes) -> dict[str, Any] | None:
                 from sqlalchemy import select
+
                 from s3mp.identity.infrastructure.models import SessionModel
+
                 async with self._sf() as s:  # type: ignore[operator]
                     row = await s.scalar(
-                        select(SessionModel).where(
-                            SessionModel.token_digest == token_digest
-                        )
+                        select(SessionModel).where(SessionModel.token_digest == token_digest)
                     )
                     if row is None:
                         return None
                     return {
-                        "id": row.id, "tenant_id": row.tenant_id,
+                        "id": row.id,
+                        "tenant_id": row.tenant_id,
                         "membership_id": row.membership_id,
                         "principal_id": row.principal_id,
                         "authorization_version": row.authorization_version,
@@ -160,42 +165,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return lambda *a, **kw: self._not_implemented(*a, **kw)
 
         _store = _NoopStore()
-        application_store = (
+        application_store: Any = (
             SqlAlchemyApplicationStore(session_factory) if session_factory else _store
         )
-        storage_store = SqlAlchemyStorageStore(session_factory) if session_factory else _store
-        app.state.application_service = ApplicationService(  # type: ignore[arg-type]
+        storage_store: Any = SqlAlchemyStorageStore(session_factory) if session_factory else _store
+        app.state.application_service = ApplicationService(
             application_store, getattr(app.state, "authorization_management", None)
         )
         app.state.api_key_service = ApiKeyService(
-            application_store,  # type: ignore[arg-type]
-            ApiKeyCredentialService((configured.secret_value("api_key_pepper") or "p" * 32).encode(), pepper_version=configured.api_key_pepper_version),
+            application_store,
+            ApiKeyCredentialService(
+                (configured.secret_value("api_key_pepper") or "p" * 32).encode(),
+                pepper_version=configured.api_key_pepper_version,
+            ),
             getattr(app.state, "authorization_management", None),
         )
-        app.state.storage_service = StorageService(  # type: ignore[arg-type]
+        app.state.storage_service = StorageService(
             storage_store, getattr(app.state, "authorization_management", None)
         )
-        file_store = SqlAlchemyFileStore(session_factory) if session_factory else _store
+        file_store: Any = SqlAlchemyFileStore(session_factory) if session_factory else _store
         file_authorization_store = (
             SqlAlchemyFileAuthorizationStore(session_factory) if session_factory else None
         )
         ingestion_store = SqlAlchemyIngestionStore(session_factory) if session_factory else None
         app.state.file_service = FileApplicationService(
-            file_store,  # type: ignore[arg-type]
+            file_store,
             object_storage=object_storage,
-            storage_store=storage_store,  # type: ignore[arg-type]
+            storage_store=storage_store,
             authorization_store=file_authorization_store,
             ingestion_store=ingestion_store,
             principal_store=identity_store if session_factory else None,
             api_key_state_store=application_store if session_factory else None,
             work_notifier=RedisWorkSignal(redis) if redis is not None else None,
         )
-        quota_store = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
-        audit_store = SqlAlchemyAuditStore(session_factory) if session_factory else _store
-        app.state.quota_service = QuotaService(  # type: ignore[arg-type]
+        quota_store: Any = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
+        audit_store: Any = SqlAlchemyAuditStore(session_factory) if session_factory else _store
+        app.state.quota_service = QuotaService(
             quota_store, getattr(app.state, "authorization_management", None)
         )
-        app.state.audit_service = AuditService(  # type: ignore[arg-type]
+        app.state.audit_service = AuditService(
             audit_store, getattr(app.state, "authorization_management", None)
         )
         try:
@@ -212,6 +220,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.readiness_checks = {}
     app.add_middleware(RequestIDMiddleware)
     from s3mp.common.auth_middleware import AuthMiddleware
+
     app.add_middleware(AuthMiddleware)
     install_error_handlers(app)
     app.include_router(health_router)

@@ -107,9 +107,7 @@ async def update_application(
     context: Annotated[PrincipalContext, management_permission("update_application")],
     application_id: str = Path(min_length=1),
 ) -> Any:
-    return await _app_service(request).update_app(
-        context, application_id, body.name
-    )
+    return await _app_service(request).update_app(context, application_id, body.name)
 
 
 @router.post("/applications/{application_id}/takeover", operation_id="takeover_application")
@@ -134,16 +132,16 @@ async def list_api_keys(
     return await _key_service(request).list_keys(context, application_id)
 
 
-@router.post("/applications/{application_id}/api_keys", status_code=201, operation_id="create_api_key")
+@router.post(
+    "/applications/{application_id}/api_keys", status_code=201, operation_id="create_api_key"
+)
 async def create_api_key(
     request: Request,
     body: ApiKeyCreate,
     context: Annotated[PrincipalContext, management_permission("create_api_key")],
     application_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).issue(
-        context, application_id, body.scopes, body.ttl_days
-    )
+    return await _key_service(request).issue(context, application_id, body.scopes, body.ttl_days)
 
 
 @router.get("/api_keys/{api_key_id}", operation_id="get_api_key")
@@ -161,7 +159,9 @@ async def get_api_key_secret(
     _context: Annotated[PrincipalContext, management_permission("get_api_key_secret")],
     api_key_id: str = Path(min_length=1),
 ) -> Any:
-    raise ApiError("secret_not_retrievable", "API key secrets are only shown once at creation", status_code=410)
+    raise ApiError(
+        "secret_not_retrievable", "API key secrets are only shown once at creation", status_code=410
+    )
 
 
 @router.post("/api_keys/{api_key_id}/rotations", status_code=201, operation_id="rotate_api_key")
@@ -171,9 +171,7 @@ async def rotate_api_key(
     context: Annotated[PrincipalContext, management_permission("rotate_api_key")],
     api_key_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).rotate(
-        context, api_key_id, body.overlap_seconds
-    )
+    return await _key_service(request).rotate(context, api_key_id, body.overlap_seconds)
 
 
 @router.post("/api_keys/{api_key_id}/revocations", operation_id="revoke_api_key")

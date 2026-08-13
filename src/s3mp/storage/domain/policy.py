@@ -80,8 +80,13 @@ def canonical_operator_prefix(prefix: str) -> str:
 
 
 def derive_provider_target(
-    *, tenant_id: UUID, storage_space_id: UUID, bucket: str, relative_key: str,
-    operator_prefix: str = "", version: int = 1,
+    *,
+    tenant_id: UUID,
+    storage_space_id: UUID,
+    bucket: str,
+    relative_key: str,
+    operator_prefix: str = "",
+    version: int = 1,
 ) -> ProviderTarget:
     """Derive the immutable tenant/storage-space key namespace for provider I/O."""
     if version != 1:

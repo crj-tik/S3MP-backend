@@ -7,8 +7,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "contracts" / "openapi.yaml"
-SKIP_PATHS = frozenset({"/health/live", "/health/ready", "/docs", "/redoc", "/openapi.json",
-                         "/docs/oauth2-redirect"})
+SKIP_PATHS = frozenset(
+    {"/health/live", "/health/ready", "/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}
+)
 
 
 def main() -> int:
@@ -19,13 +20,9 @@ def main() -> int:
         baseline = yaml.safe_load(f)
 
     from s3mp.common.config import Settings
-    from s3mp.main import app
-    runtime = app.openapi()
-    # or use a fresh app instance
-    try:
-        runtime = create_app(Settings()).openapi()  # noqa: F821
-    except NameError:
-        runtime = app.openapi()
+    from s3mp.main import create_app
+
+    runtime = create_app(Settings()).openapi()
 
     declared = set()
     for path, item in (baseline.get("paths") or {}).items():
@@ -53,7 +50,11 @@ def main() -> int:
             print(f"MISSING  {m.upper():7s} {p}")
         for m, p in sorted(extra):
             print(f"EXTRA    {m.upper():7s} {p}")
-        print(f"\nCoverage: {len(declared) - len(missing)}/{len(declared)} declared routes implemented", file=sys.stderr)
+        print(
+            "\nCoverage: "
+            f"{len(declared) - len(missing)}/{len(declared)} declared routes implemented",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Contract coverage: {len(declared)}/{len(declared)} declared routes implemented")

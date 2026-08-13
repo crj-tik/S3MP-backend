@@ -67,7 +67,9 @@ class TestAuditEventNoSensitiveData:
     def test_url_field_stripped(self) -> None:
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "file.download", "file_object",
+            uuid4(),
+            "file.download",
+            "file_object",
             details={"url": "https://s3.example.com/bucket/key?SigV4=...", "user": "alice"},
         )
         assert "url" not in event.details
@@ -76,7 +78,9 @@ class TestAuditEventNoSensitiveData:
     def test_secret_field_stripped(self) -> None:
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "api_key.create", "api_key",
+            uuid4(),
+            "api_key.create",
+            "api_key",
             details={"secret": "sk-abcdef", "key_id": "k-123"},
         )
         assert "secret" not in event.details
@@ -85,7 +89,9 @@ class TestAuditEventNoSensitiveData:
     def test_credential_field_stripped(self) -> None:
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "auth.login", "session",
+            uuid4(),
+            "auth.login",
+            "session",
             details={"credential": "password123", "ip": "10.0.0.1"},
         )
         assert "credential" not in event.details
@@ -94,7 +100,9 @@ class TestAuditEventNoSensitiveData:
     def test_authorization_field_stripped(self) -> None:
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "object.head", "file_object",
+            uuid4(),
+            "object.head",
+            "file_object",
             details={"authorization": "SigV4 signed-headers", "key": "data/file.txt"},
         )
         assert "authorization" not in event.details
@@ -103,7 +111,9 @@ class TestAuditEventNoSensitiveData:
     def test_safe_fields_preserved(self) -> None:
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "file.upload", "file_object",
+            uuid4(),
+            "file.upload",
+            "file_object",
             details={
                 "size": 1024,
                 "content_type": "image/png",
@@ -116,7 +126,9 @@ class TestAuditEventNoSensitiveData:
     def test_serialize_excludes_credentials(self) -> None:
         writer = AuditWriter()
         event = writer.create(
-            uuid4(), "test", "test",
+            uuid4(),
+            "test",
+            "test",
             details={"password": "secret", "name": "ok"},
         )
         serialized = writer.serialize(event)
@@ -151,6 +163,7 @@ class TestErrorResponseNoSensitiveData:
 
     def test_api_error_no_internal_details(self) -> None:
         from s3mp.common.errors import ApiError
+
         err = ApiError("forbidden", "Access denied", status_code=403)
         assert err.code == "forbidden"
         assert "trace" not in err.message.lower()
@@ -160,6 +173,7 @@ class TestErrorResponseNoSensitiveData:
         from unittest.mock import MagicMock
 
         from s3mp.common.errors import _body
+
         request = MagicMock()
         request.state.request_id = "req-001"
         body = _body(request, "internal_error", "An internal error occurred")

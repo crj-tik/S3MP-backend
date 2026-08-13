@@ -39,7 +39,9 @@ def upgrade() -> None:
         sa.Column("idempotency_fingerprint", sa.String(256), nullable=True),
         sa.Column("status", sa.String(32), nullable=False, server_default="initiated"),
         sa.Column("committed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "upload_session_id"],
@@ -55,7 +57,9 @@ def upgrade() -> None:
         sa.UniqueConstraint("tenant_id", "idempotency_fingerprint"),
     )
     op.create_index("ix_ingestion_tenant_status", "file_ingestion_record", ["tenant_id", "status"])
-    op.create_index("ix_ingestion_tenant_session", "file_ingestion_record", ["tenant_id", "upload_session_id"])
+    op.create_index(
+        "ix_ingestion_tenant_session", "file_ingestion_record", ["tenant_id", "upload_session_id"]
+    )
 
     op.create_table(
         "file_ingestion_event",
@@ -64,7 +68,9 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("event_type", sa.String(64), nullable=False),
         sa.Column("details", sa.JSON(), nullable=False),
-        sa.Column("occurred_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "occurred_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "ingestion_record_id"],
@@ -72,7 +78,9 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
     )
-    op.create_index("ix_ingestion_event_record", "file_ingestion_event", ["ingestion_record_id", "occurred_at"])
+    op.create_index(
+        "ix_ingestion_event_record", "file_ingestion_event", ["ingestion_record_id", "occurred_at"]
+    )
 
 
 def downgrade() -> None:

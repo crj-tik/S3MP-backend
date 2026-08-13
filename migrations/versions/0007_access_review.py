@@ -65,7 +65,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_review_item_review_verdict", "review_item", ["review_id", "verdict"])
     op.create_index(
-        "ix_review_item_tenant_resource", "review_item", ["tenant_id", "resource_type", "resource_id"]
+        "ix_review_item_tenant_resource",
+        "review_item",
+        ["tenant_id", "resource_type", "resource_id"],
     )
 
     op.create_table(
@@ -98,7 +100,9 @@ def upgrade() -> None:
             name="fk_approval_request_approver",
         ),
     )
-    op.create_index("ix_approval_request_tenant_status", "approval_request", ["tenant_id", "status"])
+    op.create_index(
+        "ix_approval_request_tenant_status", "approval_request", ["tenant_id", "status"]
+    )
     op.create_index(
         "ix_approval_request_requester",
         "approval_request",

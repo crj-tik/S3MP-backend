@@ -126,7 +126,9 @@ def validate_operation_permission_classifications(openapi: Any) -> list[str]:
     errors = []
     missing = set(operations) - set(OPERATION_PERMISSION_CLASSIFICATIONS)
     if missing:
-        errors.append("Permissioned operations missing runtime classification: " + ", ".join(sorted(missing)))
+        errors.append(
+            "Permissioned operations missing runtime classification: " + ", ".join(sorted(missing))
+        )
     stale = set(OPERATION_PERMISSION_CLASSIFICATIONS) - set(operations)
     if stale:
         errors.append("Runtime classifications missing from OpenAPI: " + ", ".join(sorted(stale)))
@@ -161,7 +163,10 @@ def validate_management_route_enforcement() -> list[str]:
     bound_operations: dict[str, str] = {}
     for route in walk(app.routes):
         operation_id = getattr(route, "operation_id", None)
-        if not isinstance(operation_id, str) or operation_id not in MANAGEMENT_OPERATION_PERMISSIONS:
+        if (
+            not isinstance(operation_id, str)
+            or operation_id not in MANAGEMENT_OPERATION_PERMISSIONS
+        ):
             continue
         dependencies = getattr(getattr(route, "dependant", None), "dependencies", ())
         dependency_operations = {

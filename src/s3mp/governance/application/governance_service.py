@@ -9,9 +9,13 @@ from s3mp.identity.domain.context import PrincipalContext
 
 
 class QuotaStore(Protocol):
-    async def list_quotas(self, tenant_id: UUID, storage_space_id: str | None) -> list[dict[str, Any]]: ...
+    async def list_quotas(
+        self, tenant_id: UUID, storage_space_id: str | None
+    ) -> list[dict[str, Any]]: ...
     async def get_quota(self, tenant_id: UUID, quota_id: UUID) -> dict[str, Any] | None: ...
-    async def update_quota(self, tenant_id: UUID, quota_id: UUID, limit_bytes: int) -> dict[str, Any] | None: ...
+    async def update_quota(
+        self, tenant_id: UUID, quota_id: UUID, limit_bytes: int
+    ) -> dict[str, Any] | None: ...
 
 
 class AuditStore(Protocol):
@@ -54,7 +58,9 @@ class QuotaService:
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:
-            raise ApiError("internal_error", "Authorization management is not configured", status_code=500)
+            raise ApiError(
+                "internal_error", "Authorization management is not configured", status_code=500
+            )
         await self.authorizer.require_permission(context, permission)
 
 
@@ -67,7 +73,9 @@ class AuditService:
         self, context: PrincipalContext, **filters: Any
     ) -> list[dict[str, Any]]:
         await self._require(context, "audit.read")
-        return await self.store.list_events(context.tenant_id, {k: v for k, v in filters.items() if v is not None})
+        return await self.store.list_events(
+            context.tenant_id, {k: v for k, v in filters.items() if v is not None}
+        )
 
     async def get_audit_event(self, context: PrincipalContext, event_id: str) -> dict[str, Any]:
         await self._require(context, "audit.read")
@@ -78,5 +86,7 @@ class AuditService:
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:
-            raise ApiError("internal_error", "Authorization management is not configured", status_code=500)
+            raise ApiError(
+                "internal_error", "Authorization management is not configured", status_code=500
+            )
         await self.authorizer.require_permission(context, permission)

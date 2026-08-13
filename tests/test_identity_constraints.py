@@ -69,16 +69,24 @@ async def test_history_and_session_reject_cross_tenant_and_mismatch() -> None:
             async with conn.begin_nested():
                 await conn.execute(
                     INSERT_HISTORY,
-                    {"id": str(uuid4()), "t": str(tenant_b), "m": str(membership_a),
-                     "p": str(principal_b)},
+                    {
+                        "id": str(uuid4()),
+                        "t": str(tenant_b),
+                        "m": str(membership_a),
+                        "p": str(principal_b),
+                    },
                 )
         with pytest.raises(IntegrityError):
             async with conn.begin_nested():
                 await conn.execute(
                     INSERT_SESSION,
                     {
-                        "id": str(uuid4()), "t": str(tenant_b), "m": str(membership_a),
-                        "p": str(principal_b), "d": b"d", "c": b"c",
+                        "id": str(uuid4()),
+                        "t": str(tenant_b),
+                        "m": str(membership_a),
+                        "p": str(principal_b),
+                        "d": b"d",
+                        "c": b"c",
                         "x": datetime.now(UTC) + timedelta(hours=1),
                     },
                 )
@@ -90,8 +98,12 @@ async def test_history_and_session_reject_cross_tenant_and_mismatch() -> None:
                 await conn.execute(
                     INSERT_SESSION,
                     {
-                        "id": str(uuid4()), "t": str(tenant_a), "m": str(membership_a),
-                        "p": str(other_principal), "d": b"d2", "c": b"c2",
+                        "id": str(uuid4()),
+                        "t": str(tenant_a),
+                        "m": str(membership_a),
+                        "p": str(other_principal),
+                        "d": b"d2",
+                        "c": b"c2",
                         "x": datetime.now(UTC) + timedelta(hours=1),
                     },
                 )

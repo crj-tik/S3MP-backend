@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from s3mp.applications.application.application_service import ApiKeyService
 from s3mp.applications.domain.credentials import (
     ApiKeyCredentialService,
     ApiKeyRateLimiter,
@@ -13,7 +14,6 @@ from s3mp.applications.domain.credentials import (
     require_scope_intersection,
     revoke_key,
 )
-from s3mp.applications.application.application_service import ApiKeyService
 from s3mp.common.errors import ApiError
 
 
@@ -45,9 +45,9 @@ def test_api_key_lifecycle_scope_and_orphan_rules() -> None:
         {"files.read"},
         {"files.read"},
     ) == {"files.read"}
-    assert revoke_key(
-        revoked_at=now, issued_until=now + timedelta(minutes=5)
-    ) == now + timedelta(minutes=5)
+    assert revoke_key(revoked_at=now, issued_until=now + timedelta(minutes=5)) == now + timedelta(
+        minutes=5
+    )
 
 
 @pytest.mark.asyncio

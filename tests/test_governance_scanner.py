@@ -39,8 +39,13 @@ class TestScanLongUnused:
     def test_never_used_key_is_warning(self) -> None:
         scanner = GovernanceScanner()
         keys = [
-            {"id": uuid4(), "tenant_id": uuid4(), "key_id": "k1", "status": "active",
-             "last_used_at": None}
+            {
+                "id": uuid4(),
+                "tenant_id": uuid4(),
+                "key_id": "k1",
+                "status": "active",
+                "last_used_at": None,
+            }
         ]
         findings = scanner.scan_long_unused_authorizations(keys, threshold_days=90)
         assert len(findings) == 1
@@ -50,8 +55,13 @@ class TestScanLongUnused:
         scanner = GovernanceScanner()
         old = datetime.now(UTC) - timedelta(days=120)
         keys = [
-            {"id": uuid4(), "tenant_id": uuid4(), "key_id": "k1", "status": "active",
-             "last_used_at": old}
+            {
+                "id": uuid4(),
+                "tenant_id": uuid4(),
+                "key_id": "k1",
+                "status": "active",
+                "last_used_at": old,
+            }
         ]
         findings = scanner.scan_long_unused_authorizations(keys, threshold_days=90)
         assert len(findings) == 1
@@ -61,8 +71,13 @@ class TestScanLongUnused:
         scanner = GovernanceScanner()
         recent = datetime.now(UTC) - timedelta(days=10)
         keys = [
-            {"id": uuid4(), "tenant_id": uuid4(), "key_id": "k1", "status": "active",
-             "last_used_at": recent}
+            {
+                "id": uuid4(),
+                "tenant_id": uuid4(),
+                "key_id": "k1",
+                "status": "active",
+                "last_used_at": recent,
+            }
         ]
         findings = scanner.scan_long_unused_authorizations(keys, threshold_days=90)
         assert len(findings) == 0
@@ -72,7 +87,7 @@ class TestScanOrphanApplications:
     def test_no_owners_is_critical(self) -> None:
         scanner = GovernanceScanner()
         apps = [{"id": uuid4(), "tenant_id": uuid4(), "name": "orphan"}]
-        owners: list[dict] = []
+        owners: list[dict[str, object]] = []
         findings = scanner.scan_orphan_applications(apps, owners, set())
         assert len(findings) == 1
         assert findings[0].severity is FindingSeverity.CRITICAL
@@ -112,8 +127,12 @@ class TestScanStaleBindings:
         scanner = GovernanceScanner()
         disabled = uuid4()
         bindings = [
-            {"id": uuid4(), "tenant_id": uuid4(), "principal_id": disabled,
-             "revoked_at": datetime.now(UTC)}
+            {
+                "id": uuid4(),
+                "tenant_id": uuid4(),
+                "principal_id": disabled,
+                "revoked_at": datetime.now(UTC),
+            }
         ]
         findings = scanner.scan_stale_bindings(bindings, {disabled})
         assert len(findings) == 0
@@ -124,8 +143,13 @@ class TestScanExpiredCredentials:
         scanner = GovernanceScanner()
         past = datetime.now(UTC) - timedelta(days=1)
         keys = [
-            {"id": uuid4(), "tenant_id": uuid4(), "key_id": "k1", "status": "active",
-             "expires_at": past}
+            {
+                "id": uuid4(),
+                "tenant_id": uuid4(),
+                "key_id": "k1",
+                "status": "active",
+                "expires_at": past,
+            }
         ]
         findings = scanner.scan_expired_credentials(keys)
         assert len(findings) == 1
@@ -135,8 +159,13 @@ class TestScanExpiredCredentials:
         scanner = GovernanceScanner()
         future = datetime.now(UTC) + timedelta(days=30)
         keys = [
-            {"id": uuid4(), "tenant_id": uuid4(), "key_id": "k1", "status": "active",
-             "expires_at": future}
+            {
+                "id": uuid4(),
+                "tenant_id": uuid4(),
+                "key_id": "k1",
+                "status": "active",
+                "expires_at": future,
+            }
         ]
         findings = scanner.scan_expired_credentials(keys)
         assert len(findings) == 0

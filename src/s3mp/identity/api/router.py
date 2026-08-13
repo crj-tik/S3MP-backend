@@ -14,6 +14,7 @@ from s3mp.common.api.dependencies import (
     principal_context,
 )
 from s3mp.common.api.etag import check_etag, require_if_match
+from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.identity.domain.context import PrincipalContext
 
 router = APIRouter(prefix="/api/v1", tags=["Context"])
@@ -105,7 +106,11 @@ def _page(
     return {
         "items": items,
         "next_cursor": CursorCodec(b"s3mp-management-cursor-key-v1").encode(
-            context.tenant_id, context.principal_id, context.authorization_version, str(position), query=query
+            context.tenant_id,
+            context.principal_id,
+            context.authorization_version,
+            str(position),
+            query=query,
         )
         if position
         else None,
@@ -113,17 +118,21 @@ def _page(
 
 
 @router.get("/me", response_model=MeResponse, operation_id="get_me")
-async def get_me(context: Context, service: Annotated[object, identity_service]) -> object:
-    return await service.get_me(context)  # type: ignore[union-attr]
+async def get_me(
+    context: Context, service: Annotated[IdentityManagementService, identity_service]
+) -> object:
+    return await service.get_me(context)
 
 
 @router.get("/users", response_model=UserPage, operation_id="list_users")
 async def list_users(
     context: Annotated[PrincipalContext, management_permission("list_users")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, next_position = await service.list_users(context, cursor=_cursor(cursor, context, query="users"))  # type: ignore[union-attr]
+    items, next_position = await service.list_users(
+        context, cursor=_cursor(cursor, context, query="users")
+    )
     return _page(items, next_position, context, query="users")
 
 
@@ -131,18 +140,20 @@ async def list_users(
 async def get_user(
     user_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_user")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
 ) -> object:
-    return await service.get_user(context, user_id)  # type: ignore[union-attr]
+    return await service.get_user(context, user_id)
 
 
 @router.get("/members", response_model=MembershipPage, operation_id="list_members")
 async def list_members(
     context: Annotated[PrincipalContext, management_permission("list_members")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, next_position = await service.list_members(context, cursor=_cursor(cursor, context, query="members"))  # type: ignore[union-attr]
+    items, next_position = await service.list_members(
+        context, cursor=_cursor(cursor, context, query="members")
+    )
     return _page(items, next_position, context, query="members")
 
 
@@ -152,10 +163,10 @@ async def list_members(
 async def create_member(
     body: MembershipCreate,
     context: Annotated[PrincipalContext, management_permission("create_member")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
     response: Response,
 ) -> object:
-    result = await service.create_member(context, body)  # type: ignore[union-attr]
+    result = await service.create_member(context, body)
     response.headers["Location"] = f"/api/v1/members/{result['id']}"
     return result
 
@@ -166,9 +177,9 @@ async def create_member(
 async def get_member(
     membership_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_member")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
 ) -> object:
-    return await service.get_member(context, membership_id)  # type: ignore[union-attr]
+    return await service.get_member(context, membership_id)
 
 
 @router.patch(
@@ -178,12 +189,12 @@ async def update_member(
     membership_id: UUID,
     body: MembershipUpdate,
     context: Annotated[PrincipalContext, management_permission("update_member")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> object:
-    current = await service.get_member(context, membership_id)  # type: ignore[union-attr]
+    current = await service.get_member(context, membership_id)
     check_etag(current["etag"], require_if_match(if_match))
-    return await service.update_member(context, membership_id, body)  # type: ignore[union-attr]
+    return await service.update_member(context, membership_id, body)
 
 
 @router.get(
@@ -192,12 +203,12 @@ async def update_member(
 async def list_group_members(
     group_id: UUID,
     context: Annotated[PrincipalContext, management_permission("list_group_members")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
     cursor: str | None = Query(default=None),
 ) -> object:
     items, next_position = await service.list_group_members(
         context, group_id, cursor=_cursor(cursor, context, query=f"group_members:{group_id}")
-    )  # type: ignore[union-attr]
+    )
     return _page(items, next_position, context, query=f"group_members:{group_id}")
 
 
@@ -206,9 +217,9 @@ async def add_group_member(
     group_id: UUID,
     body: AddGroupMemberBody,
     context: Annotated[PrincipalContext, management_permission("add_group_member")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
 ) -> None:
-    await service.add_group_member(context, group_id, body.membership_id)  # type: ignore[union-attr]
+    await service.add_group_member(context, group_id, body.membership_id)
 
 
 @router.delete(
@@ -220,6 +231,6 @@ async def remove_group_member(
     group_id: UUID,
     membership_id: UUID,
     context: Annotated[PrincipalContext, management_permission("remove_group_member")],
-    service: Annotated[object, identity_service],
+    service: Annotated[IdentityManagementService, identity_service],
 ) -> None:
-    await service.remove_group_member(context, group_id, membership_id)  # type: ignore[union-attr]
+    await service.remove_group_member(context, group_id, membership_id)

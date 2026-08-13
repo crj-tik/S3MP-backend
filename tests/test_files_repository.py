@@ -26,14 +26,21 @@ async def engine() -> AsyncIterator[AsyncEngine]:
 
 async def _seed_space(session: AsyncSession, tenant_id: UUID) -> tuple[UUID, UUID]:
     conn = StorageConnectionModel(
-        tenant_id=tenant_id, name="primary", endpoint="https://s3.example.com",
-        region="us-east-1", path_style=True, credential_reference="vault/s3",
+        tenant_id=tenant_id,
+        name="primary",
+        endpoint="https://s3.example.com",
+        region="us-east-1",
+        path_style=True,
+        credential_reference="vault/s3",
     )
     session.add(conn)
     await session.flush()
     space = StorageSpaceModel(
-        tenant_id=tenant_id, connection_id=conn.id, name="default",
-        bucket="s3mp-dev", root_prefix="",
+        tenant_id=tenant_id,
+        connection_id=conn.id,
+        name="default",
+        bucket="s3mp-dev",
+        root_prefix="",
     )
     session.add(space)
     await session.flush()
@@ -49,10 +56,15 @@ async def test_list_files_is_tenant_scoped(engine: AsyncEngine) -> None:
     try:
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_a)
-            session.add(FileObjectModel(
-                tenant_id=tenant_a, storage_space_id=space_id,
-                object_key="docs/a.txt", content_length=100, content_type="text/plain",
-            ))
+            session.add(
+                FileObjectModel(
+                    tenant_id=tenant_a,
+                    storage_space_id=space_id,
+                    object_key="docs/a.txt",
+                    content_length=100,
+                    content_type="text/plain",
+                )
+            )
             await session.commit()
 
         files_a = await store.list_files(tenant_a, space_id, "")
@@ -73,12 +85,24 @@ async def test_list_files_respects_directory_boundary(engine: AsyncEngine) -> No
     try:
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_id)
-            session.add_all([
-                FileObjectModel(tenant_id=tenant_id, storage_space_id=space_id,
-                                object_key="team/a.txt", content_length=1, content_type="text/plain"),
-                FileObjectModel(tenant_id=tenant_id, storage_space_id=space_id,
-                                object_key="team2/secret.txt", content_length=1, content_type="text/plain"),
-            ])
+            session.add_all(
+                [
+                    FileObjectModel(
+                        tenant_id=tenant_id,
+                        storage_space_id=space_id,
+                        object_key="team/a.txt",
+                        content_length=1,
+                        content_type="text/plain",
+                    ),
+                    FileObjectModel(
+                        tenant_id=tenant_id,
+                        storage_space_id=space_id,
+                        object_key="team2/secret.txt",
+                        content_length=1,
+                        content_type="text/plain",
+                    ),
+                ]
+            )
             await session.commit()
         files = await store.list_files(tenant_id, space_id, "team")
         assert [file["object_key"] for file in files] == ["team/a.txt"]
@@ -96,8 +120,11 @@ async def test_get_file_returns_none_for_cross_tenant(engine: AsyncEngine) -> No
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_a)
             file_obj = FileObjectModel(
-                tenant_id=tenant_a, storage_space_id=space_id,
-                object_key="docs/b.txt", content_length=50, content_type="text/plain",
+                tenant_id=tenant_a,
+                storage_space_id=space_id,
+                object_key="docs/b.txt",
+                content_length=50,
+                content_type="text/plain",
             )
             session.add(file_obj)
             await session.commit()
@@ -122,19 +149,25 @@ async def test_create_upload_and_get_upload_round_trip(engine: AsyncEngine) -> N
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_a)
             principal = PrincipalModel(
-                tenant_id=tenant_a, type=PrincipalType.USER, display_name="Uploader",
+                tenant_id=tenant_a,
+                type=PrincipalType.USER,
+                display_name="Uploader",
             )
             session.add(principal)
             await session.commit()
             principal_id = str(principal.id)
 
-        upload = await store.create_upload(tenant_a, space_id, {
-            "principal_id": principal_id,
-            "object_key": "docs/upload.txt",
-            "content_length": 200,
-            "content_type": "text/plain",
-            "checksum": None,
-        })
+        upload = await store.create_upload(
+            tenant_a,
+            space_id,
+            {
+                "principal_id": principal_id,
+                "object_key": "docs/upload.txt",
+                "content_length": 200,
+                "content_type": "text/plain",
+                "checksum": None,
+            },
+        )
         fetched = await store.get_upload(tenant_a, upload["id"])
         assert fetched is not None
         assert fetched["object_key"] == "docs/upload.txt"
@@ -153,41 +186,65 @@ async def test_delete_queues_recoverable_intent_only_after_etag_match(engine: As
     try:
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_id)
-            session.add(PrincipalModel(
-                id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER, display_name="Delete",
-            ))
+            session.add(
+                PrincipalModel(
+                    id=principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.USER,
+                    display_name="Delete",
+                )
+            )
             file_obj = FileObjectModel(
-                tenant_id=tenant_id, storage_space_id=space_id, object_key="private/deleteme.txt",
-                content_length=1, content_type="text/plain", etag="current",
+                tenant_id=tenant_id,
+                storage_space_id=space_id,
+                object_key="private/deleteme.txt",
+                content_length=1,
+                content_type="text/plain",
+                etag="current",
             )
             session.add(file_obj)
             await session.commit()
         with pytest.raises(ApiError) as exc_info:
             await store.delete_file(
-                tenant_id, space_id, file_obj.id, if_match="stale", actor_principal_id=principal_id,
+                tenant_id,
+                space_id,
+                file_obj.id,
+                if_match="stale",
+                actor_principal_id=principal_id,
             )
         assert exc_info.value.code == "etag_mismatch"
         found = await store.get_file(tenant_id, space_id, file_obj.id)
         assert found is not None and found["status"] == "available"
         await store.delete_file(
-            tenant_id, space_id, file_obj.id, if_match="current", actor_principal_id=principal_id,
-            request_id="delete-request", object_key="private/deleteme.txt",
+            tenant_id,
+            space_id,
+            file_obj.id,
+            if_match="current",
+            actor_principal_id=principal_id,
+            request_id="delete-request",
+            object_key="private/deleteme.txt",
         )
         assert await store.get_file(tenant_id, space_id, file_obj.id) is None
         pending = await store.list_pending_deletions()
-        assert [row["id"] for row in pending if row["tenant_id"] == str(tenant_id)] == [str(file_obj.id)]
+        assert [row["id"] for row in pending if row["tenant_id"] == str(tenant_id)] == [
+            str(file_obj.id)
+        ]
         async with factory() as session:
             audit = await session.scalar(
                 select(AuditEventModel).where(AuditEventModel.resource_id == str(file_obj.id))
             )
         assert audit is not None and "private/deleteme.txt" not in str(audit.details)
         await store.finalize_file_delete(tenant_id, file_obj.id)
-        assert not [row for row in await store.list_pending_deletions() if row["id"] == str(file_obj.id)]
+        assert not [
+            row for row in await store.list_pending_deletions() if row["id"] == str(file_obj.id)
+        ]
     finally:
         await delete_tenant(engine, tenant_id)
 
 
-async def test_concurrent_workers_claim_operation_once_and_retry_exhausts(engine: AsyncEngine) -> None:
+async def test_concurrent_workers_claim_operation_once_and_retry_exhausts(
+    engine: AsyncEngine,
+) -> None:
     factory = real_session_factory(engine)
     store = SqlAlchemyFileStore(factory)
     tenant_id, principal_id = uuid4(), uuid4()
@@ -195,10 +252,14 @@ async def test_concurrent_workers_claim_operation_once_and_retry_exhausts(engine
     try:
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_id)
-            session.add(PrincipalModel(
-                id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER,
-                display_name="Worker",
-            ))
+            session.add(
+                PrincipalModel(
+                    id=principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.USER,
+                    display_name="Worker",
+                )
+            )
             await session.flush()
             operation = FileOperationModel(
                 tenant_id=tenant_id,

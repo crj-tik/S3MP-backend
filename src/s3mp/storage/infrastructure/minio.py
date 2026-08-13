@@ -6,7 +6,7 @@ prefixes and authorization remain application-service responsibilities.
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import boto3  # type: ignore[import-untyped]
 from botocore.config import Config  # type: ignore[import-untyped]
@@ -97,7 +97,9 @@ class MinioObjectStorageAdapter:
 
     async def delete(self, target: ProviderTarget) -> None:
         try:
-            await asyncio.to_thread(self._client.delete_object, Bucket=target.bucket, Key=target.key)
+            await asyncio.to_thread(
+                self._client.delete_object, Bucket=target.bucket, Key=target.key
+            )
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 object delete failed") from exc
 
@@ -118,12 +120,13 @@ class MinioObjectStorageAdapter:
 
     async def presign_get(self, target: ProviderTarget, expires_in: int) -> str:
         try:
-            return await asyncio.to_thread(
+            signed_url = await asyncio.to_thread(
                 self._client.generate_presigned_url,
                 "get_object",
                 Params={"Bucket": target.bucket, "Key": target.key},
                 ExpiresIn=expires_in,
             )
+            return cast(str, signed_url)
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 signing failed") from exc
 
@@ -143,7 +146,7 @@ class MinioObjectStorageAdapter:
         upload_id = response.get("UploadId")
         if not upload_id:
             raise ObjectStorageUnavailable("S3 multipart create returned no UploadId")
-        return upload_id
+        return cast(str, upload_id)
 
     async def upload_part(
         self, target: ProviderTarget, upload_id: str, part_number: int, body: bytes
@@ -168,10 +171,15 @@ class MinioObjectStorageAdapter:
     ) -> ObjectMetadata:
         """Complete the multipart upload with the provider; returns final ObjectMetadata."""
         try:
-            multipart_upload: dict[str, Any] = {"Parts": [
-                {"ETag": str(p["etag"]), "PartNumber": int(p["part_number"])}
-                for p in parts
-            ]}
+            multipart_upload: dict[str, Any] = {
+                "Parts": [
+                    {
+                        "ETag": str(p["etag"]),
+                        "PartNumber": int(cast(int | str, p["part_number"])),
+                    }
+                    for p in parts
+                ]
+            }
             await asyncio.to_thread(
                 self._client.complete_multipart_upload,
                 Bucket=target.bucket,

@@ -10,7 +10,9 @@ from uuid import UUID
 
 class PrincipalState(Protocol):
     async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None: ...
-    async def get_membership_state(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None: ...
+    async def get_membership_state(
+        self, tenant_id: UUID, membership_id: UUID
+    ) -> dict[str, Any] | None: ...
 
 
 class ApiKeyState(Protocol):
@@ -24,9 +26,15 @@ class DelayedSubject:
 
 
 async def validate_delayed_subject(
-    *, principal_store: PrincipalState | None, api_key_store: ApiKeyState | None,
-    tenant_id: UUID, principal_id: UUID, membership_id: str | UUID | None,
-    authorization_version: int, evidence: dict[str, Any], required_permission: str | None = None,
+    *,
+    principal_store: PrincipalState | None,
+    api_key_store: ApiKeyState | None,
+    tenant_id: UUID,
+    principal_id: UUID,
+    membership_id: str | UUID | None,
+    authorization_version: int,
+    evidence: dict[str, Any],
+    required_permission: str | None = None,
 ) -> DelayedSubject | None:
     """Validate current subject lifecycle; return no authority on any ambiguity."""
     if principal_store is None:
@@ -40,9 +48,11 @@ async def validate_delayed_subject(
             return None
         membership = await principal_store.get_membership_state(tenant_id, UUID(str(membership_id)))
         if (
-            membership is None or membership.get("status") != "active"
+            membership is None
+            or membership.get("status") != "active"
             or membership.get("principal_id") != str(principal_id)
-            or membership.get("expires_at") is not None and membership["expires_at"] <= datetime.now(UTC)
+            or membership.get("expires_at") is not None
+            and membership["expires_at"] <= datetime.now(UTC)
             or int(membership.get("authorization_version", 0)) != authorization_version
         ):
             return None
@@ -52,10 +62,14 @@ async def validate_delayed_subject(
         return None
     key = await api_key_store.get_key_state(tenant_id, UUID(str(key_id)))
     if (
-        key is None or key.get("status") != "active" or key.get("application_status") != "active"
-        or not key.get("principal_enabled", False) or key.get("principal_id") != str(principal_id)
+        key is None
+        or key.get("status") != "active"
+        or key.get("application_status") != "active"
+        or not key.get("principal_enabled", False)
+        or key.get("principal_id") != str(principal_id)
         or key.get("application_id") != evidence.get("application_id")
-        or key.get("expires_at") is not None and key["expires_at"] <= datetime.now(UTC)
+        or key.get("expires_at") is not None
+        and key["expires_at"] <= datetime.now(UTC)
         or int(key.get("application_authorization_version", 0)) < authorization_version
     ):
         return None

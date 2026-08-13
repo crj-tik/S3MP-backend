@@ -18,26 +18,28 @@ class FakeFileService:
     def __init__(self, *, cross_tenant_file: bool = False) -> None:
         self.cross_tenant_file = cross_tenant_file
 
-    async def list_files(
-        self, tenant_id: Any, space_id: str, prefix: str
-    ) -> list[dict[str, Any]]:
+    async def list_files(self, tenant_id: Any, space_id: str, prefix: str) -> list[dict[str, Any]]:
         return [{"id": str(uuid4()), "object_key": "docs/readme.txt", "etag": "abc"}]
 
-    async def get_file(
-        self, tenant_id: Any, space_id: str, file_id: str
-    ) -> dict[str, Any]:
+    async def get_file(self, tenant_id: Any, space_id: str, file_id: str) -> dict[str, Any]:
         if self.cross_tenant_file:
             raise ApiError("resource_not_found", "File not found", status_code=404)
         return {"id": file_id, "object_key": "docs/readme.txt", "etag": "abc"}
 
     async def delete_file(
-        self, tenant_id: Any, space_id: str, file_id: str,
+        self,
+        tenant_id: Any,
+        space_id: str,
+        file_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": file_id, "status": "deleted"}
 
     async def create_file_operation(
-        self, tenant_id: Any, space_id: str, body: Any,
+        self,
+        tenant_id: Any,
+        space_id: str,
+        body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "operation_type": body.operation_type, "status": "pending"}
@@ -46,7 +48,10 @@ class FakeFileService:
         return {"id": operation_id, "status": "pending"}
 
     async def create_upload(
-        self, ctx: PrincipalContext, space_id: str, body: Any,
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "object_key": body.object_key, "status": "pending"}
@@ -65,7 +70,10 @@ class FakeFileService:
         return {"url": "https://s3.example.com/presigned", "expires_in": body.ttl_seconds}
 
     async def create_multipart_upload(
-        self, ctx: PrincipalContext, space_id: str, body: Any,
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "object_key": body.object_key, "status": "pending"}
@@ -73,12 +81,12 @@ class FakeFileService:
     async def get_multipart_upload(self, tenant_id: Any, multipart_id: str) -> dict[str, Any]:
         return {"id": multipart_id, "status": "pending"}
 
-    async def abort_multipart_upload(self, tenant_id: Any, multipart_id: str, **kwargs: Any) -> None:
+    async def abort_multipart_upload(
+        self, tenant_id: Any, multipart_id: str, **kwargs: Any
+    ) -> None:
         return None
 
-    async def list_multipart_parts(
-        self, tenant_id: Any, multipart_id: str
-    ) -> list[dict[str, Any]]:
+    async def list_multipart_parts(self, tenant_id: Any, multipart_id: str) -> list[dict[str, Any]]:
         return [{"part_number": 1, "etag": "p1", "content_length": 100}]
 
     async def create_multipart_part(
@@ -142,6 +150,48 @@ async def test_create_file_operation_returns_202() -> None:
     assert response.json()["status"] == "pending"
 
 
+async def test_other_tenant_member_cannot_read_operation_metadata() -> None:
+    class DenyingOperationService(FakeFileService):
+        async def get_file_operation(
+            self, ctx: PrincipalContext, operation_id: str
+        ) -> dict[str, Any]:
+            raise ApiError("permission_denied", "Delegated access is required", status_code=403)
+
+    app = make_app({"file_service": DenyingOperationService()}, context=_ctx())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/v1/file_operations/{uuid4()}")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+    assert "id" not in response.json()
+
+
+async def test_operation_http_response_has_no_internal_fields() -> None:
+    class RedactedOperationService(FakeFileService):
+        async def get_file_operation(
+            self, ctx: PrincipalContext, operation_id: str
+        ) -> dict[str, Any]:
+            # This mirrors the application-service public projection boundary.
+            return {"id": operation_id, "operation_type": "copy", "status": "pending"}
+
+    app = make_app({"file_service": RedactedOperationService()}, context=_ctx())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/v1/file_operations/{uuid4()}")
+
+    assert response.status_code == 200
+    assert not {
+        "tenant_id",
+        "principal_id",
+        "membership_id",
+        "storage_space_id",
+        "provider_target_version",
+        "authorization_version",
+        "authorization_evidence",
+        "lease_owner",
+        "lease_expires_at",
+    }.intersection(response.json())
+
+
 async def test_complete_upload_returns_etag() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -182,7 +232,10 @@ async def test_etag_mismatch_returns_412() -> None:
 
     class EtagConflictFileService(FakeFileService):
         async def delete_file(
-            self, tenant_id: Any, space_id: str, file_id: str,
+            self,
+            tenant_id: Any,
+            space_id: str,
+            file_id: str,
             **kwargs: Any,
         ) -> dict[str, Any]:
             raise ApiError(
@@ -207,7 +260,12 @@ async def test_multipart_part_confirmation_forwards_idempotency_key() -> None:
         key: str | None = None
 
         async def confirm_multipart_part(
-            self, ctx: PrincipalContext, multipart_id: str, part_number: int, body: Any, **kwargs: Any
+            self,
+            tenant_id: Any,
+            multipart_id: str,
+            part_number: int,
+            body: Any,
+            **kwargs: Any,
         ) -> dict[str, Any]:
             self.key = kwargs.get("idempotency_key")
             return {"multipart_id": multipart_id, "part_number": part_number}

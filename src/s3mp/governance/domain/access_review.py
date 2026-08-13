@@ -52,7 +52,7 @@ class AccessReview:
 
 @dataclass(frozen=True, slots=True)
 class ReviewItem:
-    """A single entity under review: a direct binding, group membership, application, or stale grant."""
+    """A direct binding, group membership, application, or stale grant under review."""
 
     id: UUID
     review_id: UUID

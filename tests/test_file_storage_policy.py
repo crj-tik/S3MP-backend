@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -34,22 +35,31 @@ class FakeStore:
     async def head(self, key: str) -> ObjectMetadata | None:
         return self.objects.get(key)
 
-    async def put(self, *args: object) -> ObjectMetadata | None:
-        if len(args) == 4:
-            _, key, body, content_type = args
-            self.objects[str(key)] = ObjectMetadata(str(key), len(body), str(content_type))
-            return None
-        key, body, content_type = args
-        assert isinstance(key, str) and isinstance(body, bytes) and isinstance(content_type, str)
+    async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
         metadata = ObjectMetadata(key, len(body), content_type, etag="multipart-etag-2")
         self.objects[key] = metadata
         return metadata
 
-    async def get(self, bucket: str, key: str) -> bytes:
-        return b"s3mp-storage-probe"
 
-    async def delete(self, bucket: str, key: str) -> None:
+class ProbeStore:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    async def head(self, bucket: str, key: str) -> object:
+        if key not in self.objects:
+            raise FileNotFoundError(key)
+        return self.objects[key]
+
+    async def put(self, bucket: str, key: str, body: bytes, content_type: str) -> object:
+        self.objects[key] = body
+        return None
+
+    async def get(self, bucket: str, key: str) -> bytes:
+        return self.objects[key]
+
+    async def delete(self, bucket: str, key: str) -> object:
         self.objects.pop(key, None)
+        return None
 
 
 class FakeQuota:
@@ -61,7 +71,7 @@ class FakeQuota:
         return byte_count
 
     async def release(self, reservation: object) -> None:
-        self.reserved.remove(int(reservation))
+        self.reserved.remove(cast(int, reservation))
 
 
 @pytest.fixture
@@ -95,7 +105,7 @@ def test_capability_allowlist_is_connection_scoped() -> None:
 
 @pytest.mark.asyncio
 async def test_probes_are_read_only_or_confined_to_test_key() -> None:
-    store = FakeStore()
+    store = ProbeStore()
     assert not await read_probe(store, "bucket", "missing")
     assert await acceptance_prefix_round_trip(store, "bucket", "s3mp-test/probe")
     assert "s3mp-test/probe" not in store.objects

@@ -1,4 +1,4 @@
-"""Typed ports for application services: repositories, authorization, idempotency, quota, audit, object storage, clock, and outbox."""
+"""Typed ports for application-service dependencies and external boundaries."""
 
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -33,6 +33,7 @@ class Clock(Protocol):
 class SystemClock:
     def now(self) -> datetime:
         from datetime import UTC, datetime
+
         return datetime.now(UTC)
 
 
@@ -136,14 +137,10 @@ class ObjectStoragePort(Protocol):
     ) -> dict[str, Any]: ...
 
     @abstractmethod
-    async def presign_get(
-        self, bucket: str, key: str, ttl_seconds: int
-    ) -> str: ...
+    async def presign_get(self, bucket: str, key: str, ttl_seconds: int) -> str: ...
 
     @abstractmethod
-    async def presign_put(
-        self, bucket: str, key: str, ttl_seconds: int
-    ) -> str: ...
+    async def presign_put(self, bucket: str, key: str, ttl_seconds: int) -> str: ...
 
     @abstractmethod
     async def probe(self) -> dict[str, Any]: ...
@@ -182,6 +179,7 @@ class OutboxPort(Protocol):
 @dataclass(frozen=True, slots=True)
 class ServiceContext:
     """Typed boundary passed to every application service."""
+
     tenant_id: UUID
     principal_id: UUID
     membership_id: UUID
