@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import (
@@ -11,6 +11,8 @@ from s3mp.applications.infrastructure.models import (
     ApplicationModel,
     ApplicationOwnerModel,
 )
+from s3mp.audit.infrastructure.models import AuditEventModel
+from s3mp.identity.infrastructure.models import PrincipalModel, PrincipalType
 
 
 def _application(model: ApplicationModel) -> dict[str, object]:
@@ -20,6 +22,7 @@ def _application(model: ApplicationModel) -> dict[str, object]:
         "principal_id": model.principal_id,
         "name": model.name,
         "status": model.status,
+        "authorization_version": model.authorization_version,
         "created_at": model.created_at,
         "updated_at": model.updated_at,
     }
@@ -72,8 +75,19 @@ class SqlAlchemyApplicationStore:
 
     async def create_app(self, tenant_id: UUID, name: str, principal_id: UUID) -> dict[str, object]:
         async with self._sessions.begin() as session:
+            application_principal = PrincipalModel(
+                tenant_id=tenant_id,
+                type=PrincipalType.APPLICATION,
+                display_name=name,
+                enabled=True,
+            )
+            session.add(application_principal)
+            await session.flush()
             model = ApplicationModel(
-                tenant_id=tenant_id, name=name, principal_id=principal_id, status="active"
+                tenant_id=tenant_id,
+                name=name,
+                principal_id=application_principal.id,
+                status="active",
             )
             session.add(model)
             await session.flush()
@@ -147,6 +161,9 @@ class SqlAlchemyApplicationStore:
         pepper_version: int,
         scopes: list[str],
         expires_at: datetime,
+        *,
+        actor_principal_id: UUID | None = None,
+        audit_action: str = "api_key.issued",
     ) -> dict[str, object]:
         async with self._sessions.begin() as session:
             model = ApiKeyModel(
@@ -160,7 +177,25 @@ class SqlAlchemyApplicationStore:
                 status="active",
             )
             session.add(model)
+            await session.execute(
+                update(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id == app_id,
+                )
+                .values(authorization_version=ApplicationModel.authorization_version + 1)
+            )
             await session.flush()
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action=audit_action,
+                    resource_type="api_key",
+                    resource_id=str(model.id),
+                    details={"application_id": str(app_id), "scope_count": len(scopes)},
+                )
+            )
             return _api_key(model)
 
     async def update_key(
@@ -170,6 +205,10 @@ class SqlAlchemyApplicationStore:
         status: str,
         revoked_at: datetime | None,
         last_used_at: datetime | None,
+        *,
+        actor_principal_id: UUID | None = None,
+        audit_action: str | None = None,
+        reason_code: str | None = None,
     ) -> dict[str, object] | None:
         async with self._sessions.begin() as session:
             model = await session.scalar(
@@ -180,10 +219,110 @@ class SqlAlchemyApplicationStore:
             if model is None:
                 return None
             model.status, model.revoked_at, model.last_used_at = status, revoked_at, last_used_at
+            await session.execute(
+                update(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id == model.application_id,
+                )
+                .values(authorization_version=ApplicationModel.authorization_version + 1)
+            )
+            if audit_action:
+                session.add(
+                    AuditEventModel(
+                        tenant_id=tenant_id,
+                        actor_principal_id=actor_principal_id,
+                        action=audit_action,
+                        resource_type="api_key",
+                        resource_id=str(model.id),
+                        details={
+                            "application_id": str(model.application_id),
+                            "reason_code": reason_code or "not_provided",
+                        },
+                    )
+                )
             await session.flush()
             return _api_key(model)
 
+    async def record_security_audit(
+        self,
+        tenant_id: UUID,
+        actor_principal_id: UUID,
+        action: str,
+        resource_type: str,
+        resource_id: str | None,
+        details: dict[str, object],
+    ) -> None:
+        async with self._sessions.begin() as session:
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    details=details,
+                )
+            )
+
+    async def get_key_state(self, tenant_id: UUID, key_id: UUID) -> dict[str, object] | None:
+        """Read non-secret lifecycle state for delayed authorization checks."""
+        async with self._sessions() as session:
+            result = await session.execute(
+                select(ApiKeyModel, ApplicationModel, PrincipalModel)
+                .join(
+                    ApplicationModel,
+                    (ApplicationModel.tenant_id == ApiKeyModel.tenant_id)
+                    & (ApplicationModel.id == ApiKeyModel.application_id),
+                )
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == ApplicationModel.tenant_id)
+                    & (PrincipalModel.id == ApplicationModel.principal_id),
+                )
+                .where(ApiKeyModel.tenant_id == tenant_id, ApiKeyModel.id == key_id)
+            )
+            row = result.one_or_none()
+        if row is None:
+            return None
+        key, application, principal = row
+        return {
+            "status": key.status,
+            "expires_at": key.expires_at,
+            "scopes": list(key.scopes),
+            "application_id": str(application.id),
+            "application_status": application.status,
+            "application_authorization_version": application.authorization_version,
+            "principal_id": str(principal.id),
+            "principal_enabled": principal.enabled,
+        }
+
     async def find_by_key_id(self, key_id: str) -> dict[str, object] | None:
         async with self._sessions() as session:
-            model = await session.scalar(select(ApiKeyModel).where(ApiKeyModel.key_id == key_id))
-        return _api_key(model) if model else None
+            row = await session.execute(
+                select(ApiKeyModel, ApplicationModel, PrincipalModel)
+                .join(
+                    ApplicationModel,
+                    (ApplicationModel.tenant_id == ApiKeyModel.tenant_id)
+                    & (ApplicationModel.id == ApiKeyModel.application_id),
+                )
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == ApplicationModel.tenant_id)
+                    & (PrincipalModel.id == ApplicationModel.principal_id),
+                )
+                .where(ApiKeyModel.key_id == key_id)
+            )
+            result = row.one_or_none()
+        if result is None:
+            return None
+        key, application, principal = result
+        record = _api_key(key)
+        record.update(
+            application_principal_id=str(principal.id),
+            application_status=application.status,
+            application_authorization_version=application.authorization_version,
+            principal_enabled=principal.enabled,
+            principal_type=principal.type.value,
+        )
+        return record

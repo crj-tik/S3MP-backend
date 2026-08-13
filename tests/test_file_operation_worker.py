@@ -1,0 +1,99 @@
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import pytest
+
+from s3mp.authorization.domain.evaluator import Binding, Decision
+from s3mp.files.application.operation_worker import FileOperationWorker
+
+
+class Store:
+    def __init__(self, operation): self.operation, self.finished, self.renewed = operation, [], 0
+    async def claim_operations(self, worker_id, limit=10): return [self.operation]
+    async def finish_operation(self, tenant_id, operation_id, status, reason=None): self.finished.append((status, reason))
+    async def renew_operation_lease(self, tenant_id, operation_id, worker_id): self.renewed += 1; return True
+
+
+class Spaces:
+    async def get_space(self, tenant_id, space_id): return {"root_prefix": "tenant"}
+
+
+class Auth:
+    def __init__(self, allow=True): self.allow = allow
+    async def bindings_for(self, tenant_id, principal_id, storage_space_id, *, subject_kind="human"):
+        return [Binding(uuid4(), permission, Decision.ALLOW if self.allow else Decision.DENY, None, datetime.now(UTC)-timedelta(minutes=1), datetime.now(UTC)+timedelta(minutes=1), "test", storage_space_id) for permission in ("files.read", "files.write", "files.delete")]
+
+
+class Principals:
+    async def get_principal(self, tenant_id, principal_id): return {"enabled": True}
+
+
+class Objects:
+    def __init__(self): self.copies=[]; self.objects={"tenant/a"}
+    async def copy(self, source, destination): self.copies.append((source, destination)); self.objects.add(destination)
+    async def delete(self, key): pass
+    async def head(self, key): return object() if key in self.objects else None
+
+
+class Keys:
+    def __init__(self, active=True): self.active = active
+    async def get_key_state(self, tenant_id, key_id):
+        return {"status": "active" if self.active else "revoked", "application_status": "active", "principal_enabled": True, "principal_id": self.principal_id, "application_id": self.application_id, "expires_at": None, "scopes": ["files.read", "files.write"]}
+
+
+def operation():
+    tenant, principal, space = uuid4(), uuid4(), uuid4()
+    return {"id": str(uuid4()), "tenant_id": str(tenant), "principal_id": str(principal), "storage_space_id": str(space), "operation_type": "copy", "source_key": "a", "destination_key": "b", "keys": [], "authorization_version": 1, "authorization_evidence": {"subject_kind": "human"}}
+
+
+@pytest.mark.asyncio
+async def test_worker_executes_authorized_copy():
+    record, store, objects = operation(), None, Objects()
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
+    assert objects.copies == [("tenant/a", "tenant/b")]
+    assert store.finished == [("succeeded", None)]
+
+
+@pytest.mark.asyncio
+async def test_worker_cancels_revoked_permission_before_provider_call():
+    record, store, objects = operation(), None, Objects()
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(False), Principals(), objects).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("cancelled", "authorization_revoked")]
+
+
+@pytest.mark.asyncio
+async def test_worker_cancels_revoked_api_key_before_provider_call():
+    record, store, objects = operation(), None, Objects()
+    record["authorization_evidence"] = {"subject_kind": "application", "api_key_id": str(uuid4()), "application_id": str(uuid4()), "api_key_scopes": ["files.read", "files.write"]}
+    keys = Keys(False)
+    keys.principal_id, keys.application_id = record["principal_id"], record["authorization_evidence"]["application_id"]
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects, keys).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("cancelled", "api_key_inactive")]
+
+
+@pytest.mark.asyncio
+async def test_worker_recovers_after_move_provider_success_before_db_commit():
+    record, objects = operation(), Objects()
+    record["operation_type"] = "move"
+    objects.objects = {"tenant/b"}
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("succeeded", None)]
+
+
+@pytest.mark.asyncio
+async def test_move_delete_failure_is_partial_failure():
+    class DeleteFails(Objects):
+        async def delete(self, key): raise RuntimeError("provider unavailable")
+
+    record, objects = operation(), DeleteFails()
+    record["operation_type"] = "move"
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
+    assert store.finished == [("partial_failure", "source_delete_failed")]

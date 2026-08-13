@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    CheckConstraint,
     JSON,
     DateTime,
     ForeignKeyConstraint,
@@ -28,6 +29,7 @@ class ApplicationModel(Base):
             ondelete="CASCADE",
         ),
         Index("ix_application_tenant_status", "tenant_id", "status"),
+        CheckConstraint("authorization_version >= 1", name="ck_application_authorization_version_positive"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -35,6 +37,7 @@ class ApplicationModel(Base):
     principal_id: Mapped[UUID] = mapped_column(nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    authorization_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

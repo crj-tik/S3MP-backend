@@ -90,22 +90,22 @@ class AddGroupMemberBody(_Strict):
 Context = Annotated[PrincipalContext, Depends(principal_context)]
 
 
-def _cursor(value: str | None, context: PrincipalContext) -> UUID | None:
+def _cursor(value: str | None, context: PrincipalContext, *, query: str) -> UUID | None:
     if value is None:
         return None
     position = CursorCodec(b"s3mp-management-cursor-key-v1").decode(
-        value, context.tenant_id, context.principal_id, context.authorization_version
+        value, context.tenant_id, context.principal_id, context.authorization_version, query=query
     )
     return UUID(position)
 
 
 def _page(
-    items: list[dict[str, object]], position: UUID | None, context: PrincipalContext
+    items: list[dict[str, object]], position: UUID | None, context: PrincipalContext, *, query: str
 ) -> dict[str, object]:
     return {
         "items": items,
         "next_cursor": CursorCodec(b"s3mp-management-cursor-key-v1").encode(
-            context.tenant_id, context.principal_id, context.authorization_version, str(position)
+            context.tenant_id, context.principal_id, context.authorization_version, str(position), query=query
         )
         if position
         else None,
@@ -123,8 +123,8 @@ async def list_users(
     service: Annotated[object, identity_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, next_position = await service.list_users(context, cursor=_cursor(cursor, context))  # type: ignore[union-attr]
-    return _page(items, next_position, context)
+    items, next_position = await service.list_users(context, cursor=_cursor(cursor, context, query="users"))  # type: ignore[union-attr]
+    return _page(items, next_position, context, query="users")
 
 
 @router.get("/users/{user_id}", response_model=UserResponse, operation_id="get_user")
@@ -142,8 +142,8 @@ async def list_members(
     service: Annotated[object, identity_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, next_position = await service.list_members(context, cursor=_cursor(cursor, context))  # type: ignore[union-attr]
-    return _page(items, next_position, context)
+    items, next_position = await service.list_members(context, cursor=_cursor(cursor, context, query="members"))  # type: ignore[union-attr]
+    return _page(items, next_position, context, query="members")
 
 
 @router.post(
@@ -196,9 +196,9 @@ async def list_group_members(
     cursor: str | None = Query(default=None),
 ) -> object:
     items, next_position = await service.list_group_members(
-        context, group_id, cursor=_cursor(cursor, context)
+        context, group_id, cursor=_cursor(cursor, context, query=f"group_members:{group_id}")
     )  # type: ignore[union-attr]
-    return _page(items, next_position, context)
+    return _page(items, next_position, context, query=f"group_members:{group_id}")
 
 
 @router.post("/groups/{group_id}/members", status_code=204, operation_id="add_group_member")

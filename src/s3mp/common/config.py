@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     api_key_pepper_file: Path | None = None
     api_key_pepper_version: int = Field(default=1, ge=1)
     readiness_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+    worker_poll_seconds: float = Field(default=5.0, gt=0, le=300)
+    worker_batch_size: int = Field(default=10, ge=1, le=500)
+    worker_max_attempts: int = Field(default=5, ge=1, le=100)
+    worker_lease_seconds: int = Field(default=60, ge=15, le=3600)
+    worker_retention_days: int = Field(default=30, ge=1, le=3650)
 
     @model_validator(mode="after")
     def validate_secret_sources(self) -> Self:

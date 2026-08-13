@@ -15,6 +15,7 @@ from s3mp.authorization.infrastructure.models import (
     RoleModel,
     RolePermissionModel,
 )
+from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.common.api.etag import etag_value
 from s3mp.identity.infrastructure.models import (
     MembershipModel,
@@ -71,7 +72,7 @@ class SqlAlchemyIdentityAdminStore:
             if cursor is not None:
                 statement = statement.where(UserModel.id > cursor)
             rows = (await session.scalars(statement)).all()
-            return [_user_dict(row) for row in rows[:limit]], rows[limit].id if len(
+            return [_user_dict(row) for row in rows[:limit]], rows[limit - 1].id if len(
                 rows
             ) > limit else None
 
@@ -150,7 +151,7 @@ class SqlAlchemyIdentityAdminStore:
             )
             return (
                 [_membership_dict(row, users.get(row.user_id)) for row in rows[:limit]],
-                rows[limit].id if len(rows) > limit else None,
+                rows[limit - 1].id if len(rows) > limit else None,
             )
 
     async def update_member(
@@ -205,7 +206,7 @@ class SqlAlchemyIdentityAdminStore:
             rows = (await session.scalars(statement)).all()
             return (
                 [await self._group_projection(session, row) for row in rows[:limit]],
-                rows[limit].id if len(rows) > limit else None,
+                rows[limit - 1].id if len(rows) > limit else None,
             )
 
     async def get_group(self, tenant_id: UUID, group_id: UUID) -> dict[str, Any] | None:
@@ -314,7 +315,7 @@ class SqlAlchemyIdentityAdminStore:
             )
             return (
                 [_membership_dict(member, users.get(member.user_id)) for member in rows[:limit]],
-                rows[limit].id if len(rows) > limit else None,
+                rows[limit - 1].id if len(rows) > limit else None,
             )
 
     async def add_group_member(self, tenant_id: UUID, group_id: UUID, membership_id: UUID) -> bool:
@@ -389,7 +390,7 @@ class SqlAlchemyIdentityAdminStore:
             rows = (await session.scalars(statement)).all()
             return (
                 [await self._role_projection(session, row) for row in rows[:limit]],
-                rows[limit].id if len(rows) > limit else None,
+                rows[limit - 1].id if len(rows) > limit else None,
             )
 
     async def get_role(self, tenant_id: UUID, role_id: UUID) -> dict[str, Any] | None:
@@ -458,7 +459,7 @@ class SqlAlchemyIdentityAdminStore:
             rows = (await session.scalars(statement)).all()
             return (
                 [await self._binding_projection(session, row) for row in rows[:limit]],
-                rows[limit].id if len(rows) > limit else None,
+                rows[limit - 1].id if len(rows) > limit else None,
             )
 
     async def get_role_binding(self, tenant_id: UUID, binding_id: UUID) -> dict[str, Any] | None:
@@ -699,6 +700,14 @@ class SqlAlchemyIdentityAdminStore:
             return
         if principal.type != PrincipalType.GROUP:
             await self._bump_membership_version(session, tenant_id, principal_id)
+            await session.execute(
+                update(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.principal_id == principal_id,
+                )
+                .values(authorization_version=ApplicationModel.authorization_version + 1)
+            )
             return
         group_id = await session.scalar(
             select(GroupModel.id).where(
@@ -716,6 +725,14 @@ class SqlAlchemyIdentityAdminStore:
         ).all()
         for member_principal_id in members:
             await self._bump_membership_version(session, tenant_id, member_principal_id)
+            await session.execute(
+                update(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.principal_id == member_principal_id,
+                )
+                .values(authorization_version=ApplicationModel.authorization_version + 1)
+            )
 
     async def _group_projection(self, session: AsyncSession, row: GroupModel) -> dict[str, Any]:
         count = await session.scalar(

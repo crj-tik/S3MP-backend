@@ -5,11 +5,13 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from _infrastructure import delete_tenant, real_engine, real_session_factory, seed_tenant
 from s3mp.applications.infrastructure.models import ApiKeyModel, ApplicationModel
 from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
+from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.identity.infrastructure.models import PrincipalModel, PrincipalType
 
 
@@ -132,3 +134,49 @@ async def test_list_keys_is_tenant_scoped(engine: AsyncEngine) -> None:
     finally:
         await delete_tenant(engine, tenant_a)
         await delete_tenant(engine, tenant_b)
+
+
+async def test_key_lifecycle_audit_is_redacted_and_atomic(engine: AsyncEngine) -> None:
+    factory = real_session_factory(engine)
+    store = SqlAlchemyApplicationStore(factory)
+    tenant_id = uuid4()
+    await seed_tenant(engine, tenant_id)
+    try:
+        async with factory() as session:
+            owner_id = UUID(await _seed_principal(session, tenant_id))
+            await session.commit()
+        application = await store.create_app(tenant_id, "audited", owner_id)
+        key = await store.create_key(
+            tenant_id,
+            UUID(str(application["id"])),
+            "sk_audit",
+            b"secret-digest-must-not-leak",
+            1,
+            ["files.read"],
+            datetime.now(UTC) + timedelta(days=1),
+            actor_principal_id=owner_id,
+        )
+        await store.update_key(
+            tenant_id,
+            UUID(str(key["id"])),
+            "revoked",
+            datetime.now(UTC),
+            None,
+            actor_principal_id=owner_id,
+            audit_action="api_key.revoked",
+            reason_code="operator_requested",
+        )
+        async with factory() as session:
+            events = list(
+                (await session.scalars(
+                    select(AuditEventModel).where(
+                        AuditEventModel.tenant_id == tenant_id,
+                        AuditEventModel.resource_id == str(key["id"]),
+                    )
+                )).all()
+            )
+        assert [event.action for event in events] == ["api_key.issued", "api_key.revoked"]
+        assert "secret" not in str([event.details for event in events]).lower()
+        assert events[1].details["reason_code"] == "operator_requested"
+    finally:
+        await delete_tenant(engine, tenant_id)

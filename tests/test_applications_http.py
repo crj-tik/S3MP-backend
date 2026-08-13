@@ -18,21 +18,19 @@ class FakeApplicationService:
         self.create_calls = 0
 
     async def list_apps(
-        self, tenant_id: Any, limit: int = 50, cursor: str | None = None
+        self, context: Any, limit: int = 50, cursor: str | None = None
     ) -> tuple[list[dict[str, Any]], str | None]:
         return ([{"id": str(uuid4()), "name": "app-1", "status": "active"}], None)
 
-    async def get_app(self, tenant_id: Any, app_id: Any) -> dict[str, Any]:
+    async def get_app(self, context: Any, app_id: Any) -> dict[str, Any]:
         return {"id": str(app_id), "name": "app-1", "status": "active"}
 
-    async def create_app(
-        self, tenant_id: Any, name: str, principal_id: Any
-    ) -> dict[str, Any]:
+    async def create_app(self, context: Any, name: str) -> dict[str, Any]:
         self.create_calls += 1
         return {"id": str(uuid4()), "name": name, "status": "active"}
 
     async def update_app(
-        self, tenant_id: Any, app_id: Any, name: str | None
+        self, context: Any, app_id: Any, name: str | None
     ) -> dict[str, Any]:
         return {"id": str(app_id), "name": name or "renamed", "status": "active"}
 
@@ -42,12 +40,12 @@ class FakeApiKeyService:
         self.issued = 0
 
     async def list_keys(
-        self, tenant_id: Any, app_id: Any, limit: int = 50, cursor: str | None = None
+        self, context: Any, app_id: Any, limit: int = 50, cursor: str | None = None
     ) -> tuple[list[dict[str, Any]], str | None]:
         return ([{"id": str(uuid4()), "key_id": "sk_test", "status": "active"}], None)
 
     async def issue(
-        self, tenant_id: Any, app_id: Any, scopes: list[str], ttl_days: int = 90
+        self, context: Any, app_id: Any, scopes: list[str], ttl_days: int = 90
     ) -> dict[str, Any]:
         self.issued += 1
         return {
@@ -59,12 +57,10 @@ class FakeApiKeyService:
             "status": "active",
         }
 
-    async def get_key(self, tenant_id: Any, key_id: Any) -> dict[str, Any]:
+    async def get_key(self, context: Any, key_id: Any) -> dict[str, Any]:
         return {"id": str(key_id), "key_id": "sk_test", "status": "active"}
 
-    async def rotate(
-        self, tenant_id: Any, key_id: Any, overlap_seconds: int = 300
-    ) -> dict[str, Any]:
+    async def rotate(self, context: Any, key_id: Any, overlap_seconds: int = 300) -> dict[str, Any]:
         return {
             "id": str(uuid4()),
             "key_id": "sk_rotated",
@@ -73,7 +69,7 @@ class FakeApiKeyService:
             "status": "active",
         }
 
-    async def revoke(self, tenant_id: Any, key_id: Any, reason: str) -> dict[str, Any]:
+    async def revoke(self, context: Any, key_id: Any, reason: str) -> dict[str, Any]:
         return {"id": str(key_id), "status": "revoked", "reason": reason}
 
 

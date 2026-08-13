@@ -62,6 +62,10 @@ class AuthorizedFileCommand:
 
         # 3. Authorize
         now = datetime.now(UTC)
+        if ctx.subject_kind == "application" and (
+            ctx.api_key_scopes is None or action not in ctx.api_key_scopes
+        ):
+            raise ApiError("permission_denied", "API key scope does not allow this action", status_code=403)
         decision = evaluate(action, bindings, object_key=rel, now=now)
 
         if decision.decision is not Decision.ALLOW:
@@ -81,6 +85,9 @@ class AuthorizedFileCommand:
             "evaluated_at": now.isoformat(),
             "authorization_version": ctx.authorization_version,
             "subject_kind": ctx.subject_kind,
+            "application_id": str(ctx.application_id) if ctx.application_id else None,
+            "api_key_id": str(ctx.api_key_id) if ctx.api_key_id else None,
+            "api_key_scopes": sorted(ctx.api_key_scopes or ()),
         }
 
         # 4. Compute idempotency fingerprint

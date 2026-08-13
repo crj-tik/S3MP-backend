@@ -40,7 +40,7 @@ class IdempotentApplicationService:
         return {"id": str(app_id), "name": "app", "status": "active"}
 
     async def create_app(
-        self, tenant_id: Any, name: str, principal_id: Any
+        self, context: PrincipalContext, name: str
     ) -> dict[str, Any]:
         if self._first_name is None:
             self._first_name = name

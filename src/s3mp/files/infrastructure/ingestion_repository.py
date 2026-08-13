@@ -225,6 +225,16 @@ class SqlAlchemyIngestionStore:
             rows = await session.scalars(stmt.order_by(FileIngestionRecordModel.created_at))
             return [_ingestion_dict(row) for row in rows]
 
+    async def reconciliation_attempt_count(self, tenant_id: UUID, ingestion_id: UUID) -> int:
+        async with self._sf() as session:
+            return int(await session.scalar(
+                select(func.count()).select_from(FileIngestionEventModel).where(
+                    FileIngestionEventModel.tenant_id == tenant_id,
+                    FileIngestionEventModel.ingestion_record_id == ingestion_id,
+                    FileIngestionEventModel.event_type == IngestionEventType.RECONCILIATION_STARTED.value,
+                )
+            ) or 0)
+
     # ── Provider result ──────────────────────────────────────────────────────
 
     async def record_provider_result(
@@ -383,6 +393,16 @@ class SqlAlchemyIngestionStore:
 
         async with self._sf.begin() as session:
             row = await _lock_ingestion_row(session, tenant_id, ingestion_id)
+            if row.status == status.value and status is IngestionStatus.RECONCILIATION_REQUIRED:
+                session.add(
+                    FileIngestionEventModel(
+                        ingestion_record_id=ingestion_id,
+                        tenant_id=tenant_id,
+                        event_type=IngestionEventType.RECONCILIATION_STARTED.value,
+                        details={"reason": reason, **(details or {})},
+                    )
+                )
+                return _ingestion_dict(row)
             _validate_transition(row, status)
 
             row.status = status.value

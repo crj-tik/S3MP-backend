@@ -1,5 +1,6 @@
 """SqlAlchemyFileStore tenant-isolation tests against real postgresql."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from uuid import UUID, uuid4
 
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from _infrastructure import delete_tenant, real_engine, real_session_factory, seed_tenant
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
-from s3mp.files.infrastructure.models import FileObjectModel
+from s3mp.files.infrastructure.models import FileObjectModel, FileOperationModel
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
 from s3mp.identity.infrastructure.models import PrincipalModel, PrincipalType
 from s3mp.storage.infrastructure.models import StorageConnectionModel, StorageSpaceModel
@@ -161,5 +162,52 @@ async def test_delete_queues_recoverable_intent_only_after_etag_match(engine: As
         assert audit is not None and "private/deleteme.txt" not in str(audit.details)
         await store.finalize_file_delete(tenant_id, file_obj.id)
         assert not [row for row in await store.list_pending_deletions() if row["id"] == str(file_obj.id)]
+    finally:
+        await delete_tenant(engine, tenant_id)
+
+
+async def test_concurrent_workers_claim_operation_once_and_retry_exhausts(engine: AsyncEngine) -> None:
+    factory = real_session_factory(engine)
+    store = SqlAlchemyFileStore(factory)
+    tenant_id, principal_id = uuid4(), uuid4()
+    await seed_tenant(engine, tenant_id)
+    try:
+        async with factory() as session:
+            space_id, _ = await _seed_space(session, tenant_id)
+            session.add(PrincipalModel(
+                id=principal_id, tenant_id=tenant_id, type=PrincipalType.USER,
+                display_name="Worker",
+            ))
+            await session.flush()
+            operation = FileOperationModel(
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                storage_space_id=space_id,
+                operation_type="copy",
+                source_key="source",
+                destination_key="destination",
+                keys=[],
+                status="pending",
+                idempotency_key="worker-claim",
+                authorization_evidence={"subject_kind": "human"},
+            )
+            session.add(operation)
+            await session.commit()
+            operation_id = operation.id
+        first, second = await asyncio.gather(
+            store.claim_operations("worker-a", 1), store.claim_operations("worker-b", 1)
+        )
+        assert len(first) + len(second) == 1
+        async with factory.begin() as session:
+            row = await session.get(FileOperationModel, operation_id)
+            assert row is not None
+            row.status = "running"
+            row.next_retry_at = None
+            row.attempt_count = 5
+        await store.finish_operation(tenant_id, operation_id, "retry_wait", "provider")
+        final = await store.get_operation(tenant_id, operation_id)
+        assert final is not None
+        assert final["status"] == "failed"
+        assert final["failure_reason"] == "retry_exhausted"
     finally:
         await delete_tenant(engine, tenant_id)

@@ -204,12 +204,17 @@ def test_application_context_has_no_synthetic_membership() -> None:
 
 @pytest.mark.asyncio
 async def test_api_key_resolution_produces_application_subject() -> None:
-    tenant_id, application_id = uuid4(), uuid4()
+    tenant_id, application_id, principal_id, key_id = uuid4(), uuid4(), uuid4(), uuid4()
 
     class ApiKeyService:
         async def authenticate(self, header: str):
             assert header == "S3MP-Key key-id.secret"
-            return tenant_id, uuid4(), {"application_id": application_id, "authorization_version": 7}
+            return tenant_id, key_id, {
+                "application_id": application_id,
+                "application_principal_id": principal_id,
+                "application_authorization_version": 7,
+                "scopes": ["files.read"],
+            }
 
     class App:
         class State:
@@ -222,4 +227,11 @@ async def test_api_key_resolution_produces_application_subject() -> None:
 
     context = await _resolve_api_key(Request(), "S3MP-Key key-id.secret")
 
-    assert context == PrincipalContext.for_application(tenant_id, application_id, 7)
+    assert context == PrincipalContext.for_application(
+        tenant_id,
+        principal_id,
+        7,
+        application_id=application_id,
+        api_key_id=key_id,
+        api_key_scopes=frozenset({"files.read"}),
+    )

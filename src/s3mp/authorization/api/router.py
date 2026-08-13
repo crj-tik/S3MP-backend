@@ -144,23 +144,23 @@ class AuthorizationDecisionResponse(_Strict):
     sources: list[DecisionSource]
 
 
-def _cursor(value: str | None, context: PrincipalContext) -> UUID | None:
+def _cursor(value: str | None, context: PrincipalContext, *, query: str) -> UUID | None:
     if value is None:
         return None
     return UUID(
         CursorCodec(b"s3mp-management-cursor-key-v1").decode(
-            value, context.tenant_id, context.principal_id, context.authorization_version
+            value, context.tenant_id, context.principal_id, context.authorization_version, query=query
         )
     )
 
 
 def _page(
-    items: list[dict[str, object]], position: UUID | None, context: PrincipalContext
+    items: list[dict[str, object]], position: UUID | None, context: PrincipalContext, *, query: str
 ) -> dict[str, object]:
     return {
         "items": items,
         "next_cursor": CursorCodec(b"s3mp-management-cursor-key-v1").encode(
-            context.tenant_id, context.principal_id, context.authorization_version, str(position)
+            context.tenant_id, context.principal_id, context.authorization_version, str(position), query=query
         )
         if position
         else None,
@@ -173,8 +173,8 @@ async def list_groups(
     service: Annotated[object, authorization_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, position = await service.list_groups(context, cursor=_cursor(cursor, context))  # type: ignore[union-attr]
-    return _page(items, position, context)
+    items, position = await service.list_groups(context, cursor=_cursor(cursor, context, query="groups"))  # type: ignore[union-attr]
+    return _page(items, position, context, query="groups")
 
 
 @router.post("/groups", response_model=GroupResponse, status_code=201, operation_id="create_group")
@@ -223,8 +223,8 @@ async def list_roles(
     service: Annotated[object, authorization_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, position = await service.list_roles(context, cursor=_cursor(cursor, context))  # type: ignore[union-attr]
-    return _page(items, position, context)
+    items, position = await service.list_roles(context, cursor=_cursor(cursor, context, query="roles"))  # type: ignore[union-attr]
+    return _page(items, position, context, query="roles")
 
 
 @router.post("/roles", response_model=RoleResponse, status_code=201, operation_id="create_role")
@@ -266,9 +266,9 @@ async def list_role_bindings(
     cursor: str | None = Query(default=None),
 ) -> object:
     items, position = await service.list_role_bindings(
-        context, principal_id, cursor=_cursor(cursor, context)
+        context, principal_id, cursor=_cursor(cursor, context, query=f"role_bindings:{principal_id or ''}")
     )  # type: ignore[union-attr]
-    return _page(items, position, context)
+    return _page(items, position, context, query=f"role_bindings:{principal_id or ''}")
 
 
 @router.post(

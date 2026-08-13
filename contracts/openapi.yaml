@@ -256,12 +256,15 @@ paths:
       tags: [Applications]
       operationId: list_applications
       x-permission: applications.read
+      security: [{session_cookie: []}]
+      description: Human management endpoint. API-Key credentials are rejected with `403 permission_denied`.
       responses:
         '200': {description: Application page, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationPage'}}}}
     post:
       tags: [Applications]
       operationId: create_application
       x-permission: applications.manage
+      security: [{session_cookie: []}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationCreate'}}}}
       responses:
         '201': {description: Application created, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
@@ -272,6 +275,7 @@ paths:
       tags: [Applications]
       operationId: get_application
       x-permission: applications.read
+      security: [{session_cookie: []}]
       responses:
         '200': {description: Application, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -279,6 +283,7 @@ paths:
       tags: [Applications]
       operationId: update_application
       x-permission: applications.manage
+      security: [{session_cookie: []}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationUpdate'}}}}
       responses:
         '200': {description: Updated application, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
@@ -289,6 +294,7 @@ paths:
       tags: [API Keys]
       operationId: list_api_keys
       x-permission: api_keys.read
+      security: [{session_cookie: []}]
       responses:
         '200': {description: Key metadata page, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyPage'}}}}
     post:
@@ -296,6 +302,7 @@ paths:
       operationId: create_api_key
       summary: Issue a key; secret appears only in this response
       x-permission: api_keys.manage
+      security: [{session_cookie: []}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyCreate'}}}}
       responses:
         '201': {description: One-time key credential, content: {application/json: {schema: {$ref: '#/components/schemas/IssuedApiKey'}, examples: {success: {$ref: '#/components/examples/ApiKeyIssued'}}}}}
@@ -306,6 +313,7 @@ paths:
       tags: [API Keys]
       operationId: get_api_key
       x-permission: api_keys.read
+      security: [{session_cookie: []}]
       responses:
         '200': {description: Non-secret key metadata, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKey'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -317,6 +325,7 @@ paths:
       deprecated: true
       summary: Always rejects because secrets are one-time values
       x-permission: api_keys.read
+      security: [{session_cookie: []}]
       responses:
         '410': {description: Secret cannot be retrieved, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {expired: {$ref: '#/components/examples/SecretGone'}}}}}
   /api/v1/api_keys/{api_key_id}/rotations:
@@ -325,6 +334,7 @@ paths:
       tags: [API Keys]
       operationId: rotate_api_key
       x-permission: api_keys.manage
+      security: [{session_cookie: []}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [overlap_seconds], properties: {overlap_seconds: {type: integer, minimum: 0, maximum: 86400}}}}}}
       responses:
         '201': {description: Replacement one-time credential, content: {application/json: {schema: {$ref: '#/components/schemas/IssuedApiKey'}}}}
@@ -335,6 +345,7 @@ paths:
       tags: [API Keys]
       operationId: revoke_api_key
       x-permission: api_keys.manage
+      security: [{session_cookie: []}]
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [reason], properties: {reason: {type: string, minLength: 1, maxLength: 500}}}}}}
       responses:
         '200': {description: Revoked key and residual presigned exposure, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyRevocation'}}}}
@@ -431,6 +442,7 @@ paths:
       tags: [Files]
       operationId: create_file_operation
       summary: Copy, move, or fixed-scope bulk-delete objects
+      description: Returns durable work. Poll the operation endpoint until a terminal status is reached.
       x-permission: files.copy
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationCreateRuntime'}}}}
@@ -442,6 +454,7 @@ paths:
     get:
       tags: [Files]
       operationId: get_file_operation
+      summary: Read durable worker and reconciliation outcome
       responses:
         '200': {description: Operation state, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationRuntime'}}}}
         '404': {$ref: '#/components/responses/NotFound'}
@@ -803,7 +816,7 @@ components:
     FileOperationCreateRuntime: {type: object, additionalProperties: false, required: [operation_type], properties: {operation_type: {type: string, enum: [copy, move, delete]}, source_key: {type: [string, 'null'], maxLength: 1024}, destination_key: {type: [string, 'null'], maxLength: 1024}, keys: {type: [array, 'null'], items: {$ref: '#/components/schemas/ObjectKey'}}}}
     FileOperationItem: {type: object, additionalProperties: false, required: [source_key, status], properties: {source_key: {$ref: '#/components/schemas/ObjectKey'}, destination_key: {oneOf: [{$ref: '#/components/schemas/ObjectKey'}, {type: "null"}]}, status: {type: string, enum: [pending, succeeded, failed, copied_source_delete_failed]}, error: {oneOf: [{$ref: '#/components/schemas/Error'}, {type: "null"}]}}}
     FileOperation: {type: object, additionalProperties: false, required: [id, type, status, created_at, updated_at, items], properties: {id: {$ref: '#/components/schemas/Id'}, type: {type: string, enum: [copy, move, bulk_delete]}, status: {type: string, enum: [pending, running, succeeded, failed, partial_failure]}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, items: {type: array, items: {$ref: '#/components/schemas/FileOperationItem'}}}}
-    FileOperationRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, operation_type, status, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, operation_type: {type: string, enum: [copy, move, delete]}, status: {type: string}, source_key: {type: [string, 'null']}, destination_key: {type: [string, 'null']}, failure_reason: {type: [string, 'null']}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
+    FileOperationRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, operation_type, status, attempt_count, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, operation_type: {type: string, enum: [copy, move, delete]}, status: {type: string, enum: [pending, running, retry_wait, succeeded, failed, partial_failure, cancelled]}, source_key: {type: [string, 'null']}, destination_key: {type: [string, 'null']}, failure_reason: {type: [string, 'null'], description: Redacted stable reason code.}, attempt_count: {type: integer, minimum: 0}, next_retry_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]}, completed_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
     UploadCreate: {type: object, additionalProperties: false, required: [object_key, size_bytes, content_type, mode], properties: {object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 0}, content_type: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}, mode: {type: string, enum: [auto, proxy, direct]}, overwrite: {type: boolean, default: false}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}}}
     UploadCreateRuntime: {type: object, additionalProperties: false, required: [object_key, content_length, content_type], properties: {object_key: {type: string, minLength: 1, maxLength: 1024}, content_length: {type: integer, minimum: 0}, content_type: {type: string, minLength: 1, maxLength: 255}, checksum: {type: [string, 'null'], maxLength: 512}, direct_requested: {type: boolean, default: false}}}
     UploadSessionRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, principal_id, storage_space_id, object_key, content_length, content_type, status, expires_at, ingestion_id], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, principal_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, checksum: {type: [string, 'null']}, status: {type: string, enum: [pending, completed, expired, failed, reconciliation_required]}, expires_at: {$ref: '#/components/schemas/Timestamp'}, ingestion_id: {$ref: '#/components/schemas/Id'}}}
