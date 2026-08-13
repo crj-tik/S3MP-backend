@@ -36,6 +36,7 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "create_application": "applications.manage",
     "get_application": "applications.read",
     "update_application": "applications.manage",
+    "takeover_application": "applications.manage",
     "list_api_keys": "api_keys.read",
     "create_api_key": "api_keys.manage",
     "get_api_key": "api_keys.read",

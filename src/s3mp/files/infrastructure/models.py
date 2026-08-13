@@ -184,6 +184,12 @@ class ProviderMigrationManifestModel(Base):
     record_type: Mapped[str] = mapped_column(String(64), nullable=False)
     record_id: Mapped[UUID] = mapped_column(nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_review")
+    # Provider locations stay internal to the durable migration workflow. They
+    # are never returned by API DTOs or printed by migration commands.
+    source_bucket: Mapped[str | None] = mapped_column(String(255))
+    source_key: Mapped[str | None] = mapped_column(String(1024))
+    target_bucket: Mapped[str | None] = mapped_column(String(255))
+    target_key: Mapped[str | None] = mapped_column(String(1024))
     source_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     target_fingerprint: Mapped[str | None] = mapped_column(String(64))
     reason: Mapped[str | None] = mapped_column(String(128))

@@ -10,6 +10,7 @@ from s3mp.common.errors import ApiError
 from s3mp.common.middleware import current_request_id
 from s3mp.files.application.auth_guard import FileAuthGuard
 from s3mp.files.application.authorized_command import AuthorizedFileCommand
+from s3mp.files.application.delayed_subject_validator import validate_delayed_subject
 from s3mp.files.domain.ingestion import IngestionStatus
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
@@ -404,58 +405,24 @@ class FileApplicationService:
         return reconciled
 
     async def _revalidate_ingestion(self, record: dict[str, Any]) -> bool:
-        if self.principal_store is None or self.authorization_store is None:
+        if self.authorization_store is None:
             return False
         tenant_id = UUID(record["tenant_id"])
         principal_id = UUID(record["acting_principal_id"])
-        principal = await self.principal_store.get_principal(tenant_id, principal_id)
-        if principal is None or not principal.get("enabled", False):
-            return False
         evidence = record.get("authorization_evidence") or {}
-        subject_kind = str(evidence.get("subject_kind", "human"))
-        if subject_kind != "application":
-            membership_id = record.get("membership_id")
-            if not membership_id:
-                return False
-            membership = await self.principal_store.get_membership_state(
-                tenant_id, UUID(str(membership_id))
-            )
-            if (
-                membership is None
-                or membership.get("status") != "active"
-                or membership.get("principal_id") != str(principal_id)
-                or membership.get("expires_at") is not None
-                and membership["expires_at"] <= datetime.now(UTC)
-                or int(membership.get("authorization_version", 0)) != int(record["authorization_version"])
-            ):
-                return False
-        scopes: frozenset[str] | None = None
-        if evidence.get("api_key_id"):
-            if self.api_key_state_store is None:
-                return False
-            key = await self.api_key_state_store.get_key_state(
-                tenant_id, UUID(str(evidence["api_key_id"]))
-            )
-            if (
-                key is None
-                or key.get("status") != "active"
-                or key.get("application_status") != "active"
-                or not key.get("principal_enabled", False)
-                or key.get("principal_id") != str(principal_id)
-                or key.get("application_id") != evidence.get("application_id")
-                or (key.get("expires_at") is not None and key["expires_at"] <= datetime.now(UTC))
-            ):
-                return False
-            if int(key.get("application_authorization_version", 0)) < int(record["authorization_version"]):
-                return False
-            scopes = frozenset(str(value) for value in key.get("scopes") or ())
-            if "files.write" not in scopes:
-                return False
+        subject = await validate_delayed_subject(
+            principal_store=self.principal_store, api_key_store=self.api_key_state_store,
+            tenant_id=tenant_id, principal_id=principal_id, membership_id=record.get("membership_id"),
+            authorization_version=int(record["authorization_version"]), evidence=evidence,
+            required_permission="files.write",
+        )
+        if subject is None:
+            return False
         bindings = await self.authorization_store.bindings_for(
             tenant_id,
             principal_id,
             UUID(record["storage_space_id"]),
-            subject_kind=subject_kind,
+            subject_kind=subject.subject_kind,
         )
         return evaluate("files.write", bindings, object_key=record["relative_key"]).decision == Decision.ALLOW
 
@@ -503,40 +470,18 @@ class FileApplicationService:
         self, tenant_id: UUID, principal_id: UUID, space_id: UUID, relative_key: str,
         permission: str, authorization_version: int, evidence: dict[str, Any],
     ) -> bool:
-        if self.principal_store is None or self.authorization_store is None:
-            return False
-        principal = await self.principal_store.get_principal(tenant_id, principal_id)
-        if principal is None or not principal.get("enabled", False):
+        if self.authorization_store is None:
             return False
         subject_kind = str(evidence.get("subject_kind", "human"))
-        if subject_kind != "application":
-            membership_id = evidence.get("membership_id")
-            if not membership_id:
-                return False
-            membership = await self.principal_store.get_membership_state(
-                tenant_id, UUID(str(membership_id))
-            )
-            if (
-                membership is None
-                or membership.get("status") != "active"
-                or membership.get("principal_id") != str(principal_id)
-                or membership.get("expires_at") is not None
-                and membership["expires_at"] <= datetime.now(UTC)
-                or int(membership.get("authorization_version", 0)) != authorization_version
-            ):
-                return False
-        scopes = None
-        if evidence.get("api_key_id"):
-            if self.api_key_state_store is None:
-                return False
-            key = await self.api_key_state_store.get_key_state(tenant_id, UUID(str(evidence["api_key_id"])))
-            if key is None or key.get("status") != "active" or key.get("application_status") != "active" or not key.get("principal_enabled", False) or key.get("principal_id") != str(principal_id) or key.get("application_id") != evidence.get("application_id") or (key.get("expires_at") is not None and key["expires_at"] <= datetime.now(UTC)) or int(key.get("application_authorization_version", 0)) < authorization_version:
-                return False
-            scopes = frozenset(str(value) for value in key.get("scopes") or ())
-            if permission not in scopes:
-                return False
+        subject = await validate_delayed_subject(
+            principal_store=self.principal_store, api_key_store=self.api_key_state_store,
+            tenant_id=tenant_id, principal_id=principal_id, membership_id=evidence.get("membership_id"),
+            authorization_version=authorization_version, evidence=evidence, required_permission=permission,
+        )
+        if subject is None:
+            return False
         bindings = await self.authorization_store.bindings_for(
-            tenant_id, principal_id, space_id, subject_kind=subject_kind
+            tenant_id, principal_id, space_id, subject_kind=subject.subject_kind
         )
         return evaluate(permission, bindings, storage_space_id=space_id, object_key=relative_key).decision == Decision.ALLOW
 
@@ -672,8 +617,7 @@ class FileApplicationService:
                     await self._command(ctx, str(space_id), str(key), permission)
             except ApiError as exc:
                 if exc.code == "permission_denied":
-                    # Do not reveal the existence of another subject's task.
-                    raise ApiError("resource_not_found", "File operation not found", status_code=404) from exc
+                    raise ApiError("permission_denied", "Delegated access is required", status_code=403) from exc
                 raise
         return self._public_operation(result)
 

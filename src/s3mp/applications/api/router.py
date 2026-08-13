@@ -1,6 +1,7 @@
 """Applications and API Key HTTP endpoints."""
 
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +24,11 @@ class ApplicationCreate(BaseModel):
 class ApplicationUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, max_length=200)
+
+
+class ApplicationTakeover(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class ApiKeyCreate(BaseModel):
@@ -89,7 +95,7 @@ async def create_application(
 async def get_application(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("get_application")],
-    application_id: str = Path(min_length=1),
+    application_id: UUID,
 ) -> Any:
     return await _app_service(request).get_app(context, application_id)
 
@@ -104,6 +110,16 @@ async def update_application(
     return await _app_service(request).update_app(
         context, application_id, body.name
     )
+
+
+@router.post("/applications/{application_id}/takeover", operation_id="takeover_application")
+async def takeover_application(
+    request: Request,
+    body: ApplicationTakeover,
+    context: Annotated[PrincipalContext, management_permission("takeover_application")],
+    application_id: UUID,
+) -> Any:
+    return await _app_service(request).takeover_app(context, application_id, body.reason)
 
 
 # ── API Keys ──────────────────────────────────────────────────────────────────

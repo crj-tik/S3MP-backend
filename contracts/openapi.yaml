@@ -288,6 +288,21 @@ paths:
       responses:
         '200': {description: Updated application, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/applications/{application_id}/takeover:
+    parameters: [{$ref: '#/components/parameters/ApplicationId'}]
+    post:
+      tags: [Applications]
+      operationId: takeover_application
+      summary: Restore a pending application under the caller's ownership
+      x-permission: applications.manage
+      security: [{session_cookie: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationTakeover'}}}}
+      responses:
+        '200': {description: Application reactivated, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
+        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '422': {$ref: '#/components/responses/ValidationFailed'}
   /api/v1/applications/{application_id}/api_keys:
     parameters: [{$ref: '#/components/parameters/ApplicationId'}]
     get:
@@ -785,9 +800,10 @@ components:
       type: object
       additionalProperties: false
       required: [id, name, status, owners, takeover_required, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, status: {type: string, enum: [active, disabled, takeover_required]}, owners: {type: array, minItems: 1, items: {$ref: '#/components/schemas/OwnerRef'}}, takeover_required: {type: boolean}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
+      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, status: {type: string, enum: [active, disabled, pending_takeover]}, owners: {type: array, minItems: 1, items: {$ref: '#/components/schemas/OwnerRef'}}, takeover_required: {type: boolean}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
     ApplicationCreate: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}}}
     ApplicationUpdate: {type: object, additionalProperties: false, properties: {name: {type: [string, 'null'], maxLength: 200}}}
+    ApplicationTakeover: {type: object, additionalProperties: false, required: [reason], properties: {reason: {type: string, minLength: 1, maxLength: 500}}}
     ApplicationPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Application'}}}}]}
     ApiKey:
       type: object

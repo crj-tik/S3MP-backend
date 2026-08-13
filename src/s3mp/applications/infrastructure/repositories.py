@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import (
@@ -12,7 +12,7 @@ from s3mp.applications.infrastructure.models import (
     ApplicationOwnerModel,
 )
 from s3mp.audit.infrastructure.models import AuditEventModel
-from s3mp.identity.infrastructure.models import PrincipalModel, PrincipalType
+from s3mp.identity.infrastructure.models import MembershipModel, PrincipalModel, PrincipalType
 
 
 def _application(model: ApplicationModel) -> dict[str, object]:
@@ -115,6 +115,48 @@ class SqlAlchemyApplicationStore:
             await session.flush()
             return _application(model)
 
+    async def takeover_app(
+        self, tenant_id: UUID, app_id: UUID, owner_principal_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        """Atomically add the accountable owner and reactivate a contained app."""
+        async with self._sessions.begin() as session:
+            model = await session.scalar(
+                select(ApplicationModel)
+                .where(ApplicationModel.tenant_id == tenant_id, ApplicationModel.id == app_id)
+                .with_for_update()
+            )
+            if model is None:
+                return None
+            if model.status != "pending_takeover":
+                return _application(model)
+
+            owner = await session.scalar(
+                select(ApplicationOwnerModel).where(
+                    ApplicationOwnerModel.tenant_id == tenant_id,
+                    ApplicationOwnerModel.application_id == app_id,
+                    ApplicationOwnerModel.owner_principal_id == owner_principal_id,
+                )
+            )
+            if owner is None:
+                session.add(ApplicationOwnerModel(
+                    tenant_id=tenant_id,
+                    application_id=app_id,
+                    owner_principal_id=owner_principal_id,
+                ))
+            model.status = "active"
+            model.authorization_version += 1
+            session.add(AuditEventModel(
+                tenant_id=tenant_id,
+                actor_principal_id=owner_principal_id,
+                action="application.taken_over",
+                resource_type="application",
+                resource_id=str(app_id),
+                details={"reason_code": reason},
+            ))
+            await session.flush()
+            await session.refresh(model)
+            return _application(model)
+
     async def list_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]:
         async with self._sessions() as session:
             return list(
@@ -127,6 +169,112 @@ class SqlAlchemyApplicationStore:
                     )
                 ).all()
             )
+
+    async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]:
+        """Owners count only when their human membership is currently active."""
+        async with self._sessions() as session:
+            return list((await session.scalars(
+                select(ApplicationOwnerModel.owner_principal_id)
+                .join(MembershipModel, and_(
+                    MembershipModel.tenant_id == ApplicationOwnerModel.tenant_id,
+                    MembershipModel.principal_id == ApplicationOwnerModel.owner_principal_id,
+                ))
+                .join(PrincipalModel, and_(
+                    PrincipalModel.tenant_id == MembershipModel.tenant_id,
+                    PrincipalModel.id == MembershipModel.principal_id,
+                ))
+                .where(
+                    ApplicationOwnerModel.tenant_id == tenant_id,
+                    ApplicationOwnerModel.application_id == app_id,
+                    MembershipModel.status == "active", PrincipalModel.enabled.is_(True),
+                    or_(MembershipModel.expires_at.is_(None), MembershipModel.expires_at > datetime.now().astimezone()),
+                )
+            )).all())
+
+    async def recompute_owner_state_for_principal(self, tenant_id: UUID, owner_principal_id: UUID) -> int:
+        """Atomically contain applications that lost their final active owner."""
+        async with self._sessions.begin() as session:
+            app_ids = list((await session.scalars(select(ApplicationOwnerModel.application_id).where(
+                ApplicationOwnerModel.tenant_id == tenant_id,
+                ApplicationOwnerModel.owner_principal_id == owner_principal_id,
+            ))).all())
+            changed = 0
+            for app_id in app_ids:
+                active_owner = await session.scalar(
+                    select(ApplicationOwnerModel.id)
+                    .join(MembershipModel, and_(
+                        MembershipModel.tenant_id == ApplicationOwnerModel.tenant_id,
+                        MembershipModel.principal_id == ApplicationOwnerModel.owner_principal_id,
+                    ))
+                    .join(PrincipalModel, and_(
+                        PrincipalModel.tenant_id == MembershipModel.tenant_id,
+                        PrincipalModel.id == MembershipModel.principal_id,
+                    ))
+                    .where(
+                        ApplicationOwnerModel.tenant_id == tenant_id,
+                        ApplicationOwnerModel.application_id == app_id,
+                        MembershipModel.status == "active", PrincipalModel.enabled.is_(True),
+                        or_(MembershipModel.expires_at.is_(None), MembershipModel.expires_at > datetime.now().astimezone()),
+                    )
+                )
+                if active_owner is None:
+                    result = await session.execute(update(ApplicationModel).where(
+                        ApplicationModel.tenant_id == tenant_id, ApplicationModel.id == app_id,
+                        ApplicationModel.status == "active",
+                    ).values(status="pending_takeover", authorization_version=ApplicationModel.authorization_version + 1))
+                    if getattr(result, "rowcount", 0):
+                        changed += 1
+                        session.add(AuditEventModel(
+                            tenant_id=tenant_id, actor_principal_id=None,
+                            action="application.ownerless_contained", resource_type="application",
+                            resource_id=str(app_id), details={"reason_code": "no_active_owner"},
+                        ))
+            return changed
+
+    async def scan_ownerless_applications(self, tenant_id: UUID) -> int:
+        """Idempotent governance scan for drift that missed a lifecycle event."""
+        async with self._sessions() as session:
+            app_ids = list((await session.scalars(select(ApplicationModel.id).where(
+                ApplicationModel.tenant_id == tenant_id, ApplicationModel.status == "active"
+            ))).all())
+            owner_ids = {
+                app_id: list((await session.scalars(select(ApplicationOwnerModel.owner_principal_id).where(
+                    ApplicationOwnerModel.tenant_id == tenant_id,
+                    ApplicationOwnerModel.application_id == app_id,
+                ))).all())
+                for app_id in app_ids
+            }
+        changed = 0
+        for owners in owner_ids.values():
+            for owner_id in owners:
+                changed += await self.recompute_owner_state_for_principal(tenant_id, owner_id)
+        # Applications with no owner rows need containment too.
+        async with self._sessions.begin() as session:
+            unowned_ids = list((await session.scalars(
+                select(ApplicationModel.id).where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.status == "active",
+                    ~ApplicationModel.id.in_([
+                        app_id for app_id, owners in owner_ids.items() if owners
+                    ]),
+                )
+            )).all())
+            if unowned_ids:
+                result = await session.execute(update(ApplicationModel).where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id.in_(unowned_ids),
+                    ApplicationModel.status == "active",
+                ).values(status="pending_takeover", authorization_version=ApplicationModel.authorization_version + 1))
+                changed += getattr(result, "rowcount", 0) or 0
+                session.add_all([
+                    AuditEventModel(
+                        tenant_id=tenant_id, actor_principal_id=None,
+                        action="application.ownerless_contained", resource_type="application",
+                        resource_id=str(app_id), details={"reason_code": "no_owner_record"},
+                    )
+                    for app_id in unowned_ids
+                ])
+        return changed
 
     async def list_keys(
         self, tenant_id: UUID, app_id: UUID, limit: int, cursor: str | None

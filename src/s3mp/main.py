@@ -55,6 +55,14 @@ def _known_permissions() -> frozenset[str]:
     )
 
 
+def _delegable_permissions() -> frozenset[str]:
+    catalog_path = Path(__file__).resolve().parents[2] / "contracts" / "permission-catalog.yaml"
+    with catalog_path.open(encoding="utf-8") as stream:
+        catalog = yaml.safe_load(stream) or {}
+    return frozenset(entry["name"] for entry in catalog.get("permissions", [])
+                     if isinstance(entry, dict) and entry.get("delegable", False))
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or get_settings()
 
@@ -115,7 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 principal_store=identity_store,
             )
             authorization_management = AuthorizationManagementService(
-                identity_store, _known_permissions()
+                identity_store, _known_permissions(), _delegable_permissions()
             )
             app.state.authorization_management = authorization_management
             app.state.identity_management = IdentityManagementService(
