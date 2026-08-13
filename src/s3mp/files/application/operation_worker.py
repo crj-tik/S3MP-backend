@@ -3,15 +3,17 @@
 import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
 from s3mp.authorization.domain.evaluator import Decision, evaluate
-from s3mp.files.application.file_service import FileAuthorizationStore, ObjectStorage, StorageSpaceStore
 from s3mp.files.application.delayed_subject_validator import validate_delayed_subject
+from s3mp.files.application.file_service import (
+    FileAuthorizationStore,
+    StorageSpaceStore,
+)
 from s3mp.identity.domain.context import PrincipalContext
-from s3mp.storage.domain.policy import derive_provider_target
+from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
 
 
 class OperationStore(Protocol):
@@ -26,11 +28,19 @@ class OperationStore(Protocol):
 
 class PrincipalStore(Protocol):
     async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None: ...
-    async def get_membership_state(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None: ...
+    async def get_membership_state(
+        self, tenant_id: UUID, membership_id: UUID
+    ) -> dict[str, Any] | None: ...
 
 
 class ApiKeyStateStore(Protocol):
     async def get_key_state(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any] | None: ...
+
+
+class OperationObjectStorage(Protocol):
+    async def head(self, target: ProviderTarget) -> object | None: ...
+    async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> object: ...
+    async def delete(self, target: ProviderTarget) -> None: ...
 
 
 @dataclass(slots=True)
@@ -39,7 +49,7 @@ class FileOperationWorker:
     storage_store: StorageSpaceStore
     authorization_store: FileAuthorizationStore
     principal_store: PrincipalStore
-    object_storage: ObjectStorage
+    object_storage: OperationObjectStorage
     api_key_state_store: ApiKeyStateStore | None = None
 
     async def run_once(self, worker_id: str, limit: int = 10) -> list[str]:
@@ -74,30 +84,47 @@ class FileOperationWorker:
             return "cancelled", "legacy_operation_missing_storage_space"
         evidence = operation.get("authorization_evidence") or {}
         subject = await validate_delayed_subject(
-            principal_store=self.principal_store, api_key_store=self.api_key_state_store,
-            tenant_id=tenant_id, principal_id=principal_id, membership_id=operation.get("membership_id"),
-            authorization_version=int(operation.get("authorization_version", 0)), evidence=evidence,
+            principal_store=self.principal_store,
+            api_key_store=self.api_key_state_store,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            membership_id=operation.get("membership_id"),
+            authorization_version=int(operation.get("authorization_version", 0)),
+            evidence=evidence,
         )
         if subject is None:
             return "cancelled", "subject_inactive_or_stale"
         scopes = subject.api_key_scopes or frozenset()
-        ctx = PrincipalContext.for_application(
-            tenant_id, principal_id, int(operation.get("authorization_version", 1)),
-            application_id=UUID(evidence["application_id"]) if evidence.get("application_id") else None,
-            api_key_id=UUID(evidence["api_key_id"]) if evidence.get("api_key_id") else None,
-            api_key_scopes=scopes,
-        ) if subject.subject_kind == "application" else PrincipalContext(
-            tenant_id, principal_id,
-            UUID(str(operation["membership_id"])) if operation.get("membership_id") else UUID(int=1),
-            int(operation.get("authorization_version", 1)),
+        ctx = (
+            PrincipalContext.for_application(
+                tenant_id,
+                principal_id,
+                int(operation.get("authorization_version", 1)),
+                application_id=UUID(evidence["application_id"])
+                if evidence.get("application_id")
+                else None,
+                api_key_id=UUID(evidence["api_key_id"]) if evidence.get("api_key_id") else None,
+                api_key_scopes=scopes,
+            )
+            if subject.subject_kind == "application"
+            else PrincipalContext(
+                tenant_id,
+                principal_id,
+                UUID(str(operation["membership_id"]))
+                if operation.get("membership_id")
+                else UUID(int=1),
+                int(operation.get("authorization_version", 1)),
+            )
         )
         space = await self.storage_store.get_space(tenant_id, UUID(space_id))
         if space is None:
             return "cancelled", "storage_space_missing"
-        if int(operation.get("provider_target_version", 0)) != int(space.get("provider_target_version", 1)):
+        if int(operation.get("provider_target_version", 0)) != int(
+            space.get("provider_target_version", 1)
+        ):
             return "cancelled", "legacy_provider_target"
 
-        def target(key: str):
+        def target(key: str) -> ProviderTarget | None:
             try:
                 return derive_provider_target(
                     tenant_id=tenant_id,
@@ -111,14 +138,19 @@ class FileOperationWorker:
                 return None
 
         async def authorize(permission: str, key: str) -> bool:
-            if ctx.subject_kind == "application" and permission not in (ctx.api_key_scopes or frozenset()):
+            if ctx.subject_kind == "application" and permission not in (
+                ctx.api_key_scopes or frozenset()
+            ):
                 return False
             bindings = await self.authorization_store.bindings_for(
                 tenant_id, principal_id, UUID(space_id), subject_kind=ctx.subject_kind
             )
-            return evaluate(
-                permission, bindings, storage_space_id=UUID(space_id), object_key=key
-            ).decision == Decision.ALLOW
+            return (
+                evaluate(
+                    permission, bindings, storage_space_id=UUID(space_id), object_key=key
+                ).decision
+                == Decision.ALLOW
+            )
 
         source = operation.get("source_key")
         destination = operation.get("destination_key")
@@ -126,7 +158,9 @@ class FileOperationWorker:
             if operation["operation_type"] in {"copy", "move"}:
                 if not source or not destination:
                     return "failed", "operation_keys_missing"
-                if not await authorize("files.read", source) or not await authorize("files.write", destination):
+                if not await authorize("files.read", source) or not await authorize(
+                    "files.write", destination
+                ):
                     return "cancelled", "authorization_revoked"
                 source_target, destination_target = target(source), target(destination)
                 if source_target is None or destination_target is None:

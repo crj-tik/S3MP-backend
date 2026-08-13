@@ -102,9 +102,7 @@ async def list_files(
     space_id: str = Path(min_length=1),
     prefix: str | None = None,
 ) -> Any:
-    return await _file_svc(request).list_files(
-        _context(request), space_id, prefix or ""
-    )
+    return await _file_svc(request).list_files(_context(request), space_id, prefix or "")
 
 
 @router.get("/storage_spaces/{space_id}/files/{file_id}", operation_id="get_file")
@@ -113,12 +111,12 @@ async def get_file(
     space_id: str = Path(min_length=1),
     file_id: str = Path(min_length=1),
 ) -> Any:
-    return await _file_svc(request).get_file(
-        _context(request), space_id, file_id
-    )
+    return await _file_svc(request).get_file(_context(request), space_id, file_id)
 
 
-@router.delete("/storage_spaces/{space_id}/files/{file_id}", status_code=202, operation_id="delete_file")
+@router.delete(
+    "/storage_spaces/{space_id}/files/{file_id}", status_code=202, operation_id="delete_file"
+)
 async def delete_file(
     request: Request,
     space_id: str = Path(min_length=1),
@@ -135,7 +133,11 @@ async def delete_file(
     )
 
 
-@router.post("/storage_spaces/{space_id}/file_operations", status_code=202, operation_id="create_file_operation")
+@router.post(
+    "/storage_spaces/{space_id}/file_operations",
+    status_code=202,
+    operation_id="create_file_operation",
+)
 async def create_file_operation(
     request: Request,
     body: FileOperationCreate,
@@ -152,9 +154,7 @@ async def get_file_operation(
     request: Request,
     operation_id: str = Path(min_length=1),
 ) -> Any:
-    return await _file_svc(request).get_file_operation(
-        _context(request), operation_id
-    )
+    return await _file_svc(request).get_file_operation(_context(request), operation_id)
 
 
 # ── Uploads ───────────────────────────────────────────────────────────────────
@@ -177,9 +177,7 @@ async def get_upload(
     request: Request,
     upload_id: str = Path(min_length=1),
 ) -> Any:
-    return await _file_svc(request).get_upload(
-        _context(request), upload_id
-    )
+    return await _file_svc(request).get_upload(_context(request), upload_id)
 
 
 @router.put("/uploads/{upload_id}/content", status_code=204, operation_id="proxy_upload_content")
@@ -207,21 +205,27 @@ async def complete_upload(
     )
 
 
-@router.post("/storage_spaces/{space_id}/presigned_downloads", status_code=201, operation_id="create_presigned_download")
+@router.post(
+    "/storage_spaces/{space_id}/presigned_downloads",
+    status_code=201,
+    operation_id="create_presigned_download",
+)
 async def create_presigned_download(
     request: Request,
     body: PresignedDownloadCreate,
     space_id: str = Path(min_length=1),
 ) -> Any:
-    return await _file_svc(request).create_presigned_download(
-        _context(request), space_id, body
-    )
+    return await _file_svc(request).create_presigned_download(_context(request), space_id, body)
 
 
 # ── Multipart ─────────────────────────────────────────────────────────────────
 
 
-@router.post("/storage_spaces/{space_id}/multipart_uploads", status_code=201, operation_id="create_multipart_upload")
+@router.post(
+    "/storage_spaces/{space_id}/multipart_uploads",
+    status_code=201,
+    operation_id="create_multipart_upload",
+)
 async def create_multipart_upload(
     request: Request,
     body: MultipartCreate,
@@ -238,12 +242,12 @@ async def get_multipart_upload(
     request: Request,
     multipart_id: str = Path(min_length=1),
 ) -> Any:
-    return await _file_svc(request).get_multipart_upload(
-        _context(request), multipart_id
-    )
+    return await _file_svc(request).get_multipart_upload(_context(request), multipart_id)
 
 
-@router.delete("/multipart_uploads/{multipart_id}", status_code=204, operation_id="abort_multipart_upload")
+@router.delete(
+    "/multipart_uploads/{multipart_id}", status_code=204, operation_id="abort_multipart_upload"
+)
 async def abort_multipart_upload(
     request: Request,
     multipart_id: str = Path(min_length=1),
@@ -259,12 +263,12 @@ async def list_multipart_parts(
     request: Request,
     multipart_id: str = Path(min_length=1),
 ) -> Any:
-    return await _file_svc(request).list_multipart_parts(
-        _context(request), multipart_id
-    )
+    return await _file_svc(request).list_multipart_parts(_context(request), multipart_id)
 
 
-@router.post("/multipart_uploads/{multipart_id}/parts", status_code=201, operation_id="create_multipart_part")
+@router.post(
+    "/multipart_uploads/{multipart_id}/parts", status_code=201, operation_id="create_multipart_part"
+)
 async def create_multipart_part(
     request: Request,
     body: MultipartPartCreate,
@@ -276,7 +280,9 @@ async def create_multipart_part(
     )
 
 
-@router.put("/multipart_uploads/{multipart_id}/parts/{part_number}", operation_id="confirm_multipart_part")
+@router.put(
+    "/multipart_uploads/{multipart_id}/parts/{part_number}", operation_id="confirm_multipart_part"
+)
 async def confirm_multipart_part(
     request: Request,
     body: MultipartPartConfirm,
@@ -293,7 +299,9 @@ async def confirm_multipart_part(
     )
 
 
-@router.post("/multipart_uploads/{multipart_id}/completion", operation_id="complete_multipart_upload")
+@router.post(
+    "/multipart_uploads/{multipart_id}/completion", operation_id="complete_multipart_upload"
+)
 async def complete_multipart_upload(
     request: Request,
     body: MultipartComplete,

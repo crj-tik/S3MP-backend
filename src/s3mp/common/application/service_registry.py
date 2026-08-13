@@ -39,9 +39,7 @@ class ServiceRegistry:
             except Exception as exc:
                 errors.append(f"  {name}: {exc}")
         if errors:
-            raise RuntimeError(
-                "application service startup failed:\n" + "\n".join(errors)
-            )
+            raise RuntimeError("application service startup failed:\n" + "\n".join(errors))
         self._validated = True
         return services
 

@@ -14,7 +14,9 @@ class SessionStore(Protocol):
 
 
 class MembershipStore(Protocol):
-    async def get_membership(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None: ...
+    async def get_membership(
+        self, tenant_id: UUID, membership_id: UUID
+    ) -> dict[str, Any] | None: ...
 
 
 class PrincipalStore(Protocol):
@@ -87,6 +89,8 @@ class IdentityContextProvider:
         """
         principal = await self.principal_store.get_principal(tenant_id, application_id)
         if principal is None or not principal.get("enabled", False):
-            raise ApiError("authentication_required", "Application principal is not active", status_code=401)
+            raise ApiError(
+                "authentication_required", "Application principal is not active", status_code=401
+            )
 
         return PrincipalContext.for_application(tenant_id, application_id)

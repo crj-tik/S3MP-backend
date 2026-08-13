@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 
+from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.common.config import get_settings
 from s3mp.common.database import create_engine, create_session_factory
 from s3mp.common.redis import create_redis
@@ -16,7 +17,6 @@ from s3mp.files.infrastructure.authorization_repository import SqlAlchemyFileAut
 from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
 from s3mp.files.infrastructure.work_signal import RedisWorkSignal
-from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.identity.infrastructure.identity_repository import SqlAlchemyIdentityAdminStore
 from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
 from s3mp.storage.infrastructure.repositories import SqlAlchemyStorageStore
@@ -37,7 +37,11 @@ async def run_once(limit: int, *, redis: Redis | None = None) -> dict[str, int |
         application_store = SqlAlchemyApplicationStore(sessions)
         object_storage = MinioObjectStorageAdapter(settings)
         worker = FileOperationWorker(
-            file_store, storage_store, authorization_store, identity_store, object_storage,
+            file_store,
+            storage_store,
+            authorization_store,
+            identity_store,
+            object_storage,
             application_store,
         )
         completed = await worker.run_once(os.getenv("S3MP_WORKER_ID", str(uuid4())), limit)

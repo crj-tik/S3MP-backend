@@ -84,7 +84,9 @@ class StorageService:
         try:
             root_prefix = canonical_operator_prefix(body.root_prefix)
         except ValueError as exc:
-            raise ApiError("validation_failed", "Storage root prefix is not canonical", status_code=422) from exc
+            raise ApiError(
+                "validation_failed", "Storage root prefix is not canonical", status_code=422
+            ) from exc
         data = {
             "name": body.name,
             "connection_id": body.connection_id,
@@ -97,7 +99,9 @@ class StorageService:
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:
-            raise ApiError("internal_error", "Authorization management is not configured", status_code=500)
+            raise ApiError(
+                "internal_error", "Authorization management is not configured", status_code=500
+            )
         await self.authorizer.require_permission(context, permission)
 
 

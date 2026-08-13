@@ -11,8 +11,7 @@ from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
 PUBLIC_PATHS: frozenset[str] = frozenset(
-    {"/health/live", "/health/ready", "/openapi.json", "/docs", "/redoc",
-     "/docs/oauth2-redirect"}
+    {"/health/live", "/health/ready", "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
 )
 
 # Skip auth when the test harness has already injected a principal_context
@@ -38,8 +37,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         except ApiError as exc:
             return JSONResponse(
                 status_code=exc.status_code,
-                content={"code": exc.code, "message": exc.message,
-                         "request_id": getattr(request.state, "request_id", "unknown")},
+                content={
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": getattr(request.state, "request_id", "unknown"),
+                },
             )
         return await call_next(request)
 

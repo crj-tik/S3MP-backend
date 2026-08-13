@@ -22,9 +22,7 @@ class RedisIdempotencyStore:
         return json.loads(raw)  # type: ignore[no-any-return]
 
     async def put(self, fingerprint: str, result: dict[str, Any]) -> None:
-        await self._redis.setex(
-            self._key(fingerprint), self._ttl, json.dumps(result, default=str)
-        )
+        await self._redis.setex(self._key(fingerprint), self._ttl, json.dumps(result, default=str))
 
 
 class RedisRateLimiter:
@@ -41,6 +39,7 @@ class RedisRateLimiter:
     async def allow(self, scope: str, identifier: str) -> bool:
         key = self._key(scope, identifier)
         import time
+
         now = time.time()
         cutoff = now - self._window
         async with self._redis.pipeline() as pipe:
@@ -67,6 +66,7 @@ class RedisOutboxAdapter:
 
     async def enqueue(self, topic: str, payload: dict[str, Any]) -> None:
         import time
+
         msg = {"topic": topic, "payload": payload, "ts": time.time()}
         await self._redis.rpush(self._list_key(topic), json.dumps(msg, default=str))  # type: ignore[misc]
 
@@ -78,7 +78,9 @@ class RedisOutboxAdapter:
             if raw is None:
                 break
             msg = json.loads(raw)
-            lease_key = self._msg_key(UUID(msg["payload"].get("id", "00000000-0000-0000-0000-000000000000")))
+            lease_key = self._msg_key(
+                UUID(msg["payload"].get("id", "00000000-0000-0000-0000-000000000000"))
+            )
             acquired = await self._redis.set(lease_key, "1", nx=True, ex=self._lease)
             if acquired:
                 results.append(msg)

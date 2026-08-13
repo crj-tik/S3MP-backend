@@ -73,11 +73,7 @@ def effective_key_scopes(
 ) -> set[str]:
     """Return the intersection of every policy layer, never a union."""
     return (
-        key_scopes
-        & application_scopes
-        & directory_scopes
-        & governance_scopes
-        & operation_allowlist
+        key_scopes & application_scopes & directory_scopes & governance_scopes & operation_allowlist
     )
 
 

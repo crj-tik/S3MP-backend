@@ -23,8 +23,12 @@ class SqlAlchemyFileAuthorizationStore:
         self._sf = session_factory
 
     async def bindings_for(
-        self, tenant_id: UUID, principal_id: UUID, storage_space_id: UUID,
-        *, subject_kind: str = "human",
+        self,
+        tenant_id: UUID,
+        principal_id: UUID,
+        storage_space_id: UUID,
+        *,
+        subject_kind: str = "human",
     ) -> list[Binding]:
         now = datetime.now(UTC)
         subject_principals = [principal_id]

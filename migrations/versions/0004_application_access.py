@@ -21,10 +21,18 @@ def upgrade() -> None:
         sa.Column("principal_id", sa.Uuid(), nullable=False),
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column("status", sa.String(32), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id", "principal_id"], ["principal.tenant_id", "principal.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "principal_id"],
+            ["principal.tenant_id", "principal.id"],
+            ondelete="CASCADE",
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_application"),
         sa.UniqueConstraint("tenant_id", "id", name="uq_application_tenant_id_id"),
     )
@@ -35,12 +43,24 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("application_id", sa.Uuid(), nullable=False),
         sa.Column("owner_principal_id", sa.Uuid(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id", "application_id"], ["application.tenant_id", "application.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id", "owner_principal_id"], ["principal.tenant_id", "principal.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "application_id"],
+            ["application.tenant_id", "application.id"],
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "owner_principal_id"],
+            ["principal.tenant_id", "principal.id"],
+            ondelete="RESTRICT",
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_application_owner"),
-        sa.UniqueConstraint("tenant_id", "application_id", "owner_principal_id", name="uq_application_owner"),
+        sa.UniqueConstraint(
+            "tenant_id", "application_id", "owner_principal_id", name="uq_application_owner"
+        ),
     )
     op.create_table(
         "api_key",
@@ -56,9 +76,15 @@ def upgrade() -> None:
         sa.Column("rotated_from_id", sa.Uuid(), nullable=True),
         sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id", "application_id"], ["application.tenant_id", "application.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id", "application_id"],
+            ["application.tenant_id", "application.id"],
+            ondelete="CASCADE",
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_api_key"),
         sa.UniqueConstraint("tenant_id", "id", name="uq_api_key_tenant_id_id"),
         sa.UniqueConstraint("key_id", name="uq_api_key_key_id"),

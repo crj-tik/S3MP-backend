@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.authorization.application.management_service import AuthorizationManagementService
 from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import application_service, management_permission
 from s3mp.common.api.etag import check_etag, require_if_match
@@ -149,7 +150,11 @@ def _cursor(value: str | None, context: PrincipalContext, *, query: str) -> UUID
         return None
     return UUID(
         CursorCodec(b"s3mp-management-cursor-key-v1").decode(
-            value, context.tenant_id, context.principal_id, context.authorization_version, query=query
+            value,
+            context.tenant_id,
+            context.principal_id,
+            context.authorization_version,
+            query=query,
         )
     )
 
@@ -160,7 +165,11 @@ def _page(
     return {
         "items": items,
         "next_cursor": CursorCodec(b"s3mp-management-cursor-key-v1").encode(
-            context.tenant_id, context.principal_id, context.authorization_version, str(position), query=query
+            context.tenant_id,
+            context.principal_id,
+            context.authorization_version,
+            str(position),
+            query=query,
         )
         if position
         else None,
@@ -170,10 +179,12 @@ def _page(
 @router.get("/groups", response_model=GroupPage, operation_id="list_groups")
 async def list_groups(
     context: Annotated[PrincipalContext, management_permission("list_groups")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, position = await service.list_groups(context, cursor=_cursor(cursor, context, query="groups"))  # type: ignore[union-attr]
+    items, position = await service.list_groups(
+        context, cursor=_cursor(cursor, context, query="groups")
+    )
     return _page(items, position, context, query="groups")
 
 
@@ -181,18 +192,18 @@ async def list_groups(
 async def create_group(
     body: GroupWrite,
     context: Annotated[PrincipalContext, management_permission("create_group")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.create_group(context, body)  # type: ignore[union-attr]
+    return await service.create_group(context, body)
 
 
 @router.get("/groups/{group_id}", response_model=GroupResponse, operation_id="get_group")
 async def get_group(
     group_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_group")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.get_group(context, group_id)  # type: ignore[union-attr]
+    return await service.get_group(context, group_id)
 
 
 @router.patch("/groups/{group_id}", response_model=GroupResponse, operation_id="update_group")
@@ -200,30 +211,32 @@ async def update_group(
     group_id: UUID,
     body: GroupWrite,
     context: Annotated[PrincipalContext, management_permission("update_group")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> object:
-    current = await service.get_group(context, group_id)  # type: ignore[union-attr]
+    current = await service.get_group(context, group_id)
     check_etag(current["etag"], require_if_match(if_match))
-    return await service.update_group(context, group_id, body)  # type: ignore[union-attr]
+    return await service.update_group(context, group_id, body)
 
 
 @router.delete("/groups/{group_id}", status_code=204, operation_id="delete_group")
 async def delete_group(
     group_id: UUID,
     context: Annotated[PrincipalContext, management_permission("delete_group")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> None:
-    await service.delete_group(context, group_id)  # type: ignore[union-attr]
+    await service.delete_group(context, group_id)
 
 
 @router.get("/roles", response_model=RolePage, operation_id="list_roles")
 async def list_roles(
     context: Annotated[PrincipalContext, management_permission("list_roles")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
     cursor: str | None = Query(default=None),
 ) -> object:
-    items, position = await service.list_roles(context, cursor=_cursor(cursor, context, query="roles"))  # type: ignore[union-attr]
+    items, position = await service.list_roles(
+        context, cursor=_cursor(cursor, context, query="roles")
+    )
     return _page(items, position, context, query="roles")
 
 
@@ -231,18 +244,18 @@ async def list_roles(
 async def create_role(
     body: RoleWrite,
     context: Annotated[PrincipalContext, management_permission("create_role")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.create_role(context, body)  # type: ignore[union-attr]
+    return await service.create_role(context, body)
 
 
 @router.get("/roles/{role_id}", response_model=RoleResponse, operation_id="get_role")
 async def get_role(
     role_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_role")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.get_role(context, role_id)  # type: ignore[union-attr]
+    return await service.get_role(context, role_id)
 
 
 @router.patch("/roles/{role_id}", response_model=RoleResponse, operation_id="update_role")
@@ -250,24 +263,26 @@ async def update_role(
     role_id: UUID,
     body: RoleWrite,
     context: Annotated[PrincipalContext, management_permission("update_role")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
 ) -> object:
-    current = await service.get_role(context, role_id)  # type: ignore[union-attr]
+    current = await service.get_role(context, role_id)
     check_etag(current["etag"], require_if_match(if_match))
-    return await service.update_role(context, role_id, body)  # type: ignore[union-attr]
+    return await service.update_role(context, role_id, body)
 
 
 @router.get("/role_bindings", response_model=RoleBindingPage, operation_id="list_role_bindings")
 async def list_role_bindings(
     context: Annotated[PrincipalContext, management_permission("list_role_bindings")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
     principal_id: UUID | None = None,
     cursor: str | None = Query(default=None),
 ) -> object:
     items, position = await service.list_role_bindings(
-        context, principal_id, cursor=_cursor(cursor, context, query=f"role_bindings:{principal_id or ''}")
-    )  # type: ignore[union-attr]
+        context,
+        principal_id,
+        cursor=_cursor(cursor, context, query=f"role_bindings:{principal_id or ''}"),
+    )
     return _page(items, position, context, query=f"role_bindings:{principal_id or ''}")
 
 
@@ -280,9 +295,9 @@ async def list_role_bindings(
 async def create_role_binding(
     body: RoleBindingWrite,
     context: Annotated[PrincipalContext, management_permission("create_role_binding")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.create_role_binding(context, body)  # type: ignore[union-attr]
+    return await service.create_role_binding(context, body)
 
 
 @router.get(
@@ -293,9 +308,9 @@ async def create_role_binding(
 async def get_role_binding(
     role_binding_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_role_binding")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.get_role_binding(context, role_binding_id)  # type: ignore[union-attr]
+    return await service.get_role_binding(context, role_binding_id)
 
 
 @router.delete(
@@ -304,9 +319,9 @@ async def get_role_binding(
 async def revoke_role_binding(
     role_binding_id: UUID,
     context: Annotated[PrincipalContext, management_permission("revoke_role_binding")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> None:
-    await service.revoke_role_binding(context, role_binding_id)  # type: ignore[union-attr]
+    await service.revoke_role_binding(context, role_binding_id)
 
 
 @router.get(
@@ -317,13 +332,13 @@ async def revoke_role_binding(
 async def get_effective_permissions(
     principal_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_effective_permissions")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
     storage_space_id: UUID | None = None,
     object_key: str | None = None,
 ) -> object:
     return await service.get_effective_permissions(
         context, principal_id, storage_space_id, object_key
-    )  # type: ignore[union-attr]
+    )
 
 
 @router.post(
@@ -334,6 +349,6 @@ async def get_effective_permissions(
 async def simulate_authorization(
     body: SimulationRequest,
     context: Annotated[PrincipalContext, management_permission("simulate_authorization")],
-    service: Annotated[object, authorization_service],
+    service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
-    return await service.simulate_authorization(context, body)  # type: ignore[union-attr]
+    return await service.simulate_authorization(context, body)

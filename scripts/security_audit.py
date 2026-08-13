@@ -37,13 +37,22 @@ async def inventory() -> dict[str, Any]:
                 )
             ).all()
             unscoped_files = await connection.scalar(
-                text("SELECT COUNT(*) FROM file_object WHERE object_key NOT LIKE 'v1/tenants/%/spaces/%/%'")
+                text(
+                    "SELECT COUNT(*) FROM file_object "
+                    "WHERE object_key NOT LIKE 'v1/tenants/%/spaces/%/%'"
+                )
             )
             unscoped_uploads = await connection.scalar(
-                text("SELECT COUNT(*) FROM upload_session WHERE object_key NOT LIKE 'v1/tenants/%/spaces/%/%'")
+                text(
+                    "SELECT COUNT(*) FROM upload_session "
+                    "WHERE object_key NOT LIKE 'v1/tenants/%/spaces/%/%'"
+                )
             )
             unscoped_multipart = await connection.scalar(
-                text("SELECT COUNT(*) FROM multipart_session WHERE object_key NOT LIKE 'v1/tenants/%/spaces/%/%'")
+                text(
+                    "SELECT COUNT(*) FROM multipart_session "
+                    "WHERE object_key NOT LIKE 'v1/tenants/%/spaces/%/%'"
+                )
             )
             unsafe_operations = await connection.scalar(
                 text(
@@ -58,7 +67,8 @@ async def inventory() -> dict[str, Any]:
                     "SELECT 1 FROM application_owner o JOIN membership m "
                     "ON m.tenant_id = o.tenant_id AND m.principal_id = o.owner_principal_id "
                     "WHERE o.tenant_id = a.tenant_id AND o.application_id = a.id "
-                    "AND m.status = 'active' AND (m.expires_at IS NULL OR m.expires_at > CURRENT_TIMESTAMP))"
+                    "AND m.status = 'active' "
+                    "AND (m.expires_at IS NULL OR m.expires_at > CURRENT_TIMESTAMP))"
                 )
             )
             expired_bindings = await connection.scalar(

@@ -17,19 +17,24 @@ def upgrade() -> None:
         batch.drop_constraint(
             "fk_file_ingestion_record_tenant_id_upload_session", type_="foreignkey"
         )
-        batch.drop_constraint(
-            "fk_file_ingestion_record_tenant_id_file_object", type_="foreignkey"
-        )
+        batch.drop_constraint("fk_file_ingestion_record_tenant_id_file_object", type_="foreignkey")
         batch.create_foreign_key(
-            "fk_ingestion_upload_session", "upload_session", ["upload_session_id"], ["id"],
+            "fk_ingestion_upload_session",
+            "upload_session",
+            ["upload_session_id"],
+            ["id"],
             ondelete="SET NULL",
         )
         batch.create_foreign_key(
-            "fk_ingestion_file_object", "file_object", ["file_object_id"], ["id"],
+            "fk_ingestion_file_object",
+            "file_object",
+            ["file_object_id"],
+            ["id"],
             ondelete="SET NULL",
         )
     op.create_index(
-        "ix_ingestion_tenant_multipart_session", "file_ingestion_record",
+        "ix_ingestion_tenant_multipart_session",
+        "file_ingestion_record",
         ["tenant_id", "multipart_session_id"],
     )
 
@@ -40,10 +45,16 @@ def downgrade() -> None:
         batch.drop_constraint("fk_ingestion_file_object", type_="foreignkey")
         batch.drop_constraint("fk_ingestion_upload_session", type_="foreignkey")
         batch.create_foreign_key(
-            "fk_file_ingestion_record_tenant_id_file_object", "file_object",
-            ["tenant_id", "file_object_id"], ["tenant_id", "id"], ondelete="SET NULL",
+            "fk_file_ingestion_record_tenant_id_file_object",
+            "file_object",
+            ["tenant_id", "file_object_id"],
+            ["tenant_id", "id"],
+            ondelete="SET NULL",
         )
         batch.create_foreign_key(
-            "fk_file_ingestion_record_tenant_id_upload_session", "upload_session",
-            ["tenant_id", "upload_session_id"], ["tenant_id", "id"], ondelete="SET NULL",
+            "fk_file_ingestion_record_tenant_id_upload_session",
+            "upload_session",
+            ["tenant_id", "upload_session_id"],
+            ["tenant_id", "id"],
+            ondelete="SET NULL",
         )

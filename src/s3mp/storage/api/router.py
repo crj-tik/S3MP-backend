@@ -90,9 +90,7 @@ async def probe_storage_connection(
     context: Annotated[PrincipalContext, management_permission("probe_storage_connection")],
     connection_id: str = Path(min_length=1),
 ) -> Any:
-    return await _svc(request).probe_connection(
-        context, connection_id, body.write_test_prefix
-    )
+    return await _svc(request).probe_connection(context, connection_id, body.write_test_prefix)
 
 
 # ── Spaces ────────────────────────────────────────────────────────────────────

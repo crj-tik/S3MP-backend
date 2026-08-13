@@ -7,6 +7,8 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from s3mp.applications.infrastructure.models import ApplicationModel, ApplicationOwnerModel
+from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.authorization.infrastructure.models import (
     GroupMemberModel,
     GroupModel,
@@ -25,8 +27,6 @@ from s3mp.identity.infrastructure.models import (
     SessionModel,
     UserModel,
 )
-from s3mp.applications.infrastructure.models import ApplicationModel, ApplicationOwnerModel
-from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
@@ -211,32 +211,64 @@ class SqlAlchemyIdentityAdminStore:
             )
             # Keep application containment in this membership mutation
             # transaction: a direct owner row is insufficient when suspended.
-            app_ids = list((await session.scalars(select(ApplicationOwnerModel.application_id).where(
-                ApplicationOwnerModel.tenant_id == tenant_id,
-                ApplicationOwnerModel.owner_principal_id == row.principal_id,
-            ))).all())
+            app_ids = list(
+                (
+                    await session.scalars(
+                        select(ApplicationOwnerModel.application_id).where(
+                            ApplicationOwnerModel.tenant_id == tenant_id,
+                            ApplicationOwnerModel.owner_principal_id == row.principal_id,
+                        )
+                    )
+                ).all()
+            )
             if status != "active":
                 for app_id in app_ids:
-                    active_owner = await session.scalar(select(ApplicationOwnerModel.id).join(MembershipModel, (
-                        (MembershipModel.tenant_id == ApplicationOwnerModel.tenant_id)
-                        & (MembershipModel.principal_id == ApplicationOwnerModel.owner_principal_id)
-                    )).where(
-                        ApplicationOwnerModel.tenant_id == tenant_id,
-                        ApplicationOwnerModel.application_id == app_id,
-                        MembershipModel.status == MembershipStatus.ACTIVE,
-                        (MembershipModel.expires_at.is_(None) | (MembershipModel.expires_at > datetime.now(UTC))),
-                    ))
+                    active_owner = await session.scalar(
+                        select(ApplicationOwnerModel.id)
+                        .join(
+                            MembershipModel,
+                            (
+                                (MembershipModel.tenant_id == ApplicationOwnerModel.tenant_id)
+                                & (
+                                    MembershipModel.principal_id
+                                    == ApplicationOwnerModel.owner_principal_id
+                                )
+                            ),
+                        )
+                        .where(
+                            ApplicationOwnerModel.tenant_id == tenant_id,
+                            ApplicationOwnerModel.application_id == app_id,
+                            MembershipModel.status == MembershipStatus.ACTIVE,
+                            (
+                                MembershipModel.expires_at.is_(None)
+                                | (MembershipModel.expires_at > datetime.now(UTC))
+                            ),
+                        )
+                    )
                     if active_owner is None:
-                        result = await session.execute(update(ApplicationModel).where(
-                            ApplicationModel.tenant_id == tenant_id, ApplicationModel.id == app_id,
-                            ApplicationModel.status == "active",
-                        ).values(status="pending_takeover", authorization_version=ApplicationModel.authorization_version + 1))
+                        result = await session.execute(
+                            update(ApplicationModel)
+                            .where(
+                                ApplicationModel.tenant_id == tenant_id,
+                                ApplicationModel.id == app_id,
+                                ApplicationModel.status == "active",
+                            )
+                            .values(
+                                status="pending_takeover",
+                                authorization_version=ApplicationModel.authorization_version + 1,
+                            )
+                        )
                         if getattr(result, "rowcount", 0):
-                            session.add(AuditEventModel(
-                                tenant_id=tenant_id, actor_principal_id=changed_by,
-                                action="application.ownerless_contained", resource_type="application",
-                                resource_id=str(app_id), details={"reason_code": "no_active_owner"},
-                            ))
+                            session.add(
+                                AuditEventModel(
+                                    tenant_id=tenant_id,
+                                    actor_principal_id=changed_by,
+                                    action="application.ownerless_contained",
+                                    resource_type="application",
+                                    resource_id=str(app_id),
+                                    details={"reason_code": "no_active_owner"},
+                                )
+                            )
             await session.flush()
             user = await session.get(UserModel, row.user_id)
             return _membership_dict(row, user)
@@ -624,20 +656,20 @@ class SqlAlchemyIdentityAdminStore:
                 for binding, permission in rows
             ]
 
-    async def bindings_for_role(
-        self, tenant_id: UUID, role_id: UUID
-    ) -> list[dict[str, Any]]:
+    async def bindings_for_role(self, tenant_id: UUID, role_id: UUID) -> list[dict[str, Any]]:
         now = datetime.now(UTC)
         async with self._sf() as session:
-            rows = (await session.scalars(
-                select(RoleBindingModel).where(
-                    RoleBindingModel.tenant_id == tenant_id,
-                    RoleBindingModel.role_id == role_id,
-                    RoleBindingModel.revoked_at.is_(None),
-                    RoleBindingModel.starts_at <= now,
-                    RoleBindingModel.expires_at > now,
+            rows = (
+                await session.scalars(
+                    select(RoleBindingModel).where(
+                        RoleBindingModel.tenant_id == tenant_id,
+                        RoleBindingModel.role_id == role_id,
+                        RoleBindingModel.revoked_at.is_(None),
+                        RoleBindingModel.starts_at <= now,
+                        RoleBindingModel.expires_at > now,
+                    )
                 )
-            )).all()
+            ).all()
             return [
                 {"storage_space_id": row.storage_space_id, "canonical_prefix": row.canonical_prefix}
                 for row in rows
@@ -653,14 +685,16 @@ class SqlAlchemyIdentityAdminStore:
         details: dict[str, object],
     ) -> None:
         async with self._sf.begin() as session:
-            session.add(AuditEventModel(
-                tenant_id=tenant_id,
-                actor_principal_id=actor_principal_id,
-                action=action,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                details=details,
-            ))
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    details=details,
+                )
+            )
 
     async def tenant_context(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:

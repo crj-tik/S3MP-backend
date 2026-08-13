@@ -26,6 +26,7 @@ class AuthorizedFileCommand:
     and the canonical relative key. All downstream operations (authorization,
     persistence, MinIO) must use this command's fields, never raw user input.
     """
+
     tenant_id: UUID
     acting_principal_id: UUID
     storage_space_id: UUID
@@ -72,7 +73,9 @@ class AuthorizedFileCommand:
         if ctx.subject_kind == "application" and (
             ctx.api_key_scopes is None or action not in ctx.api_key_scopes
         ):
-            raise ApiError("permission_denied", "API key scope does not allow this action", status_code=403)
+            raise ApiError(
+                "permission_denied", "API key scope does not allow this action", status_code=403
+            )
         decision = evaluate(action, bindings, object_key=rel, now=now)
 
         if decision.decision is not Decision.ALLOW:
