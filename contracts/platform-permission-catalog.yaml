@@ -1,0 +1,10 @@
+version: 1.0.0
+semantics:
+  authority_scope: global-account-only
+  tenant_data_plane_bypass: forbidden
+permissions:
+  - {name: platform.tenants.read, description: View redacted platform tenant lifecycle metadata.}
+  - {name: platform.tenants.manage, description: Create and update tenant lifecycle state.}
+  - {name: platform.roles.manage, description: Grant and revoke global platform roles.}
+  - {name: platform.support.manage, description: Request, approve and revoke bounded support access.}
+  - {name: platform.audit.read, description: Read platform audit evidence.}

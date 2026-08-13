@@ -9,6 +9,15 @@ error_codes:
   - code: invalid_credentials
     http_status: 401
     description: Credentials are malformed or cannot be verified.
+  - code: authentication_failed
+    http_status: 401
+    description: The supplied account credentials are not valid.
+  - code: tenant_session_denied
+    http_status: 403
+    description: The account cannot create a session for the selected tenant.
+  - code: csrf_validation_failed
+    http_status: 403
+    description: A browser-authenticated unsafe request lacked valid CSRF proof.
   - code: api_key_expired
     http_status: 401
     description: The API key has reached its expiry.

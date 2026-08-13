@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -20,6 +21,7 @@ from s3mp.applications.domain.credentials import ApiKeyCredentialService
 from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.authorization.api.router import router as authorization_router
 from s3mp.authorization.application.management_service import AuthorizationManagementService
+from s3mp.common.browser_security import BrowserCSRFMiddleware
 from s3mp.common.config import Settings, get_settings
 from s3mp.common.database import create_engine, create_session_factory
 from s3mp.common.errors import install_error_handlers
@@ -40,6 +42,17 @@ from s3mp.governance.application.governance_service import AuditService, QuotaSe
 from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, SqlAlchemyQuotaStore
 from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
+from s3mp.identity.application.security import InMemoryLoginRateLimiter, LocalPasswordAuthenticator
+from s3mp.platform.api.role_router import router as platform_role_router
+from s3mp.platform.api.router import router as account_auth_router
+from s3mp.platform.api.support_router import router as platform_support_router
+from s3mp.platform.api.tenant_router import router as platform_tenant_router
+from s3mp.platform.application.account_authentication import AccountAuthenticationService
+from s3mp.platform.application.role_management import PlatformRoleManagementService
+from s3mp.platform.application.support_access import SupportAccessService
+from s3mp.platform.application.tenant_lifecycle import PlatformTenantLifecycleService
+from s3mp.platform.infrastructure.rate_limiter import RedisAccountLoginRateLimiter
+from s3mp.platform.infrastructure.repository import SqlAlchemyPlatformStore
 from s3mp.storage.api.router import router as storage_router
 from s3mp.storage.application.storage_service import StorageService
 from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
@@ -122,6 +135,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         if session_factory is not None:
             identity_store = SqlAlchemyIdentityAdminStore(session_factory)
+            platform_store = SqlAlchemyPlatformStore(session_factory)
+            app.state.platform_store = platform_store
+            app.state.platform_tenant_lifecycle = PlatformTenantLifecycleService(platform_store)
+            app.state.platform_role_management = PlatformRoleManagementService(platform_store)
+            app.state.platform_support_access = SupportAccessService(platform_store)
+            login_limiter = (
+                RedisAccountLoginRateLimiter(redis)
+                if redis is not None
+                else InMemoryLoginRateLimiter()
+            )
+            app.state.account_authentication = AccountAuthenticationService(
+                platform_store,
+                LocalPasswordAuthenticator(platform_store, login_limiter),
+                app.state.session_token_service,
+                session_ttl_seconds=configured.browser_session_ttl_seconds,
+            )
             app.state.identity_context_provider = IdentityContextProvider(
                 session_store=_SessionStoreAdapter(session_factory),
                 membership_store=identity_store,
@@ -216,15 +245,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     configure_logging(configured.log_level)
     app = FastAPI(title="S3MP API", version="0.1.0", lifespan=lifespan)
+    app.state.settings = configured
     app.state.readiness_timeout = configured.readiness_timeout_seconds
     app.state.readiness_checks = {}
+    if configured.browser_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(configured.browser_origins),
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Content-Type", "X-S3MP-CSRF", "If-Match", "Idempotency-Key"],
+        )
     app.add_middleware(RequestIDMiddleware)
     from s3mp.common.auth_middleware import AuthMiddleware
 
     app.add_middleware(AuthMiddleware)
+    app.add_middleware(BrowserCSRFMiddleware)
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(identity_router)
+    app.include_router(account_auth_router)
+    app.include_router(platform_tenant_router)
+    app.include_router(platform_role_router)
+    app.include_router(platform_support_router)
     app.include_router(authorization_router)
     app.include_router(applications_router)
     app.include_router(storage_router)

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     worker_max_attempts: int = Field(default=5, ge=1, le=100)
     worker_lease_seconds: int = Field(default=60, ge=15, le=3600)
     worker_retention_days: int = Field(default=30, ge=1, le=3650)
+    browser_origins: tuple[str, ...] = ()
+    browser_session_ttl_seconds: int = Field(default=28800, ge=300, le=2592000)
+    browser_cookie_secure: bool | None = None
 
     @model_validator(mode="after")
     def validate_secret_sources(self) -> Self:
@@ -60,7 +63,18 @@ class Settings(BaseSettings):
                 raise ValueError("s3_bucket is required when s3_endpoint is configured")
             if self.environment.lower() != "development" and self.s3_endpoint.startswith("http://"):
                 raise ValueError("plain HTTP S3 endpoints are permitted only in development")
+        if "*" in self.browser_origins:
+            raise ValueError("browser_origins must not contain wildcard origins")
+        if self.environment.lower() == "production" and self.browser_cookie_secure is False:
+            raise ValueError("production browser cookies must be secure")
         return self
+
+    @property
+    def secure_browser_cookies(self) -> bool:
+        """Production is always secure; development is opt-in insecure only."""
+        if self.environment.lower() != "development":
+            return True
+        return self.browser_cookie_secure is not False
 
     def secret_value(self, name: str) -> str | None:
         """Resolve a secret from its environment value or mounted file reference."""
