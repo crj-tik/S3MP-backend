@@ -15,6 +15,7 @@ from s3mp.files.infrastructure import models as file_models  # noqa: F401
 from s3mp.governance.infrastructure import access_review_models  # noqa: F401
 from s3mp.governance.infrastructure import models as governance_models  # noqa: F401
 from s3mp.identity.infrastructure import models as identity_models  # noqa: F401
+from s3mp.platform.infrastructure import models as platform_models  # noqa: F401
 from s3mp.storage.infrastructure import models as storage_models  # noqa: F401
 from s3mp.tenant.infrastructure import models as tenant_models  # noqa: F401
 

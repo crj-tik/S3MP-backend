@@ -28,14 +28,15 @@ def _ensure_models_loaded() -> None:
     tests) trigger this; fake HTTP tests import ``_http`` instead and are
     unaffected.
     """
-    from s3mp.applications.infrastructure import models as _apps  # noqa: F401
-    from s3mp.audit.infrastructure import models as _audit  # noqa: F401
-    from s3mp.authorization.infrastructure import models as _auth  # noqa: F401
-    from s3mp.files.infrastructure import models as _files  # noqa: F401
-    from s3mp.governance.infrastructure import models as _gov  # noqa: F401
-    from s3mp.identity.infrastructure import models as _identity  # noqa: F401
-    from s3mp.storage.infrastructure import models as _storage  # noqa: F401
-    from s3mp.tenant.infrastructure import models as _tenant  # noqa: F401
+    import s3mp.applications.infrastructure.models as _apps  # noqa: F401
+    import s3mp.audit.infrastructure.models as _audit  # noqa: F401
+    import s3mp.authorization.infrastructure.models as _auth  # noqa: F401
+    import s3mp.files.infrastructure.models as _files  # noqa: F401
+    import s3mp.governance.infrastructure.models as _gov  # noqa: F401
+    import s3mp.identity.infrastructure.models as _identity  # noqa: F401
+    import s3mp.platform.infrastructure.models as _platform  # noqa: F401
+    import s3mp.storage.infrastructure.models as _storage  # noqa: F401
+    import s3mp.tenant.infrastructure.models as _tenant  # noqa: F401
 
 
 _ensure_models_loaded()

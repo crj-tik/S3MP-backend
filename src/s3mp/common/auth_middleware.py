@@ -11,7 +11,15 @@ from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
 PUBLIC_PATHS: frozenset[str] = frozenset(
-    {"/health/live", "/health/ready", "/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
+    {
+        "/health/live",
+        "/health/ready",
+        "/openapi.json",
+        "/docs",
+        "/redoc",
+        "/docs/oauth2-redirect",
+        "/api/v1/auth/login",
+    }
 )
 
 # Skip auth when the test harness has already injected a principal_context
@@ -32,8 +40,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            context = await _resolve_context(request)
-            request.state.principal_context = context
+            await _resolve_available_contexts(request)
         except ApiError as exc:
             return JSONResponse(
                 status_code=exc.status_code,
@@ -46,19 +53,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def _resolve_context(request: Request) -> PrincipalContext:
-    """Resolve credentials from session cookie or S3MP-Key header."""
-    # Try session cookie first
+async def _resolve_available_contexts(request: Request) -> None:
+    """Resolve every supplied credential into its own, non-interchangeable context."""
+    account_token = request.cookies.get("s3mp_account_session")
+    if account_token:
+        store = getattr(request.app.state, "platform_store", None)
+        session_svc = getattr(request.app.state, "session_token_service", None)
+        if store is None or session_svc is None:
+            raise ApiError(
+                "internal_error", "Account authentication is not configured", status_code=500
+            )
+        account_context = await store.resolve_account_session(session_svc.digest(account_token))
+        if account_context is None:
+            raise ApiError(
+                "authentication_required", "Account session is not active", status_code=401
+            )
+        request.state.platform_context = account_context
+
     session_token = request.cookies.get("s3mp_session")
     if session_token:
-        return await _resolve_session(request, session_token)
+        request.state.principal_context = await _resolve_session(request, session_token)
+        return
 
-    # Try API key header
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("S3MP-Key "):
-        return await _resolve_api_key(request, auth_header)
-
-    raise ApiError("authentication_required", "Authentication required", status_code=401)
+        request.state.principal_context = await _resolve_api_key(request, auth_header)
 
 
 async def _resolve_session(request: Request, token: str) -> PrincipalContext:

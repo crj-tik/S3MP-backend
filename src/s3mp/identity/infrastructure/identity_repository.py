@@ -39,14 +39,19 @@ class SqlAlchemyIdentityAdminStore:
     async def get_member(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(MembershipModel).where(
-                    MembershipModel.tenant_id == tenant_id, MembershipModel.id == membership_id
-                )
+                select(MembershipModel)
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(MembershipModel.tenant_id == tenant_id, MembershipModel.id == membership_id)
             )
             if row is None:
                 return None
             user = await session.get(UserModel, row.user_id)
-            return _membership_dict(row, user)
+            result = _membership_dict(row, user)
+            tenant_status = await session.scalar(
+                select(TenantModel.status).where(TenantModel.id == tenant_id)
+            )
+            result["tenant_status"] = _enum_value(tenant_status)
+            return result
 
     get_membership = get_member
 
@@ -69,6 +74,11 @@ class SqlAlchemyIdentityAdminStore:
                 "status": _enum_value(row.status),
                 "authorization_version": row.authorization_version,
                 "expires_at": row.expires_at,
+                "tenant_status": _enum_value(
+                    await session.scalar(
+                        select(TenantModel.status).where(TenantModel.id == tenant_id)
+                    )
+                ),
             }
 
     async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None:

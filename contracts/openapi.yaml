@@ -11,6 +11,10 @@ security:
   - s3mp_key: []
 tags:
   - {name: Context}
+  - {name: Account authentication}
+  - {name: Platform tenants}
+  - {name: Platform roles}
+  - {name: Platform support}
   - {name: Users}
   - {name: Members}
   - {name: Groups}
@@ -25,6 +29,106 @@ tags:
   - {name: Quotas}
   - {name: Audit}
 paths:
+  /api/v1/platform/tenants:
+    get:
+      tags: [Platform tenants]
+      operationId: list_platform_tenants
+      security: [{account_session_cookie: []}]
+      responses: {'200': {description: Tenant summaries, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenantPage'}}}}, '403': {$ref: '#/components/responses/PermissionDenied'}}
+    post:
+      tags: [Platform tenants]
+      operationId: create_platform_tenant
+      security: [{account_session_cookie: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenantCreate'}}}}
+      responses: {'201': {description: Tenant created, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenant'}}}}, '403': {$ref: '#/components/responses/PermissionDenied'}}
+  /api/v1/platform/tenants/{tenant_id}:
+    get:
+      tags: [Platform tenants]
+      operationId: get_platform_tenant
+      security: [{account_session_cookie: []}]
+      parameters: [{name: tenant_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
+      responses: {'200': {description: Tenant summary, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenant'}}}}, '404': {$ref: '#/components/responses/NotFound'}}
+    patch:
+      tags: [Platform tenants]
+      operationId: update_platform_tenant
+      security: [{account_session_cookie: []}]
+      parameters: [{name: tenant_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenantUpdate'}}}}
+      responses: {'200': {description: Tenant updated, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenant'}}}}, '404': {$ref: '#/components/responses/NotFound'}}
+  /api/v1/platform/role-bindings:
+    post:
+      tags: [Platform roles]
+      operationId: grant_platform_role
+      security: [{account_session_cookie: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformRoleGrant'}}}}
+      responses: {'201': {description: Role granted, content: {application/json: {schema: {type: object}}}}}
+  /api/v1/platform/role-bindings/{binding_id}:
+    delete:
+      tags: [Platform roles]
+      operationId: revoke_platform_role
+      security: [{account_session_cookie: []}]
+      parameters: [{name: binding_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
+      responses: {'204': {description: Role revoked}}
+  /api/v1/platform/support-access:
+    post:
+      tags: [Platform support]
+      operationId: request_support_access
+      security: [{account_session_cookie: []}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SupportAccessCreate'}}}}
+      responses: {'201': {description: Support access requested, content: {application/json: {schema: {type: object}}}}}
+  /api/v1/platform/support-access/{request_id}/approvals:
+    post:
+      tags: [Platform support]
+      operationId: approve_support_access
+      security: [{account_session_cookie: []}]
+      parameters: [{name: request_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
+      responses: {'200': {description: Support access approved, content: {application/json: {schema: {type: object}}}}}
+  /api/v1/platform/support-access/{request_id}:
+    delete:
+      tags: [Platform support]
+      operationId: revoke_support_access
+      security: [{account_session_cookie: []}]
+      parameters: [{name: request_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
+      responses: {'204': {description: Support access revoked}}
+  /api/v1/auth/login:
+    post:
+      tags: [Account authentication]
+      operationId: account_login
+      security: []
+      summary: Authenticate a global browser account
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AccountLoginRequest'}}}}
+      responses:
+        '200': {description: Account context; opaque account and CSRF cookies are set, content: {application/json: {schema: {$ref: '#/components/schemas/AccountContext'}}}}
+        '401': {description: Uniform credential failure, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/auth/me:
+    get:
+      tags: [Account authentication]
+      operationId: get_account_context
+      security: [{account_session_cookie: []}]
+      responses:
+        '200': {description: Global account and accessible tenant summaries, content: {application/json: {schema: {$ref: '#/components/schemas/AccountContext'}}}}
+        '401': {$ref: '#/components/responses/AuthenticationRequired'}
+  /api/v1/auth/logout:
+    post:
+      tags: [Account authentication]
+      operationId: account_logout
+      security: [{account_session_cookie: []}]
+      parameters: [{name: X-S3MP-CSRF, in: header, required: false, schema: {type: [string, 'null']}, description: Required when an account-session cookie is supplied.}]
+      responses:
+        '204': {description: Account session revoked and cookies cleared}
+        '401': {$ref: '#/components/responses/AuthenticationRequired'}
+        '403': {description: CSRF validation failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /api/v1/auth/tenant-sessions:
+    post:
+      tags: [Account authentication]
+      operationId: select_tenant_session
+      security: [{account_session_cookie: []}]
+      parameters: [{name: X-S3MP-CSRF, in: header, required: false, schema: {type: [string, 'null']}, description: Required when an account-session cookie is supplied.}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TenantSessionRequest'}}}}
+      responses:
+        '204': {description: Tenant session and CSRF cookies are set for an active membership}
+        '401': {$ref: '#/components/responses/AuthenticationRequired'}
+        '403': {description: The selected tenant is inaccessible or CSRF validation failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /api/v1/me:
     get:
       tags: [Context]
@@ -650,6 +754,7 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
 components:
   securitySchemes:
+    account_session_cookie: {type: apiKey, in: cookie, name: s3mp_account_session, description: Global account session; it does not authorize tenant APIs.}
     session_cookie: {type: apiKey, in: cookie, name: s3mp_session, description: Secure HttpOnly browser session; unsafe requests also require CSRF protection.}
     s3mp_key: {type: apiKey, in: header, name: Authorization, description: 'S3MP-Key <key_id>.<secret>'}
   parameters:
@@ -704,6 +809,17 @@ components:
         message: {type: string}
         request_id: {$ref: '#/components/schemas/Id'}
         details: {type: object, additionalProperties: true}
+    AccountLoginRequest: {type: object, additionalProperties: false, required: [email, password], properties: {email: {type: string, minLength: 3, maxLength: 320}, password: {type: string, minLength: 1, maxLength: 1024, writeOnly: true}}}
+    TenantSessionRequest: {type: object, additionalProperties: false, required: [tenant_id], properties: {tenant_id: {$ref: '#/components/schemas/Id'}}}
+    Account: {type: object, additionalProperties: false, required: [id, email, display_name], properties: {id: {$ref: '#/components/schemas/Id'}, email: {type: string, format: email}, display_name: {type: string}}}
+    AccountTenantSummary: {type: object, additionalProperties: false, required: [id, name, slug], properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, slug: {type: string}}}
+    AccountContext: {type: object, additionalProperties: false, required: [account, tenants], properties: {account: {$ref: '#/components/schemas/Account'}, tenants: {type: array, items: {$ref: '#/components/schemas/AccountTenantSummary'}}, platform_permissions: {type: array, uniqueItems: true, items: {type: string}}}}
+    PlatformTenant: {type: object, additionalProperties: false, required: [id, slug, name, status], properties: {id: {$ref: '#/components/schemas/Id'}, slug: {type: string}, name: {type: string}, status: {type: string, enum: [active, suspended]}}}
+    PlatformTenantPage: {type: object, additionalProperties: false, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/PlatformTenant'}}}}
+    PlatformTenantCreate: {type: object, additionalProperties: false, required: [slug, name, initial_admin_user_id], properties: {slug: {type: string, minLength: 1, maxLength: 100}, name: {type: string, minLength: 1, maxLength: 200}, initial_admin_user_id: {$ref: '#/components/schemas/Id'}}}
+    PlatformTenantUpdate: {type: object, additionalProperties: false, properties: {name: {type: [string, 'null']}, status: {type: [string, 'null'], enum: [active, suspended, null]}}}
+    PlatformRoleGrant: {type: object, additionalProperties: false, required: [user_id, role_name], properties: {user_id: {$ref: '#/components/schemas/Id'}, role_name: {type: string}, expires_at: {type: [string, 'null'], format: date-time}}}
+    SupportAccessCreate: {type: object, additionalProperties: false, required: [tenant_id, reason, expires_at], properties: {tenant_id: {$ref: '#/components/schemas/Id'}, reason: {type: string, minLength: 1, maxLength: 500}, expires_at: {type: string, format: date-time}}}
     PageBase:
       type: object
       additionalProperties: false

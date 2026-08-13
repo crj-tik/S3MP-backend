@@ -55,6 +55,8 @@ class IdentityContextProvider:
         membership = await self.membership_store.get_membership(tid, mid)
         if membership is None or membership.get("status") != "active":
             raise ApiError("authentication_required", "Membership is not active", status_code=401)
+        if membership.get("tenant_status") != "active":
+            raise ApiError("authentication_required", "Tenant is not active", status_code=401)
         if membership.get("expires_at") is not None:
             m_expires = membership["expires_at"]
             if isinstance(m_expires, datetime) and m_expires <= now:

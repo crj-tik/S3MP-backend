@@ -83,6 +83,10 @@ def _context(request: Request) -> PrincipalContext:
 
 
 def _file_svc(request: Request) -> Any:
+    # Authenticate before probing application wiring.  This prevents an
+    # account-only browser session from observing a configuration failure on
+    # tenant data-plane routes and keeps every file endpoint fail-closed.
+    _context(request)
     svc = getattr(request.app.state, "file_service", None)
     if svc is None:
         raise ApiError("internal_error", "File service is not configured", status_code=500)
