@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from s3mp.authorization.application.explain import explain_permissions, simulate
@@ -21,6 +21,7 @@ from s3mp.identity.domain.context import PrincipalContext
 class AuthorizationManagementService:
     store: AuthorizationManagementStore
     known_permissions: frozenset[str]
+    delegable_permissions: frozenset[str] | None = None
 
     async def require_permission(self, context: PrincipalContext, permission: str) -> None:
         bindings = await self._bindings(context.tenant_id, context.principal_id)
@@ -60,6 +61,8 @@ class AuthorizationManagementService:
 
     async def create_role(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
         self._validate_permissions(body.permissions)
+        self._validate_delegable_permissions(body.permissions)
+        await self._require_delegable_subset(context, body.permissions, None, None)
         try:
             return await self.store.create_role(
                 context.tenant_id, body.name, body.description, body.permissions
@@ -73,7 +76,21 @@ class AuthorizationManagementService:
     async def update_role(
         self, context: PrincipalContext, role_id: UUID, body: Any
     ) -> dict[str, Any]:
-        self._validate_permissions(body.permissions)
+        role = await self.store.get_role(context.tenant_id, role_id)
+        if role is not None and role.get("system"):
+            raise ApiError("permission_denied", "Built-in roles are immutable", status_code=403)
+        if body.permissions is not None:
+            self._validate_permissions(body.permissions)
+            self._validate_delegable_permissions(body.permissions)
+            await self._require_delegable_subset(context, body.permissions, None, None)
+            if role is not None:
+                added = sorted(
+                    set(body.permissions) - set(cast(list[str], role["permissions"]))
+                )
+                for binding in await self.store.bindings_for_role(context.tenant_id, role_id):
+                    await self._require_delegable_subset(
+                        context, added, binding["storage_space_id"], binding["canonical_prefix"]
+                    )
         try:
             result = await self.store.update_role(
                 context.tenant_id, role_id, body.name, body.description, body.permissions
@@ -99,6 +116,10 @@ class AuthorizationManagementService:
             or await self.store.get_principal(context.tenant_id, body.principal_id) is None
         ):
             raise ApiError("resource_not_found", "Role or principal not found", status_code=404)
+        if body.principal_id == context.principal_id:
+            await self._audit_delegation_denial(context, "self_grant")
+            raise ApiError("delegation_exceeds_authority", "Self-grants are forbidden", status_code=403)
+        self._validate_delegable_permissions(role["permissions"])
         scope = body.scope
         if scope.type == "tenant" and (
             scope.storage_space_id is not None or scope.canonical_prefix is not None
@@ -146,6 +167,9 @@ class AuthorizationManagementService:
         )
         if body.expires_at <= datetime.now(UTC):
             raise ApiError("validation_failed", "expires_at must be in the future", status_code=422)
+        await self._require_delegation_expiry_bound(
+            context, role["permissions"], scope.storage_space_id, scope.canonical_prefix, body.expires_at
+        )
         result = await self.store.create_role_binding(
             context.tenant_id,
             body.principal_id,
@@ -212,7 +236,8 @@ class AuthorizationManagementService:
             storage_space_id=body.storage_space_id,
             object_key=body.object_key or "",
         )
-        return {**result, "sources": [_source(source) for source in result["sources"]]}
+        sources = cast(list[Any], result["sources"])
+        return {**result, "sources": [_source(source) for source in sources]}
 
     async def _bindings(self, tenant_id: UUID, principal_id: UUID) -> list[Binding]:
         return [
@@ -235,9 +260,38 @@ class AuthorizationManagementService:
                 ).decision
                 != Decision.ALLOW
             ):
+                await self._audit_delegation_denial(context, "permission_or_scope_exceeds_authority")
                 raise ApiError(
                     "delegation_exceeds_authority", "Delegation exceeds authority", status_code=403
                 )
+
+    async def _require_delegation_expiry_bound(
+        self, context: PrincipalContext, permissions: list[str], storage_space_id: UUID | None,
+        prefix: str | None, expires_at: datetime,
+    ) -> None:
+        bindings = await self._bindings(context.tenant_id, context.principal_id)
+        for permission in permissions:
+            matching = [binding for binding in bindings if binding.permission == permission and binding.effect == "allow"
+                        and binding.expires_at is not None and binding.expires_at >= expires_at
+                        and evaluate(permission, [binding], storage_space_id=storage_space_id, object_key=prefix or "").decision == Decision.ALLOW]
+            if not matching:
+                await self._audit_delegation_denial(context, "expiry_exceeds_authority")
+                raise ApiError("delegation_exceeds_authority", "Delegation expiry exceeds authority", status_code=403)
+
+    async def _audit_delegation_denial(
+        self, context: PrincipalContext, reason_code: str
+    ) -> None:
+        writer = getattr(self.store, "record_security_audit", None)
+        if writer is None:
+            return
+        await writer(
+            context.tenant_id,
+            context.principal_id,
+            "authorization.delegation_denied",
+            "role_binding",
+            None,
+            {"reason_code": reason_code},
+        )
 
     async def _require_same_tenant(self, tenant_id: UUID, principal_id: UUID) -> None:
         if await self.store.get_principal(tenant_id, principal_id) is None:
@@ -252,6 +306,13 @@ class AuthorizationManagementService:
                 status_code=422,
                 details={"permissions": sorted(unknown)},
             )
+
+    def _validate_delegable_permissions(self, permissions: list[str]) -> None:
+        if self.delegable_permissions is None:
+            return
+        forbidden = set(permissions) - self.delegable_permissions
+        if forbidden:
+            raise ApiError("delegation_exceeds_authority", "Permission is not delegable", status_code=403)
 
 
 def _found(value: dict[str, Any] | None, label: str) -> dict[str, Any]:

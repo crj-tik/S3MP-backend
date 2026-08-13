@@ -9,6 +9,7 @@ from uuid import UUID
 
 from s3mp.authorization.domain.evaluator import Decision, evaluate
 from s3mp.files.application.file_service import FileAuthorizationStore, ObjectStorage, StorageSpaceStore
+from s3mp.files.application.delayed_subject_validator import validate_delayed_subject
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import derive_provider_target
 
@@ -71,50 +72,21 @@ class FileOperationWorker:
         space_id = operation.get("storage_space_id")
         if space_id is None:
             return "cancelled", "legacy_operation_missing_storage_space"
-        principal = await self.principal_store.get_principal(tenant_id, principal_id)
-        if principal is None or not principal.get("enabled", False):
-            return "cancelled", "principal_inactive"
         evidence = operation.get("authorization_evidence") or {}
-        if evidence.get("subject_kind", "human") != "application":
-            membership_id = operation.get("membership_id")
-            if not membership_id:
-                return "cancelled", "legacy_operation_missing_membership"
-            membership = await self.principal_store.get_membership_state(
-                tenant_id, UUID(str(membership_id))
-            )
-            if (
-                membership is None
-                or membership.get("status") != "active"
-                or membership.get("principal_id") != str(principal_id)
-                or membership.get("expires_at") is not None
-                and membership["expires_at"] <= datetime.now(UTC)
-                or int(membership.get("authorization_version", 0)) != int(operation.get("authorization_version", 0))
-            ):
-                return "cancelled", "membership_inactive_or_stale"
-        scopes = frozenset(str(value) for value in evidence.get("api_key_scopes") or ())
-        if evidence.get("api_key_id"):
-            if self.api_key_state_store is None:
-                return "cancelled", "api_key_state_unavailable"
-            key = await self.api_key_state_store.get_key_state(
-                tenant_id, UUID(str(evidence["api_key_id"]))
-            )
-            if (
-                key is None
-                or key.get("status") != "active"
-                or key.get("application_status") != "active"
-                or not key.get("principal_enabled", False)
-                or key.get("principal_id") != str(principal_id)
-                or key.get("application_id") != evidence.get("application_id")
-                or (key.get("expires_at") is not None and key["expires_at"] <= datetime.now(UTC))
-            ):
-                return "cancelled", "api_key_inactive"
-            scopes = frozenset(str(value) for value in key.get("scopes") or ())
+        subject = await validate_delayed_subject(
+            principal_store=self.principal_store, api_key_store=self.api_key_state_store,
+            tenant_id=tenant_id, principal_id=principal_id, membership_id=operation.get("membership_id"),
+            authorization_version=int(operation.get("authorization_version", 0)), evidence=evidence,
+        )
+        if subject is None:
+            return "cancelled", "subject_inactive_or_stale"
+        scopes = subject.api_key_scopes or frozenset()
         ctx = PrincipalContext.for_application(
             tenant_id, principal_id, int(operation.get("authorization_version", 1)),
             application_id=UUID(evidence["application_id"]) if evidence.get("application_id") else None,
             api_key_id=UUID(evidence["api_key_id"]) if evidence.get("api_key_id") else None,
-            api_key_scopes=scopes if evidence.get("subject_kind") == "application" else None,
-        ) if evidence.get("subject_kind") == "application" else PrincipalContext(
+            api_key_scopes=scopes,
+        ) if subject.subject_kind == "application" else PrincipalContext(
             tenant_id, principal_id,
             UUID(str(operation["membership_id"])) if operation.get("membership_id") else UUID(int=1),
             int(operation.get("authorization_version", 1)),

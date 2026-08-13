@@ -175,7 +175,7 @@ async def test_management_services_are_wired_and_execute_against_real_postgresql
                         "effect": "allow",
                         "scope": {"type": "tenant"},
                         "reason": "review access",
-                        "expires_at": "2030-01-01T00:00:00Z",
+                        "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
                     },
                 )
                 assert binding.status_code == 201

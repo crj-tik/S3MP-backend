@@ -34,6 +34,9 @@ class FakeApplicationService:
     ) -> dict[str, Any]:
         return {"id": str(app_id), "name": name or "renamed", "status": "active"}
 
+    async def takeover_app(self, context: Any, app_id: Any, reason: str) -> dict[str, Any]:
+        return {"id": str(app_id), "name": "recovered", "status": "active", "reason": reason}
+
 
 class FakeApiKeyService:
     def __init__(self) -> None:
@@ -109,6 +112,18 @@ async def test_create_application_returns_201() -> None:
 
     assert response.status_code == 201
     assert response.json()["name"] == "new-app"
+
+
+async def test_takeover_application_returns_200() -> None:
+    app = _app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/v1/applications/{uuid4()}/takeover",
+            json={"reason": "owner account departed"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
 
 
 async def test_create_api_key_returns_201_with_one_time_secret() -> None:

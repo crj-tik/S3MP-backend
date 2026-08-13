@@ -33,7 +33,14 @@ class ApplicationStore(Protocol):
         self, tenant_id: UUID, app_id: UUID, name: str | None
     ) -> dict[str, Any] | None: ...
 
+    async def takeover_app(
+        self, tenant_id: UUID, app_id: UUID, owner_principal_id: UUID, reason: str
+    ) -> dict[str, Any] | None: ...
+
     async def list_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
+    async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
+    async def recompute_owner_state_for_principal(self, tenant_id: UUID, owner_principal_id: UUID) -> int: ...
+    async def scan_ownerless_applications(self, tenant_id: UUID) -> int: ...
 
 
 class PermissionAuthorizer(Protocol):
@@ -41,6 +48,8 @@ class PermissionAuthorizer(Protocol):
 
 
 class ApiKeyStore(Protocol):
+    async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
+
     async def list_keys(
         self, tenant_id: UUID, app_id: UUID, limit: int, cursor: str | None
     ) -> tuple[list[dict[str, Any]], str | None]: ...
@@ -103,9 +112,38 @@ class ApplicationService:
             raise ApiError("resource_not_found", "Application not found", status_code=404)
         return result
 
+    async def takeover_app(
+        self, context: PrincipalContext, app_id: UUID, reason: str
+    ) -> dict[str, Any]:
+        """Reactivate an ownerless application under a newly accountable member.
+
+        This deliberately preserves valid API keys: the application's bumped
+        authorization version already blocked them while pending, and no key
+        material is read or returned during recovery.
+        """
+        if context.subject_kind == "application":
+            raise ApiError("permission_denied", "API keys cannot take over applications", status_code=403)
+        await self._require(context, "applications.manage")
+        current = await self.store.get_app(context.tenant_id, app_id)
+        if current is None:
+            raise ApiError("resource_not_found", "Application not found", status_code=404)
+        if current["status"] != "pending_takeover":
+            raise ApiError("conflict", "Application does not require takeover", status_code=409)
+        result = await self.store.takeover_app(
+            context.tenant_id, app_id, context.principal_id, reason
+        )
+        if result is None:
+            raise ApiError("resource_not_found", "Application not found", status_code=404)
+        return result
+
     async def check_orphan(self, tenant_id: UUID, app_id: UUID) -> bool:
         owners = await self.store.list_owners(tenant_id, app_id)
-        return orphaned_application(set(owners), set(owners))
+        active_owners = await self.store.list_active_owners(tenant_id, app_id)
+        return orphaned_application(set(owners), set(active_owners))
+
+    async def scan_ownerless(self, context: PrincipalContext) -> int:
+        await self._require(context, "applications.manage")
+        return await self.store.scan_ownerless_applications(context.tenant_id)
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:
@@ -115,7 +153,7 @@ class ApplicationService:
     async def _require_owner_or_permission(
         self, context: PrincipalContext, app_id: UUID, permission: str
     ) -> None:
-        owners = await self.store.list_owners(context.tenant_id, app_id)
+        owners = await self.store.list_active_owners(context.tenant_id, app_id)
         if context.principal_id in owners:
             return
         await self._require(context, permission)
@@ -233,7 +271,7 @@ class ApiKeyService:
     async def _require_owner_or_permission(
         self, context: PrincipalContext, app_id: UUID, permission: str
     ) -> None:
-        owners = await self.store.list_owners(context.tenant_id, app_id)
+        owners = await self.store.list_active_owners(context.tenant_id, app_id)
         if context.principal_id in owners:
             return
         if self.authorizer is None:

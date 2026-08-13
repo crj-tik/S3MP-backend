@@ -25,7 +25,7 @@ services:
       S3MP_LOG_LEVEL: INFO
       S3MP_READINESS_TIMEOUT_SECONDS: "2"
     secrets: [database_url, api_key_pepper]
-    ports: ["8000:8000"]
+    ports: ["19101:8000"]
     depends_on:
       postgres:
         condition: service_healthy

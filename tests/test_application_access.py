@@ -13,6 +13,8 @@ from s3mp.applications.domain.credentials import (
     require_scope_intersection,
     revoke_key,
 )
+from s3mp.applications.application.application_service import ApiKeyService
+from s3mp.common.errors import ApiError
 
 
 def test_api_key_is_high_entropy_and_secret_verification_is_one_way() -> None:
@@ -55,3 +57,28 @@ async def test_api_key_rate_limits_key_application_and_tenant() -> None:
 
     assert await limiter.allow(key_id="k", application_id=application_id, tenant_id=tenant_id)
     assert not await limiter.allow(key_id="k", application_id=application_id, tenant_id=tenant_id)
+
+
+@pytest.mark.asyncio
+async def test_pending_takeover_application_key_cannot_authenticate() -> None:
+    credentials = ApiKeyCredentialService(b"p" * 32)
+    issued = credentials.issue()
+
+    class Store:
+        async def find_by_key_id(self, key_id: str) -> dict[str, object] | None:
+            assert key_id == issued.key_id
+            return {
+                "id": str(uuid4()),
+                "tenant_id": uuid4(),
+                "secret_digest": credentials.digest(issued.secret),
+                "status": "active",
+                "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                "application_status": "pending_takeover",
+                "principal_enabled": True,
+                "principal_type": "application",
+            }
+
+    service = ApiKeyService(Store(), credentials)  # type: ignore[arg-type]
+    with pytest.raises(ApiError) as exc_info:
+        await service.authenticate(f"S3MP-Key {issued.credential}")
+    assert exc_info.value.code == "authentication_required"

@@ -310,4 +310,40 @@ The invariant command must report zero invalid application principals, zero acti
 
 Worker tuning uses `S3MP_WORKER_POLL_SECONDS`, `S3MP_WORKER_BATCH_SIZE`, `S3MP_WORKER_MAX_ATTEMPTS`, `S3MP_WORKER_LEASE_SECONDS`, and `S3MP_WORKER_RETENTION_DAYS`. Alert when `stale_leases > 0`, terminal failures or cancellations increase, or `backlog` grows for two polling intervals. Keep workers disabled until the invariant report and PostgreSQL/Redis/MinIO acceptance tests pass.
 
+### Provider namespace rollout and rollback gates
+
+All provider keys are server-owned and versioned as
+`v1/tenants/<tenant-id>/spaces/<space-id>/<relative-key>`. Client APIs continue
+to use relative keys; physical keys and migration manifests must not be returned
+to clients or written to normal application logs.
+
+Before enabling workers or accepting production writes after this rollout, run:
+
+```powershell
+uv run alembic upgrade head
+uv run python scripts/security_audit.py
+uv run python scripts/provider_target_migration.py
+uv run python scripts/check_contracts.py
+```
+
+The audit commands are read-only. They must report no unsafe durable operations
+and no unresolved namespace overlap. Legacy records are quarantined or moved only
+through an explicit manifest; normal workers never mutate legacy provider targets.
+
+For a proven mapping: record a manifest, make a verified copy, head and compare
+the destination, update persistence transactionally, then run source cleanup in a
+separate approved command. Never combine copy and deletion, or infer a relative
+key from an ambiguous legacy physical key.
+
+Rollback is operational: a previous build may serve verified legacy reads
+temporarily, but must keep legacy object and delayed-work mutations disabled. Do
+not remove additive migration columns or copied objects during rollback; resume
+from the durable manifest after remediation.
+
+Owner containment is also a rollout gate. An application with no active human
+Owner enters `pending_takeover` and its API Keys cannot authenticate. A human with
+`applications.manage` restores it through
+`POST /api/v1/applications/{application_id}/takeover`; this adds the accountable
+Owner, advances authorization state, and never reveals an API Key secret.
+
 生产环境强制使用 `S3MP_S3_ACCESS_KEY_FILE` 和 `S3MP_S3_SECRET_KEY_FILE` 文件引用。

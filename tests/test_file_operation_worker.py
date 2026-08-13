@@ -71,7 +71,22 @@ async def test_worker_cancels_human_operation_without_membership():
     store = Store(record)
     await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
     assert objects.copies == []
-    assert store.finished == [("cancelled", "legacy_operation_missing_membership")]
+    assert store.finished == [("cancelled", "subject_inactive_or_stale")]
+
+
+@pytest.mark.asyncio
+async def test_worker_cancels_when_membership_authorization_version_changes():
+    class StaleMembership(Principals):
+        async def get_membership_state(self, tenant_id, membership_id):
+            state = await super().get_membership_state(tenant_id, membership_id)
+            state["authorization_version"] = 2
+            return state
+
+    record, objects = operation(), Objects()
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), StaleMembership(), objects).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("cancelled", "subject_inactive_or_stale")]
 
 
 @pytest.mark.asyncio
@@ -104,7 +119,7 @@ async def test_worker_cancels_revoked_api_key_before_provider_call():
     store = Store(record)
     await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects, keys).run_once("worker")
     assert objects.copies == []
-    assert store.finished == [("cancelled", "api_key_inactive")]
+    assert store.finished == [("cancelled", "subject_inactive_or_stale")]
 
 
 @pytest.mark.asyncio

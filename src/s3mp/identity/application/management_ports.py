@@ -81,4 +81,16 @@ class AuthorizationManagementStore(Protocol):
     async def bindings_for_principal(
         self, tenant_id: UUID, principal_id: UUID
     ) -> list[dict[str, Any]]: ...
+    async def bindings_for_role(
+        self, tenant_id: UUID, role_id: UUID
+    ) -> list[dict[str, Any]]: ...
+    async def record_security_audit(
+        self,
+        tenant_id: UUID,
+        actor_principal_id: UUID,
+        action: str,
+        resource_type: str,
+        resource_id: str | None,
+        details: dict[str, object],
+    ) -> None: ...
     async def storage_space_exists(self, tenant_id: UUID, storage_space_id: UUID) -> bool: ...
