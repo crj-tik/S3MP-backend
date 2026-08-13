@@ -51,5 +51,6 @@ class StorageSpaceModel(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)
     root_prefix: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

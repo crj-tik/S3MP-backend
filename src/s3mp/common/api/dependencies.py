@@ -42,6 +42,44 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "get_api_key_secret": "api_keys.read",
     "rotate_api_key": "api_keys.manage",
     "revoke_api_key": "api_keys.manage",
+    "list_storage_connections": "storage_connections.read",
+    "create_storage_connection": "storage_connections.manage",
+    "get_storage_connection": "storage_connections.read",
+    "probe_storage_connection": "storage_connections.manage",
+    "list_storage_spaces": "storage_spaces.read",
+    "create_storage_space": "storage_spaces.manage",
+    "get_storage_space": "storage_spaces.read",
+    "list_quotas": "quotas.read",
+    "get_quota": "quotas.read",
+    "update_quota": "quotas.manage",
+    "list_audit_events": "audit.read",
+    "get_audit_event": "audit.read",
+}
+
+# These routes remain available to an API-key application principal.  Their
+# service layer performs resource and scope authorization; they are deliberately
+# not management routes merely because their URL starts with /api/v1.
+DATA_PLANE_OPERATION_PERMISSIONS = {
+    "list_files": "files.list",
+    "get_file": "files.read",
+    "delete_file": "files.delete",
+    "create_file_operation": "files.copy",
+    "create_upload": "files.write",
+    "proxy_upload_content": "files.write",
+    "complete_upload": "files.write",
+    "create_presigned_download": "presigned_urls.issue",
+    "create_multipart_upload": "multipart.manage",
+    "abort_multipart_upload": "multipart.manage",
+    "create_multipart_part": "multipart.manage",
+    "confirm_multipart_part": "multipart.manage",
+    "complete_multipart_upload": "multipart.manage",
+}
+
+# One authoritative classification for every OpenAPI operation that declares
+# x-permission.  Contract validation compares this map with the contract.
+OPERATION_PERMISSION_CLASSIFICATIONS = {
+    **MANAGEMENT_OPERATION_PERMISSIONS,
+    **DATA_PLANE_OPERATION_PERMISSIONS,
 }
 
 
@@ -88,6 +126,16 @@ def management_permission(operation_id: str) -> Any:
 
     async def resolver(request: Request) -> PrincipalContext:
         context = principal_context(request)
+        if context.subject_kind == "application":
+            service = getattr(request.app.state, "api_key_service", None)
+            audit_denial = getattr(service, "audit_management_denial", None)
+            if audit_denial is not None:
+                await audit_denial(context)
+            raise ApiError(
+                "permission_denied",
+                "API keys cannot access management APIs",
+                status_code=403,
+            )
         service = getattr(request.app.state, "authorization_management", None)
         if service is None:
             raise ApiError(
@@ -96,4 +144,7 @@ def management_permission(operation_id: str) -> Any:
         await service.require_permission(context, permission)
         return context
 
+    # Contract checks inspect FastAPI's dependency graph rather than relying on
+    # a manually maintained list of routers.
+    setattr(resolver, "__s3mp_management_operation_id__", operation_id)
     return Depends(resolver)

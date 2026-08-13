@@ -1,10 +1,11 @@
 """Quota and audit HTTP endpoints."""
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
@@ -49,20 +50,22 @@ def _audit_svc(request: Request) -> Any:
 @router.get("/quotas", operation_id="list_quotas")
 async def list_quotas(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("list_quotas")],
     storage_space_id: str | None = None,
 ) -> Any:
     return await _quota_svc(request).list_quotas(
-        _context(request).tenant_id, storage_space_id
+        context, storage_space_id
     )
 
 
 @router.get("/quotas/{quota_id}", operation_id="get_quota")
 async def get_quota(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_quota")],
     quota_id: str = Path(min_length=1),
 ) -> Any:
     return await _quota_svc(request).get_quota(
-        _context(request).tenant_id, quota_id
+        context, quota_id
     )
 
 
@@ -70,10 +73,11 @@ async def get_quota(
 async def update_quota(
     request: Request,
     body: QuotaUpdate,
+    context: Annotated[PrincipalContext, management_permission("update_quota")],
     quota_id: str = Path(min_length=1),
 ) -> Any:
     return await _quota_svc(request).update_quota(
-        _context(request).tenant_id, quota_id, body.limit_bytes
+        context, quota_id, body.limit_bytes
     )
 
 
@@ -83,13 +87,14 @@ async def update_quota(
 @router.get("/audit_events", operation_id="list_audit_events")
 async def list_audit_events(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("list_audit_events")],
     occurred_from: str | None = None,
     occurred_to: str | None = None,
     action: str | None = None,
     actor_principal_id: str | None = None,
 ) -> Any:
     return await _audit_svc(request).list_audit_events(
-        _context(request).tenant_id,
+        context,
         occurred_from=occurred_from,
         occurred_to=occurred_to,
         action=action,
@@ -100,8 +105,9 @@ async def list_audit_events(
 @router.get("/audit_events/{audit_event_id}", operation_id="get_audit_event")
 async def get_audit_event(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_audit_event")],
     audit_event_id: str = Path(min_length=1),
 ) -> Any:
     return await _audit_svc(request).get_audit_event(
-        _context(request).tenant_id, audit_event_id
+        context, audit_event_id
     )

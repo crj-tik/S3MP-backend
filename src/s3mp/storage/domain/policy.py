@@ -66,6 +66,40 @@ def canonical_object_key(key: str, *, allow_empty: bool = False) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderTarget:
+    """A server-derived provider location; never assembled from request input."""
+
+    bucket: str
+    key: str
+    version: int = 1
+
+
+def canonical_operator_prefix(prefix: str) -> str:
+    """Validate the optional operator segment stored beneath the fixed namespace."""
+    return canonical_object_key(prefix, allow_empty=True)
+
+
+def derive_provider_target(
+    *, tenant_id: UUID, storage_space_id: UUID, bucket: str, relative_key: str,
+    operator_prefix: str = "", version: int = 1,
+) -> ProviderTarget:
+    """Derive the immutable tenant/storage-space key namespace for provider I/O."""
+    if version != 1:
+        raise StoragePolicyError("unsupported provider target version")
+    if not bucket or "/" in bucket or "\\" in bucket:
+        raise StoragePolicyError("bucket must be a single provider bucket name")
+    relative = canonical_object_key(relative_key, allow_empty=True)
+    prefix = canonical_operator_prefix(operator_prefix)
+    namespace = f"v{version}/tenants/{tenant_id}/spaces/{storage_space_id}"
+    parts = [namespace]
+    if prefix:
+        parts.append(prefix)
+    if relative:
+        parts.append(relative)
+    return ProviderTarget(bucket=bucket, key="/".join(parts), version=version)
+
+
+@dataclass(frozen=True, slots=True)
 class AuthorizedCommand:
     tenant_id: UUID
     storage_space_id: UUID
