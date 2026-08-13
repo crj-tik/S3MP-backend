@@ -25,6 +25,7 @@ class OperationStore(Protocol):
 
 class PrincipalStore(Protocol):
     async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None: ...
+    async def get_membership_state(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None: ...
 
 
 class ApiKeyStateStore(Protocol):
@@ -74,6 +75,22 @@ class FileOperationWorker:
         if principal is None or not principal.get("enabled", False):
             return "cancelled", "principal_inactive"
         evidence = operation.get("authorization_evidence") or {}
+        if evidence.get("subject_kind", "human") != "application":
+            membership_id = operation.get("membership_id")
+            if not membership_id:
+                return "cancelled", "legacy_operation_missing_membership"
+            membership = await self.principal_store.get_membership_state(
+                tenant_id, UUID(str(membership_id))
+            )
+            if (
+                membership is None
+                or membership.get("status") != "active"
+                or membership.get("principal_id") != str(principal_id)
+                or membership.get("expires_at") is not None
+                and membership["expires_at"] <= datetime.now(UTC)
+                or int(membership.get("authorization_version", 0)) != int(operation.get("authorization_version", 0))
+            ):
+                return "cancelled", "membership_inactive_or_stale"
         scopes = frozenset(str(value) for value in evidence.get("api_key_scopes") or ())
         if evidence.get("api_key_id"):
             if self.api_key_state_store is None:
@@ -98,11 +115,15 @@ class FileOperationWorker:
             api_key_id=UUID(evidence["api_key_id"]) if evidence.get("api_key_id") else None,
             api_key_scopes=scopes if evidence.get("subject_kind") == "application" else None,
         ) if evidence.get("subject_kind") == "application" else PrincipalContext(
-            tenant_id, principal_id, UUID(int=1), int(operation.get("authorization_version", 1))
+            tenant_id, principal_id,
+            UUID(str(operation["membership_id"])) if operation.get("membership_id") else UUID(int=1),
+            int(operation.get("authorization_version", 1)),
         )
         space = await self.storage_store.get_space(tenant_id, UUID(space_id))
         if space is None:
             return "cancelled", "storage_space_missing"
+        if int(operation.get("provider_target_version", 0)) != int(space.get("provider_target_version", 1)):
+            return "cancelled", "legacy_provider_target"
 
         def target(key: str):
             try:

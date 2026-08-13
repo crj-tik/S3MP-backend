@@ -92,6 +92,7 @@ class AuthorizedFileCommand:
             "evaluated_at": now.isoformat(),
             "authorization_version": ctx.authorization_version,
             "subject_kind": ctx.subject_kind,
+            "membership_id": str(ctx.membership_id) if ctx.membership_id else None,
             "application_id": str(ctx.application_id) if ctx.application_id else None,
             "api_key_id": str(ctx.api_key_id) if ctx.api_key_id else None,
             "api_key_scopes": sorted(ctx.api_key_scopes or ()),

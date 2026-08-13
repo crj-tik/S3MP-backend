@@ -34,7 +34,12 @@ class SqlAlchemyFileStore:
                 FileObjectModel.status == "available",
             )
             if prefix:
-                stmt = stmt.where(FileObjectModel.object_key.startswith(prefix))
+                # A directory prefix is a segment boundary, not a lexical
+                # prefix: `team` must not enumerate `team2`.
+                stmt = stmt.where(or_(
+                    FileObjectModel.object_key == prefix,
+                    FileObjectModel.object_key.startswith(prefix + "/", autoescape=True),
+                ))
             rows = (await session.scalars(stmt.order_by(FileObjectModel.object_key))).all()
             return [_file_dict(r) for r in rows]
 
@@ -145,6 +150,7 @@ class SqlAlchemyFileStore:
             model = FileOperationModel(
                 tenant_id=tenant_id,
                 principal_id=UUID(data.get("principal_id", str(uuid4()))),
+                membership_id=UUID(data["membership_id"]) if data.get("membership_id") else None,
                 operation_type=data["operation_type"],
                 source_key=data.get("source_key"),
                 destination_key=data.get("destination_key"),
@@ -153,6 +159,7 @@ class SqlAlchemyFileStore:
                 status="pending",
                 storage_space_id=space_id,
                 authorization_version=int(data.get("authorization_version", 1)),
+                provider_target_version=int(data.get("provider_target_version", 1)),
                 authorization_evidence=data.get("authorization_evidence", {}),
             )
             session.add(model)
@@ -272,8 +279,10 @@ class SqlAlchemyFileStore:
             model = UploadSessionModel(
                 tenant_id=tenant_id,
                 principal_id=UUID(data["principal_id"]),
+                membership_id=UUID(data["membership_id"]) if data.get("membership_id") else None,
                 storage_space_id=space_id,
                 object_key=data["object_key"],
+                provider_target_version=int(data.get("provider_target_version", 1)),
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 checksum=data.get("checksum"),
@@ -324,6 +333,7 @@ class SqlAlchemyFileStore:
                 tenant_id=tenant_id,
                 storage_space_id=row.storage_space_id,
                 object_key=row.object_key,
+                provider_target_version=row.provider_target_version,
                 content_length=row.declared_length,
                 content_type=row.content_type,
                 checksum=data.get("checksum") or row.checksum,
@@ -344,8 +354,10 @@ class SqlAlchemyFileStore:
             model = MultipartSessionModel(
                 tenant_id=tenant_id,
                 principal_id=UUID(data["principal_id"]),
+                membership_id=UUID(data["membership_id"]) if data.get("membership_id") else None,
                 storage_space_id=space_id,
                 object_key=data["object_key"],
+                provider_target_version=int(data.get("provider_target_version", 1)),
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 quota_reservation_id=uuid4(),
@@ -469,6 +481,7 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
     return {
         "id": str(m.id), "tenant_id": str(m.tenant_id),
         "storage_space_id": str(m.storage_space_id), "object_key": m.object_key,
+        "provider_target_version": m.provider_target_version,
         "content_length": m.content_length, "content_type": m.content_type,
         "etag": m.etag, "checksum": m.checksum,
         "status": m.status,
@@ -484,6 +497,8 @@ def _upload_dict(m: UploadSessionModel) -> dict[str, Any]:
     return {
         "id": str(m.id), "tenant_id": str(m.tenant_id),
         "principal_id": str(m.principal_id), "object_key": m.object_key,
+        "membership_id": str(m.membership_id) if m.membership_id else None,
+        "provider_target_version": m.provider_target_version,
         "storage_space_id": str(m.storage_space_id),
         "content_length": m.declared_length, "content_type": m.content_type,
         "status": m.status, "checksum": m.checksum,
@@ -495,6 +510,8 @@ def _mp_dict(m: MultipartSessionModel) -> dict[str, Any]:
     return {
         "id": str(m.id), "tenant_id": str(m.tenant_id),
         "principal_id": str(m.principal_id), "object_key": m.object_key,
+        "membership_id": str(m.membership_id) if m.membership_id else None,
+        "provider_target_version": m.provider_target_version,
         "storage_space_id": str(m.storage_space_id),
         "content_length": m.declared_length, "content_type": m.content_type,
         "status": m.status, "provider_upload_id": m.provider_upload_id,
@@ -513,6 +530,7 @@ def _op_dict(m: FileOperationModel) -> dict[str, Any]:
     return {
         "id": str(m.id), "tenant_id": str(m.tenant_id),
         "principal_id": str(m.principal_id),
+        "membership_id": str(m.membership_id) if m.membership_id else None,
         "operation_type": m.operation_type, "status": m.status,
         "source_key": m.source_key, "destination_key": m.destination_key,
         "keys": list(m.keys or ()),
@@ -520,6 +538,7 @@ def _op_dict(m: FileOperationModel) -> dict[str, Any]:
         "failure_reason": m.failure_reason,
         "storage_space_id": str(m.storage_space_id) if m.storage_space_id else None,
         "authorization_version": m.authorization_version,
+        "provider_target_version": m.provider_target_version,
         "authorization_evidence": m.authorization_evidence or {},
         "attempt_count": m.attempt_count,
         "lease_owner": m.lease_owner,

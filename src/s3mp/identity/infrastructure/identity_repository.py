@@ -49,6 +49,27 @@ class SqlAlchemyIdentityAdminStore:
 
     get_membership = get_member
 
+    async def get_membership_state(
+        self, tenant_id: UUID, membership_id: UUID
+    ) -> dict[str, Any] | None:
+        """Internal, time-typed membership state for delayed-work validation."""
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(MembershipModel).where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.id == membership_id,
+                )
+            )
+            if row is None:
+                return None
+            return {
+                "id": str(row.id),
+                "principal_id": str(row.principal_id),
+                "status": _enum_value(row.status),
+                "authorization_version": row.authorization_version,
+                "expires_at": row.expires_at,
+            }
+
     async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
@@ -801,6 +822,7 @@ def _membership_dict(row: MembershipModel, user: UserModel | None) -> dict[str, 
         },
         "status": _enum_value(row.status),
         "authorization_version": row.authorization_version,
+        "expires_at": _time(row.expires_at),
         "created_at": _time(row.created_at),
         "updated_at": _time(row.updated_at),
         "etag": etag_value(str(row.id), _time(row.updated_at) or ""),
