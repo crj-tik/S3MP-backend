@@ -34,6 +34,7 @@ from s3mp.files.infrastructure.authorization_repository import (
 )
 from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
+from s3mp.files.infrastructure.work_signal import RedisWorkSignal
 from s3mp.governance.api.router import router as governance_router
 from s3mp.governance.application.governance_service import AuditService, QuotaService
 from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, SqlAlchemyQuotaStore
@@ -155,10 +156,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             SqlAlchemyApplicationStore(session_factory) if session_factory else _store
         )
         storage_store = SqlAlchemyStorageStore(session_factory) if session_factory else _store
-        app.state.application_service = ApplicationService(application_store)  # type: ignore[arg-type]
+        app.state.application_service = ApplicationService(  # type: ignore[arg-type]
+            application_store, getattr(app.state, "authorization_management", None)
+        )
         app.state.api_key_service = ApiKeyService(
             application_store,  # type: ignore[arg-type]
             ApiKeyCredentialService((configured.secret_value("api_key_pepper") or "p" * 32).encode(), pepper_version=configured.api_key_pepper_version),
+            getattr(app.state, "authorization_management", None),
         )
         app.state.storage_service = StorageService(storage_store)  # type: ignore[arg-type]
         file_store = SqlAlchemyFileStore(session_factory) if session_factory else _store
@@ -172,6 +176,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             storage_store=storage_store,  # type: ignore[arg-type]
             authorization_store=file_authorization_store,
             ingestion_store=ingestion_store,
+            principal_store=identity_store if session_factory else None,
+            api_key_state_store=application_store if session_factory else None,
+            work_notifier=RedisWorkSignal(redis) if redis is not None else None,
         )
         quota_store = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
         audit_store = SqlAlchemyAuditStore(session_factory) if session_factory else _store

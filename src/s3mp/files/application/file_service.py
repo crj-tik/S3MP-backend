@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from uuid import UUID
 
-from s3mp.authorization.domain.evaluator import Binding
+from s3mp.authorization.domain.evaluator import Binding, Decision, evaluate
 from s3mp.common.errors import ApiError
 from s3mp.common.middleware import current_request_id
 from s3mp.files.application.auth_guard import FileAuthGuard
@@ -20,6 +20,7 @@ class FileStore(Protocol):
     async def delete_file(self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any) -> None: ...
     async def list_pending_deletions(self) -> list[dict[str, Any]]: ...
     async def finalize_file_delete(self, tenant_id: UUID, file_id: UUID) -> None: ...
+    async def record_delete_failure(self, tenant_id: UUID, file_id: UUID, max_attempts: int) -> None: ...
     async def create_operation(self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
     async def get_operation(self, tenant_id: UUID, op_id: UUID) -> dict[str, Any] | None: ...
     async def create_upload(self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
@@ -48,6 +49,18 @@ class FileAuthorizationStore(Protocol):
     ) -> list[Binding]: ...
 
 
+class PrincipalStateStore(Protocol):
+    async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None: ...
+
+
+class ApiKeyStateStore(Protocol):
+    async def get_key_state(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any] | None: ...
+
+
+class WorkNotifier(Protocol):
+    async def notify(self) -> bool: ...
+
+
 class IngestionStore(Protocol):
     async def create_upload_intent(
         self, tenant_id: UUID, session_data: dict[str, Any], ingestion_data: dict[str, Any]
@@ -66,12 +79,14 @@ class IngestionStore(Protocol):
     ) -> dict[str, Any]: ...
     async def expire(self, tenant_id: UUID, ingestion_id: UUID) -> dict[str, Any]: ...
     async def list_pending(self, tenant_id: UUID | None = None) -> list[dict[str, Any]]: ...
+    async def reconciliation_attempt_count(self, tenant_id: UUID, ingestion_id: UUID) -> int: ...
 
 
 class ObjectStorage(Protocol):
     async def put(self, key: str, body: bytes, content_type: str) -> object: ...
     async def head(self, key: str) -> object | None: ...
     async def delete(self, key: str) -> None: ...
+    async def copy(self, source_key: str, destination_key: str) -> object: ...
     async def presign_get(self, key: str, expires_in: int) -> str: ...
     async def readiness_probe(self) -> None: ...
     # ── Multipart ──────────────────────────────────────────────────────────
@@ -89,6 +104,10 @@ class FileApplicationService:
     storage_store: StorageSpaceStore | None = None
     authorization_store: FileAuthorizationStore | None = None
     ingestion_store: IngestionStore | None = None
+    principal_store: PrincipalStateStore | None = None
+    api_key_state_store: ApiKeyStateStore | None = None
+    work_notifier: WorkNotifier | None = None
+    reconciliation_max_attempts: int = 5
 
     async def _resolve_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any]:
         """Resolve storage space and validate tenant ownership."""
@@ -239,6 +258,23 @@ class FileApplicationService:
                 continue
             ingestion_id = UUID(record["id"])
             try:
+                attempts = await self.ingestion_store.reconciliation_attempt_count(
+                    UUID(record["tenant_id"]), ingestion_id
+                )
+                if attempts >= self.reconciliation_max_attempts:
+                    await self.ingestion_store.fail_or_quarantine(
+                        UUID(record["tenant_id"]), ingestion_id, IngestionStatus.FAILED,
+                        "reconciliation_retry_exhausted",
+                    )
+                    continue
+                if not await self._revalidate_ingestion(record):
+                    await self.ingestion_store.fail_or_quarantine(
+                        UUID(record["tenant_id"]),
+                        ingestion_id,
+                    IngestionStatus.FAILED,
+                        "reconciliation_authorization_revoked",
+                    )
+                    continue
                 if record["status"] == IngestionStatus.VERIFIED.value:
                     reconciled.append(
                         await self.ingestion_store.commit_verified_file(
@@ -280,6 +316,46 @@ class FileApplicationService:
                 )
         return reconciled
 
+    async def _revalidate_ingestion(self, record: dict[str, Any]) -> bool:
+        if self.principal_store is None or self.authorization_store is None:
+            return False
+        tenant_id = UUID(record["tenant_id"])
+        principal_id = UUID(record["acting_principal_id"])
+        principal = await self.principal_store.get_principal(tenant_id, principal_id)
+        if principal is None or not principal.get("enabled", False):
+            return False
+        evidence = record.get("authorization_evidence") or {}
+        subject_kind = str(evidence.get("subject_kind", "human"))
+        scopes: frozenset[str] | None = None
+        if evidence.get("api_key_id"):
+            if self.api_key_state_store is None:
+                return False
+            key = await self.api_key_state_store.get_key_state(
+                tenant_id, UUID(str(evidence["api_key_id"]))
+            )
+            if (
+                key is None
+                or key.get("status") != "active"
+                or key.get("application_status") != "active"
+                or not key.get("principal_enabled", False)
+                or key.get("principal_id") != str(principal_id)
+                or key.get("application_id") != evidence.get("application_id")
+                or (key.get("expires_at") is not None and key["expires_at"] <= datetime.now(UTC))
+            ):
+                return False
+            if int(key.get("application_authorization_version", 0)) < int(record["authorization_version"]):
+                return False
+            scopes = frozenset(str(value) for value in key.get("scopes") or ())
+            if "files.write" not in scopes:
+                return False
+        bindings = await self.authorization_store.bindings_for(
+            tenant_id,
+            principal_id,
+            UUID(record["storage_space_id"]),
+            subject_kind=subject_kind,
+        )
+        return evaluate("files.write", bindings, object_key=record["relative_key"]).decision == Decision.ALLOW
+
     async def reconcile_pending_deletions(self) -> list[str]:
         """Finish durable delete intents after the provider operation succeeds."""
         if self.object_storage is None:
@@ -287,14 +363,55 @@ class FileApplicationService:
         finalized: list[str] = []
         for record in await self.store.list_pending_deletions():
             try:
-                await self.object_storage.delete(record["object_key"])
+                evidence = record.get("deletion_authorization_evidence") or {}
+                principal_id = record.get("deletion_principal_id")
+                if not principal_id or not await self._revalidate_delayed_action(
+                    UUID(record["tenant_id"]), UUID(principal_id), UUID(record["storage_space_id"]),
+                    record["object_key"], "files.delete",
+                    int(record.get("deletion_authorization_version") or 1), evidence,
+                ):
+                    await self.store.record_delete_failure(
+                        UUID(record["tenant_id"]), UUID(record["id"]), 1
+                    )
+                    continue
+                space = await self._resolve_space(
+                    UUID(record["tenant_id"]), UUID(record["storage_space_id"])
+                )
+                await self.object_storage.delete(self._physical_key(space, record["object_key"]))
                 await self.store.finalize_file_delete(
                     UUID(record["tenant_id"]), UUID(record["id"])
                 )
                 finalized.append(record["id"])
             except Exception:
-                continue
+                await self.store.record_delete_failure(
+                    UUID(record["tenant_id"]), UUID(record["id"]), self.reconciliation_max_attempts
+                )
         return finalized
+
+    async def _revalidate_delayed_action(
+        self, tenant_id: UUID, principal_id: UUID, space_id: UUID, relative_key: str,
+        permission: str, authorization_version: int, evidence: dict[str, Any],
+    ) -> bool:
+        if self.principal_store is None or self.authorization_store is None:
+            return False
+        principal = await self.principal_store.get_principal(tenant_id, principal_id)
+        if principal is None or not principal.get("enabled", False):
+            return False
+        subject_kind = str(evidence.get("subject_kind", "human"))
+        scopes = None
+        if evidence.get("api_key_id"):
+            if self.api_key_state_store is None:
+                return False
+            key = await self.api_key_state_store.get_key_state(tenant_id, UUID(str(evidence["api_key_id"])))
+            if key is None or key.get("status") != "active" or key.get("application_status") != "active" or not key.get("principal_enabled", False) or key.get("principal_id") != str(principal_id) or key.get("application_id") != evidence.get("application_id") or (key.get("expires_at") is not None and key["expires_at"] <= datetime.now(UTC)) or int(key.get("application_authorization_version", 0)) < authorization_version:
+                return False
+            scopes = frozenset(str(value) for value in key.get("scopes") or ())
+            if permission not in scopes:
+                return False
+        bindings = await self.authorization_store.bindings_for(
+            tenant_id, principal_id, space_id, subject_kind=subject_kind
+        )
+        return evaluate(permission, bindings, storage_space_id=space_id, object_key=relative_key).decision == Decision.ALLOW
 
     # ── Files ──────────────────────────────────────────────────────────────
 
@@ -316,7 +433,7 @@ class FileApplicationService:
         record = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
         if record is None:
             raise ApiError("resource_not_found", "File not found", status_code=404)
-        await self._command_for_record(
+        command = await self._command_for_record(
             ctx, record, "files.delete",
             idempotency_key=idempotency_key, semantics={"if_match": if_match},
         )
@@ -331,7 +448,11 @@ class FileApplicationService:
         await self.store.delete_file(ctx.tenant_id, UUID(space_id), UUID(file_id),
                                      idempotency_key=idempotency_key, if_match=if_match,
                                      actor_principal_id=ctx.principal_id,
-                                     request_id=current_request_id(), object_key=record["object_key"])
+                                     request_id=current_request_id(), object_key=record["object_key"],
+                                     authorization_version=ctx.authorization_version,
+                                     authorization_evidence=command.authorization_evidence)
+        if self.work_notifier is not None:
+            await self.work_notifier.notify()
         return {"status": "deletion_queued"}
 
     async def create_file_operation(
@@ -346,30 +467,31 @@ class FileApplicationService:
                 ("files.write", body.destination_key),
             ),
         }
+        commands: list[AuthorizedFileCommand] = []
         if body.operation_type in operation_actions:
             for action, key in operation_actions[body.operation_type]:
                 if not key:
                     raise ApiError("validation_failed", "Operation key is required", status_code=422)
-                await self._command(
+                commands.append(await self._command(
                     ctx,
                     space_id,
                     key,
                     action,
                     idempotency_key=idempotency_key,
                     semantics={"operation_type": body.operation_type},
-                )
+                ))
         elif body.operation_type == "delete":
             if not body.keys:
                 raise ApiError("validation_failed", "At least one key is required", status_code=422)
             for key in body.keys:
-                await self._command(
+                commands.append(await self._command(
                     ctx,
                     space_id,
                     key,
                     "files.delete",
                     idempotency_key=idempotency_key,
                     semantics={"operation_type": body.operation_type, "keys": sorted(body.keys)},
-                )
+                ))
         else:
             raise ApiError("validation_failed", "Unsupported file operation", status_code=422)
         data = {
@@ -379,8 +501,19 @@ class FileApplicationService:
             "destination_key": body.destination_key,
             "keys": body.keys,
             "idempotency_key": idempotency_key,
+            "authorization_version": ctx.authorization_version,
+            "authorization_evidence": {
+                "subject_kind": ctx.subject_kind,
+                "application_id": str(ctx.application_id) if ctx.application_id else None,
+                "api_key_id": str(ctx.api_key_id) if ctx.api_key_id else None,
+                "api_key_scopes": sorted(ctx.api_key_scopes or ()),
+                "commands": [command.authorization_evidence for command in commands],
+            },
         }
-        return await self.store.create_operation(ctx.tenant_id, UUID(space_id), data)
+        result = await self.store.create_operation(ctx.tenant_id, UUID(space_id), data)
+        if self.work_notifier is not None:
+            await self.work_notifier.notify()
+        return result
 
     async def get_file_operation(self, ctx: PrincipalContext, operation_id: str) -> dict[str, Any]:
         result = await self.store.get_operation(ctx.tenant_id, UUID(operation_id))
@@ -497,6 +630,12 @@ class FileApplicationService:
         provider_etag = getattr(obj, "etag", None)
         provider_version = getattr(obj, "version_id", None)
         if ingestion is not None:
+            if not await self._revalidate_ingestion(ingestion):
+                await self.ingestion_store.fail_or_quarantine(  # type: ignore[union-attr]
+                    ctx.tenant_id, UUID(ingestion["id"]), IngestionStatus.FAILED,
+                    "commit_authorization_revoked",
+                )
+                raise ApiError("permission_denied", "Authorization is no longer valid", status_code=403)
             await self.ingestion_store.record_provider_result(  # type: ignore[union-attr]
                 ctx.tenant_id, UUID(ingestion["id"]), provider_etag=provider_etag,
                 provider_version_id=provider_version, actual_size=obj.content_length,
@@ -738,6 +877,12 @@ class FileApplicationService:
             "idempotency_key": idempotency_key,
         }
         if ingestion is not None:
+            if not await self._revalidate_ingestion(ingestion):
+                await self.ingestion_store.fail_or_quarantine(  # type: ignore[union-attr]
+                    ctx.tenant_id, UUID(ingestion["id"]), IngestionStatus.FAILED,
+                    "commit_authorization_revoked",
+                )
+                raise ApiError("permission_denied", "Authorization is no longer valid", status_code=403)
             await self.ingestion_store.record_provider_result(  # type: ignore[union-attr]
                 ctx.tenant_id, UUID(ingestion["id"]), provider_etag=getattr(metadata, "etag", None),
                 provider_version_id=getattr(metadata, "version_id", None), actual_size=metadata.content_length,

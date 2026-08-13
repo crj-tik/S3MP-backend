@@ -1,11 +1,11 @@
 """SQLAlchemy repository for file objects, uploads, multipart sessions, and operations."""
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
@@ -85,13 +85,46 @@ class SqlAlchemyFileStore:
                     )
                 )
                 row.status = "deleting"
+                row.deletion_principal_id = data.get("actor_principal_id")
+                row.deletion_authorization_version = data.get("authorization_version")
+                row.deletion_authorization_evidence = data.get("authorization_evidence")
 
     async def list_pending_deletions(self) -> list[dict[str, Any]]:
         async with self._sf() as session:
             rows = await session.scalars(
-                select(FileObjectModel).where(FileObjectModel.status == "deleting")
+                select(FileObjectModel).where(
+                    FileObjectModel.status == "deleting",
+                    or_(
+                        FileObjectModel.deletion_next_retry_at.is_(None),
+                        FileObjectModel.deletion_next_retry_at <= datetime.now(UTC),
+                    ),
+                )
             )
             return [_file_dict(row) for row in rows]
+
+    async def record_delete_failure(
+        self, tenant_id: UUID, file_id: UUID, max_attempts: int
+    ) -> None:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileObjectModel).where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.id == file_id,
+                    FileObjectModel.status == "deleting",
+                ).with_for_update()
+            )
+            if row is None:
+                return
+            row.deletion_attempt_count += 1
+            if row.deletion_attempt_count >= max_attempts:
+                row.status = "delete_failed"
+                row.deletion_failure_reason = "retry_exhausted"
+                row.deletion_next_retry_at = None
+            else:
+                row.deletion_failure_reason = "object_storage_unavailable"
+                row.deletion_next_retry_at = datetime.now(UTC) + timedelta(
+                    seconds=min(300, 2 ** row.deletion_attempt_count)
+                )
 
     async def finalize_file_delete(self, tenant_id: UUID, file_id: UUID) -> None:
         async with self._sf.begin() as session:
@@ -118,10 +151,88 @@ class SqlAlchemyFileStore:
                 keys=data.get("keys", []),
                 idempotency_key=data.get("idempotency_key", str(uuid4())),
                 status="pending",
+                storage_space_id=space_id,
+                authorization_version=int(data.get("authorization_version", 1)),
+                authorization_evidence=data.get("authorization_evidence", {}),
             )
             session.add(model)
             await session.flush()
             return _op_dict(model)
+
+    async def claim_operations(self, worker_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        now = datetime.now(UTC)
+        async with self._sf.begin() as session:
+            rows = await session.scalars(
+                select(FileOperationModel)
+                .where(
+                    or_(
+                        FileOperationModel.status.in_(("pending", "retry_wait")),
+                        (FileOperationModel.status == "running")
+                        & (FileOperationModel.lease_expires_at < now),
+                    ),
+                    or_(FileOperationModel.next_retry_at.is_(None), FileOperationModel.next_retry_at <= now),
+                )
+                .order_by(FileOperationModel.created_at)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            claimed = list(rows)
+            for row in claimed:
+                row.status = "running"
+                row.lease_owner = worker_id
+                row.lease_expires_at = now + timedelta(minutes=1)
+                row.attempt_count += 1
+            await session.flush()
+            return [_op_dict(row) for row in claimed]
+
+    async def renew_operation_lease(
+        self, tenant_id: UUID, operation_id: UUID, worker_id: str
+    ) -> bool:
+        """Extend a lease only while it is still owned by this worker."""
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileOperationModel)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id,
+                    FileOperationModel.id == operation_id,
+                    FileOperationModel.status == "running",
+                    FileOperationModel.lease_owner == worker_id,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            row.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
+            return True
+
+    async def finish_operation(
+        self, tenant_id: UUID, operation_id: UUID, status: str, reason: str | None = None
+    ) -> None:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileOperationModel)
+                .where(FileOperationModel.tenant_id == tenant_id, FileOperationModel.id == operation_id)
+                .with_for_update()
+            )
+            if row is None:
+                return
+            if status == "retry_wait":
+                # A transient provider failure must not create a hot retry loop.
+                # Five attempts is intentionally bounded; an operator can inspect
+                # the durable failed row instead of silently retrying forever.
+                if row.attempt_count >= 5:
+                    status = "failed"
+                    reason = "retry_exhausted"
+                else:
+                    row.next_retry_at = datetime.now(UTC) + timedelta(
+                        seconds=min(300, 2 ** row.attempt_count)
+                    )
+            else:
+                row.next_retry_at = None
+            row.status, row.failure_reason = status, reason
+            row.lease_owner, row.lease_expires_at = None, None
+            if status in {"succeeded", "failed", "partial_failure", "cancelled"}:
+                row.completed_at = datetime.now(UTC)
 
     async def get_operation(self, tenant_id: UUID, op_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
@@ -132,6 +243,25 @@ class SqlAlchemyFileStore:
                 )
             )
             return _op_dict(row) if row else None
+
+    async def operation_metrics(self) -> dict[str, int]:
+        now = datetime.now(UTC)
+        async with self._sf() as session:
+            rows = await session.execute(
+                select(FileOperationModel.status, func.count())
+                .group_by(FileOperationModel.status)
+            )
+            metrics = {f"status_{status}": int(count) for status, count in rows}
+            metrics["stale_leases"] = int(await session.scalar(
+                select(func.count()).select_from(FileOperationModel).where(
+                    FileOperationModel.status == "running",
+                    FileOperationModel.lease_expires_at < now,
+                )
+            ) or 0)
+            metrics["backlog"] = sum(
+                metrics.get(f"status_{status}", 0) for status in ("pending", "retry_wait", "running")
+            )
+            return metrics
 
     # ── Uploads ────────────────────────────────────────────────────────────
 
@@ -342,6 +472,10 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "content_length": m.content_length, "content_type": m.content_type,
         "etag": m.etag, "checksum": m.checksum,
         "status": m.status,
+        "deletion_attempt_count": m.deletion_attempt_count,
+        "deletion_principal_id": str(m.deletion_principal_id) if m.deletion_principal_id else None,
+        "deletion_authorization_version": m.deletion_authorization_version,
+        "deletion_authorization_evidence": m.deletion_authorization_evidence,
         "created_at": m.created_at.isoformat(),
     }
 
@@ -378,8 +512,19 @@ def _part_dict(m: MultipartPartModel) -> dict[str, Any]:
 def _op_dict(m: FileOperationModel) -> dict[str, Any]:
     return {
         "id": str(m.id), "tenant_id": str(m.tenant_id),
+        "principal_id": str(m.principal_id),
         "operation_type": m.operation_type, "status": m.status,
         "source_key": m.source_key, "destination_key": m.destination_key,
+        "keys": list(m.keys or ()),
+        "idempotency_key": m.idempotency_key,
         "failure_reason": m.failure_reason,
+        "storage_space_id": str(m.storage_space_id) if m.storage_space_id else None,
+        "authorization_version": m.authorization_version,
+        "authorization_evidence": m.authorization_evidence or {},
+        "attempt_count": m.attempt_count,
+        "lease_owner": m.lease_owner,
+        "lease_expires_at": m.lease_expires_at.isoformat() if m.lease_expires_at else None,
+        "next_retry_at": m.next_retry_at.isoformat() if m.next_retry_at else None,
+        "completed_at": m.completed_at.isoformat() if m.completed_at else None,
         "created_at": m.created_at.isoformat(),
     }

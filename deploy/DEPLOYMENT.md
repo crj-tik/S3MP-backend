@@ -296,4 +296,18 @@ S3MP_S3_SECRET_KEY=<minio-secret-key>
 S3MP_S3_PATH_STYLE=true
 ```
 
+### Worker security gate and operations
+
+Before enabling worker replicas, run migrations and the strict invariant report:
+
+```powershell
+uv run alembic upgrade head
+uv run python scripts/check_security_invariants.py
+uv run python -m s3mp.files.worker --once --limit 10
+```
+
+The invariant command must report zero invalid application principals, zero active applications without a valid owner, and zero active keys without a valid principal. The worker uses PostgreSQL as its durable queue and Redis only as a wake-up hint; Redis loss increases pickup latency but must not stop polling.
+
+Worker tuning uses `S3MP_WORKER_POLL_SECONDS`, `S3MP_WORKER_BATCH_SIZE`, `S3MP_WORKER_MAX_ATTEMPTS`, `S3MP_WORKER_LEASE_SECONDS`, and `S3MP_WORKER_RETENTION_DAYS`. Alert when `stale_leases > 0`, terminal failures or cancellations increase, or `backlog` grows for two polling intervals. Keep workers disabled until the invariant report and PostgreSQL/Redis/MinIO acceptance tests pass.
+
 生产环境强制使用 `S3MP_S3_ACCESS_KEY_FILE` 和 `S3MP_S3_SECRET_KEY_FILE` 文件引用。

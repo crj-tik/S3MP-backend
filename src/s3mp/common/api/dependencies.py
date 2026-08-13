@@ -32,6 +32,16 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "revoke_role_binding": "role_bindings.manage",
     "get_effective_permissions": "authorization.explain",
     "simulate_authorization": "authorization.simulate",
+    "list_applications": "applications.read",
+    "create_application": "applications.manage",
+    "get_application": "applications.read",
+    "update_application": "applications.manage",
+    "list_api_keys": "api_keys.read",
+    "create_api_key": "api_keys.manage",
+    "get_api_key": "api_keys.read",
+    "get_api_key_secret": "api_keys.read",
+    "rotate_api_key": "api_keys.manage",
+    "revoke_api_key": "api_keys.manage",
 }
 
 

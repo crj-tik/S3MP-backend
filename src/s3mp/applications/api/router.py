@@ -69,7 +69,7 @@ def _key_service(request: Request) -> Any:
 
 @router.get("/applications", operation_id="list_applications")
 async def list_applications(request: Request) -> Any:
-    return await _app_service(request).list_apps(_context(request).tenant_id)
+    return await _app_service(request).list_apps(_context(request))
 
 
 @router.post("/applications", status_code=201, operation_id="create_application")
@@ -77,9 +77,7 @@ async def create_application(
     request: Request,
     body: ApplicationCreate,
 ) -> Any:
-    return await _app_service(request).create_app(
-        _context(request).tenant_id, body.name, _context(request).principal_id
-    )
+    return await _app_service(request).create_app(_context(request), body.name)
 
 
 @router.get("/applications/{application_id}", operation_id="get_application")
@@ -87,7 +85,7 @@ async def get_application(
     request: Request,
     application_id: str = Path(min_length=1),
 ) -> Any:
-    return await _app_service(request).get_app(_context(request).tenant_id, application_id)
+    return await _app_service(request).get_app(_context(request), application_id)
 
 
 @router.patch("/applications/{application_id}", operation_id="update_application")
@@ -97,7 +95,7 @@ async def update_application(
     application_id: str = Path(min_length=1),
 ) -> Any:
     return await _app_service(request).update_app(
-        _context(request).tenant_id, application_id, body.name
+        _context(request), application_id, body.name
     )
 
 
@@ -109,7 +107,7 @@ async def list_api_keys(
     request: Request,
     application_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).list_keys(_context(request).tenant_id, application_id)
+    return await _key_service(request).list_keys(_context(request), application_id)
 
 
 @router.post("/applications/{application_id}/api_keys", status_code=201, operation_id="create_api_key")
@@ -119,7 +117,7 @@ async def create_api_key(
     application_id: str = Path(min_length=1),
 ) -> Any:
     return await _key_service(request).issue(
-        _context(request).tenant_id, application_id, body.scopes, body.ttl_days
+        _context(request), application_id, body.scopes, body.ttl_days
     )
 
 
@@ -128,7 +126,7 @@ async def get_api_key(
     request: Request,
     api_key_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).get_key(_context(request).tenant_id, api_key_id)
+    return await _key_service(request).get_key(_context(request), api_key_id)
 
 
 @router.get("/api_keys/{api_key_id}/secret", status_code=410, operation_id="get_api_key_secret")
@@ -146,7 +144,7 @@ async def rotate_api_key(
     api_key_id: str = Path(min_length=1),
 ) -> Any:
     return await _key_service(request).rotate(
-        _context(request).tenant_id, api_key_id, body.overlap_seconds
+        _context(request), api_key_id, body.overlap_seconds
     )
 
 
@@ -156,4 +154,4 @@ async def revoke_api_key(
     body: ApiKeyRevoke,
     api_key_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).revoke(_context(request).tenant_id, api_key_id, body.reason)
+    return await _key_service(request).revoke(_context(request), api_key_id, body.reason)

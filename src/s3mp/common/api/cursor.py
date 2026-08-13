@@ -23,6 +23,8 @@ class CursorCodec:
         principal_id: UUID,
         authorization_version: int,
         position: str,
+        *,
+        query: str = "",
     ) -> str:
         payload = json.dumps(
             {
@@ -30,6 +32,7 @@ class CursorCodec:
                 "p": str(principal_id),
                 "v": authorization_version,
                 "o": position,
+                "q": query,
             },
             separators=(",", ":"),
             sort_keys=True,
@@ -43,6 +46,8 @@ class CursorCodec:
         tenant_id: UUID,
         principal_id: UUID,
         authorization_version: int,
+        *,
+        query: str = "",
     ) -> str:
         try:
             raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
@@ -55,6 +60,7 @@ class CursorCodec:
                 data["t"] != str(tenant_id)
                 or data["p"] != str(principal_id)
                 or data["v"] != authorization_version
+                or data.get("q") != query
             ):
                 raise ValueError("cursor binding mismatch")
             return str(data["o"])

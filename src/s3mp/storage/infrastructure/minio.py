@@ -100,6 +100,21 @@ class MinioObjectStorageAdapter:
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 object delete failed") from exc
 
+    async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
+        try:
+            await asyncio.to_thread(
+                self._client.copy_object,
+                Bucket=self._bucket,
+                Key=destination_key,
+                CopySource={"Bucket": self._bucket, "Key": source_key},
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStorageUnavailable("S3 object copy failed") from exc
+        result = await self.head(destination_key)
+        if result is None:
+            raise ObjectStorageUnavailable("copied object could not be verified")
+        return result
+
     async def presign_get(self, key: str, expires_in: int) -> str:
         try:
             return await asyncio.to_thread(
