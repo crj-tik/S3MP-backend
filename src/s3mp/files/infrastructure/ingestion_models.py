@@ -44,10 +44,13 @@ class FileIngestionRecordModel(Base):
     file_object_id: Mapped[UUID | None] = mapped_column()
     creator_principal_id: Mapped[UUID] = mapped_column(nullable=False)
     acting_principal_id: Mapped[UUID] = mapped_column(nullable=False)
+    membership_id: Mapped[UUID | None] = mapped_column()
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)
     relative_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     physical_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    # Existing rows are legacy/unscoped (0); normal application writes pass 1.
+    provider_target_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="0")
     provider_etag: Mapped[str | None] = mapped_column(String(512))
     provider_version_id: Mapped[str | None] = mapped_column(String(512))
     actual_size: Mapped[int | None] = mapped_column(Integer())

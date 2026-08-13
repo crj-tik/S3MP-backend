@@ -26,7 +26,14 @@ class Auth:
 
 
 class Principals:
-    async def get_principal(self, tenant_id, principal_id): return {"enabled": True}
+    async def get_principal(self, tenant_id, principal_id):
+        self.principal_id = str(principal_id)
+        return {"enabled": True}
+    async def get_membership_state(self, tenant_id, membership_id):
+        return {
+            "id": str(membership_id), "principal_id": self.principal_id,
+            "status": "active", "authorization_version": 1, "expires_at": None,
+        }
 
 
 class Objects:
@@ -43,8 +50,28 @@ class Keys:
 
 
 def operation():
-    tenant, principal, space = uuid4(), uuid4(), uuid4()
-    return {"id": str(uuid4()), "tenant_id": str(tenant), "principal_id": str(principal), "storage_space_id": str(space), "operation_type": "copy", "source_key": "a", "destination_key": "b", "keys": [], "authorization_version": 1, "authorization_evidence": {"subject_kind": "human"}}
+    tenant, principal, space, membership = uuid4(), uuid4(), uuid4(), uuid4()
+    return {"id": str(uuid4()), "tenant_id": str(tenant), "principal_id": str(principal), "membership_id": str(membership), "storage_space_id": str(space), "operation_type": "copy", "source_key": "a", "destination_key": "b", "keys": [], "authorization_version": 1, "provider_target_version": 1, "authorization_evidence": {"subject_kind": "human"}}
+
+
+@pytest.mark.asyncio
+async def test_worker_never_mutates_legacy_provider_targets():
+    record, objects = operation(), Objects()
+    record["provider_target_version"] = 0
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("cancelled", "legacy_provider_target")]
+
+
+@pytest.mark.asyncio
+async def test_worker_cancels_human_operation_without_membership():
+    record, objects = operation(), Objects()
+    record.pop("membership_id")
+    store = Store(record)
+    await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("cancelled", "legacy_operation_missing_membership")]
 
 
 @pytest.mark.asyncio

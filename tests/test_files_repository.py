@@ -65,6 +65,27 @@ async def test_list_files_is_tenant_scoped(engine: AsyncEngine) -> None:
         await delete_tenant(engine, tenant_b)
 
 
+async def test_list_files_respects_directory_boundary(engine: AsyncEngine) -> None:
+    factory = real_session_factory(engine)
+    store = SqlAlchemyFileStore(factory)
+    tenant_id = uuid4()
+    await seed_tenant(engine, tenant_id)
+    try:
+        async with factory() as session:
+            space_id, _ = await _seed_space(session, tenant_id)
+            session.add_all([
+                FileObjectModel(tenant_id=tenant_id, storage_space_id=space_id,
+                                object_key="team/a.txt", content_length=1, content_type="text/plain"),
+                FileObjectModel(tenant_id=tenant_id, storage_space_id=space_id,
+                                object_key="team2/secret.txt", content_length=1, content_type="text/plain"),
+            ])
+            await session.commit()
+        files = await store.list_files(tenant_id, space_id, "team")
+        assert [file["object_key"] for file in files] == ["team/a.txt"]
+    finally:
+        await delete_tenant(engine, tenant_id)
+
+
 async def test_get_file_returns_none_for_cross_tenant(engine: AsyncEngine) -> None:
     factory = real_session_factory(engine)
     store = SqlAlchemyFileStore(factory)
