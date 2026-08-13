@@ -146,6 +146,7 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
             assert replay.json()["id"] == upload_id
             assert replay.json()["ingestion_id"] == create.json()["ingestion_id"]
             assert create.json()["object_key"] == "e2e/test.txt"
+            assert "v1/tenants/" not in create.text
             assert create.json()["status"] == "pending"
             assert fetched.status_code == 200
             assert fetched.json()["object_key"] == "e2e/test.txt"

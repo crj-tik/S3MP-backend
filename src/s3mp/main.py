@@ -164,7 +164,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ApiKeyCredentialService((configured.secret_value("api_key_pepper") or "p" * 32).encode(), pepper_version=configured.api_key_pepper_version),
             getattr(app.state, "authorization_management", None),
         )
-        app.state.storage_service = StorageService(storage_store)  # type: ignore[arg-type]
+        app.state.storage_service = StorageService(  # type: ignore[arg-type]
+            storage_store, getattr(app.state, "authorization_management", None)
+        )
         file_store = SqlAlchemyFileStore(session_factory) if session_factory else _store
         file_authorization_store = (
             SqlAlchemyFileAuthorizationStore(session_factory) if session_factory else None
@@ -182,8 +184,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         quota_store = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
         audit_store = SqlAlchemyAuditStore(session_factory) if session_factory else _store
-        app.state.quota_service = QuotaService(quota_store)  # type: ignore[arg-type]
-        app.state.audit_service = AuditService(audit_store)  # type: ignore[arg-type]
+        app.state.quota_service = QuotaService(  # type: ignore[arg-type]
+            quota_store, getattr(app.state, "authorization_management", None)
+        )
+        app.state.audit_service = AuditService(  # type: ignore[arg-type]
+            audit_store, getattr(app.state, "authorization_management", None)
+        )
         try:
             yield
         finally:

@@ -32,6 +32,7 @@ def _space(model: StorageSpaceModel) -> dict[str, object]:
         "name": model.name,
         "bucket": model.bucket,
         "root_prefix": model.root_prefix,
+        "provider_target_version": model.provider_target_version,
         "status": model.status,
         "created_at": model.created_at,
     }

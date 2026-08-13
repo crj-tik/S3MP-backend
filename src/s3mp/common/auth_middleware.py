@@ -15,19 +15,6 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
      "/docs/oauth2-redirect"}
 )
 
-API_KEY_FORBIDDEN_PATH_PREFIXES: tuple[str, ...] = (
-    "/api/v1/me",
-    "/api/v1/users",
-    "/api/v1/members",
-    "/api/v1/groups",
-    "/api/v1/roles",
-    "/api/v1/role_bindings",
-    "/api/v1/principals",
-    "/api/v1/authorization",
-    "/api/v1/applications",
-    "/api/v1/api_keys",
-)
-
 # Skip auth when the test harness has already injected a principal_context
 SKIP_AUTH_HEADER = "X-S3MP-Test-Auth-Bypass"
 
@@ -47,15 +34,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         try:
             context = await _resolve_context(request)
-            if (
-                context.subject_kind == "application"
-                and request.url.path.startswith(API_KEY_FORBIDDEN_PATH_PREFIXES)
-            ):
-                service = getattr(request.app.state, "api_key_service", None)
-                audit_denial = getattr(service, "audit_management_denial", None)
-                if audit_denial is not None:
-                    await audit_denial(context)
-                raise ApiError("permission_denied", "API keys cannot access management APIs", status_code=403)
             request.state.principal_context = context
         except ApiError as exc:
             return JSONResponse(

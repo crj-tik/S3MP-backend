@@ -15,7 +15,8 @@ class Store:
 
 
 class Spaces:
-    async def get_space(self, tenant_id, space_id): return {"root_prefix": "tenant"}
+    async def get_space(self, tenant_id, space_id):
+        return {"id": str(space_id), "tenant_id": str(tenant_id), "bucket": "s3mp-dev", "root_prefix": "tenant"}
 
 
 class Auth:
@@ -29,10 +30,10 @@ class Principals:
 
 
 class Objects:
-    def __init__(self): self.copies=[]; self.objects={"tenant/a"}
-    async def copy(self, source, destination): self.copies.append((source, destination)); self.objects.add(destination)
-    async def delete(self, key): pass
-    async def head(self, key): return object() if key in self.objects else None
+    def __init__(self): self.copies=[]; self.objects={"v1/tenants"}
+    async def copy(self, source, destination): self.copies.append((source, destination)); self.objects.add(destination.key)
+    async def delete(self, target): pass
+    async def head(self, target): return object() if target.key in self.objects else None
 
 
 class Keys:
@@ -49,9 +50,12 @@ def operation():
 @pytest.mark.asyncio
 async def test_worker_executes_authorized_copy():
     record, store, objects = operation(), None, Objects()
+    objects.objects = {f"v1/tenants/{record['tenant_id']}/spaces/{record['storage_space_id']}/tenant/a"}
     store = Store(record)
     await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
-    assert objects.copies == [("tenant/a", "tenant/b")]
+    assert objects.copies[0][0].bucket == "s3mp-dev"
+    assert objects.copies[0][0].key.endswith("/tenant/a")
+    assert objects.copies[0][1].key.endswith("/tenant/b")
     assert store.finished == [("succeeded", None)]
 
 
@@ -80,7 +84,7 @@ async def test_worker_cancels_revoked_api_key_before_provider_call():
 async def test_worker_recovers_after_move_provider_success_before_db_commit():
     record, objects = operation(), Objects()
     record["operation_type"] = "move"
-    objects.objects = {"tenant/b"}
+    objects.objects = {f"v1/tenants/{record['tenant_id']}/spaces/{record['storage_space_id']}/tenant/b"}
     store = Store(record)
     await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
     assert objects.copies == []
@@ -90,10 +94,11 @@ async def test_worker_recovers_after_move_provider_success_before_db_commit():
 @pytest.mark.asyncio
 async def test_move_delete_failure_is_partial_failure():
     class DeleteFails(Objects):
-        async def delete(self, key): raise RuntimeError("provider unavailable")
+        async def delete(self, target): raise RuntimeError("provider unavailable")
 
     record, objects = operation(), DeleteFails()
     record["operation_type"] = "move"
+    objects.objects = {f"v1/tenants/{record['tenant_id']}/spaces/{record['storage_space_id']}/tenant/a"}
     store = Store(record)
     await FileOperationWorker(store, Spaces(), Auth(), Principals(), objects).run_once("worker")
     assert store.finished == [("partial_failure", "source_delete_failed")]

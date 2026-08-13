@@ -12,6 +12,7 @@ from s3mp.files.application.auth_guard import FileAuthGuard
 from s3mp.files.application.authorized_command import AuthorizedFileCommand
 from s3mp.files.domain.ingestion import IngestionStatus
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
 
 
 class FileStore(Protocol):
@@ -83,18 +84,18 @@ class IngestionStore(Protocol):
 
 
 class ObjectStorage(Protocol):
-    async def put(self, key: str, body: bytes, content_type: str) -> object: ...
-    async def head(self, key: str) -> object | None: ...
-    async def delete(self, key: str) -> None: ...
-    async def copy(self, source_key: str, destination_key: str) -> object: ...
-    async def presign_get(self, key: str, expires_in: int) -> str: ...
+    async def put(self, target: ProviderTarget, body: bytes, content_type: str) -> object: ...
+    async def head(self, target: ProviderTarget) -> object | None: ...
+    async def delete(self, target: ProviderTarget) -> None: ...
+    async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> object: ...
+    async def presign_get(self, target: ProviderTarget, expires_in: int) -> str: ...
     async def readiness_probe(self) -> None: ...
     # ── Multipart ──────────────────────────────────────────────────────────
-    async def create_multipart_upload(self, key: str, content_type: str) -> str: ...
-    async def upload_part(self, key: str, upload_id: str, part_number: int, body: bytes) -> dict[str, object]: ...
-    async def complete_multipart_upload(self, key: str, upload_id: str, parts: list[dict[str, object]]) -> object: ...
-    async def abort_multipart_upload(self, key: str, upload_id: str) -> None: ...
-    async def list_parts(self, key: str, upload_id: str) -> list[dict[str, object]]: ...
+    async def create_multipart_upload(self, target: ProviderTarget, content_type: str) -> str: ...
+    async def upload_part(self, target: ProviderTarget, upload_id: str, part_number: int, body: bytes) -> dict[str, object]: ...
+    async def complete_multipart_upload(self, target: ProviderTarget, upload_id: str, parts: list[dict[str, object]]) -> object: ...
+    async def abort_multipart_upload(self, target: ProviderTarget, upload_id: str) -> None: ...
+    async def list_parts(self, target: ProviderTarget, upload_id: str) -> list[dict[str, object]]: ...
 
 
 @dataclass
@@ -119,9 +120,32 @@ class FileApplicationService:
         return space
 
     def _physical_key(self, space: dict[str, Any], relative_key: str) -> str:
-        """Build the full S3 key from storage space root prefix + object key."""
-        root = (space.get("root_prefix") or "").strip("/")
-        return f"{root}/{relative_key}" if root else relative_key
+        """Build the server-owned provider key for a relative object key."""
+        return derive_provider_target(
+            tenant_id=UUID(str(space["tenant_id"])),
+            storage_space_id=UUID(str(space["id"])),
+            bucket=str(space["bucket"]),
+            relative_key=relative_key,
+            operator_prefix=str(space.get("root_prefix") or ""),
+            version=int(space.get("provider_target_version", 1)),
+        ).key
+
+    def _relative_key(self, space: dict[str, Any], physical_key: str) -> str:
+        expected = self._physical_key(space, "")
+        prefix = expected + "/"
+        if not physical_key.startswith(prefix):
+            raise ApiError("resource_not_found", "Provider target is not in the storage space", status_code=404)
+        return physical_key[len(prefix):]
+
+    @staticmethod
+    def _target(bucket: str, physical_key: str) -> ProviderTarget:
+        return ProviderTarget(bucket=str(bucket), key=str(physical_key))
+
+    def _public_upload(self, space: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+        public = dict(record)
+        public["object_key"] = self._relative_key(space, str(record["object_key"]))
+        public.pop("tenant_id", None)
+        return public
 
     async def _command(
         self, ctx: PrincipalContext, space_id: str, relative_key: str, action: str,
@@ -144,13 +168,8 @@ class FileApplicationService:
     ) -> AuthorizedFileCommand:
         space_id = record["storage_space_id"]
         space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
-        root = (space.get("root_prefix") or "").strip("/")
         physical_key = str(record["object_key"])
-        relative_key = (
-            physical_key[len(root) + 1 :]
-            if root and physical_key.startswith(root + "/")
-            else physical_key
-        )
+        relative_key = self._relative_key(space, physical_key)
         return await self._command(
             ctx, space_id, relative_key, action,
             idempotency_key=idempotency_key, semantics=semantics,
@@ -213,8 +232,9 @@ class FileApplicationService:
         provider_upload_id = record.get("provider_upload_id")
         if self.object_storage is not None and provider_upload_id:
             try:
+                space = await self._resolve_space(UUID(record["tenant_id"]), UUID(record["storage_space_id"]))
                 await self.object_storage.abort_multipart_upload(
-                    record["object_key"], provider_upload_id
+                    self._target(space["bucket"], record["object_key"]), provider_upload_id
                 )
             except Exception as exc:
                 raise ApiError(
@@ -282,7 +302,9 @@ class FileApplicationService:
                         )
                     )
                     continue
-                metadata = await self.object_storage.head(record["physical_key"])
+                metadata = await self.object_storage.head(
+                    self._target(record["bucket"], record["physical_key"])
+                )
                 if metadata is None:
                     await self.ingestion_store.fail_or_quarantine(
                         UUID(record["tenant_id"]),
@@ -377,7 +399,10 @@ class FileApplicationService:
                 space = await self._resolve_space(
                     UUID(record["tenant_id"]), UUID(record["storage_space_id"])
                 )
-                await self.object_storage.delete(self._physical_key(space, record["object_key"]))
+                self._relative_key(space, str(record["object_key"]))
+                await self.object_storage.delete(
+                    self._target(space["bucket"], record["object_key"])
+                )
                 await self.store.finalize_file_delete(
                     UUID(record["tenant_id"]), UUID(record["id"])
                 )
@@ -555,7 +580,7 @@ class FileApplicationService:
             self._ingestion_data(command, idempotency_key),
         )
         record.pop("replayed", None)
-        return record
+        return self._public_upload(await self._resolve_space(ctx.tenant_id, command.storage_space_id), record)
 
     async def get_upload(self, ctx: PrincipalContext, upload_id: str) -> dict[str, Any]:
         result = await self.store.get_upload(ctx.tenant_id, UUID(upload_id))
@@ -564,7 +589,7 @@ class FileApplicationService:
         FileAuthGuard.check_ownership(result, ctx)
         await self._command_for_record(ctx, result, "files.write")
         await self._ensure_upload_active(result)
-        return result
+        return self._public_upload(await self._resolve_space(ctx.tenant_id, UUID(result["storage_space_id"])), result)
 
     async def proxy_upload_content(
         self, ctx: PrincipalContext, upload_id: str,
@@ -580,7 +605,7 @@ class FileApplicationService:
             raise ApiError("upload_verification_failed", "Content-Length mismatch", status_code=409)
         if self.object_storage is not None:
             await self.object_storage.put(
-                record["object_key"], body, content_type
+                command.provider_target, body, content_type
             )
 
     async def complete_upload(
@@ -602,7 +627,7 @@ class FileApplicationService:
             raise ApiError("storage_capability_unsupported", "Object storage is not configured", status_code=422)
         ingestion = await self._ingestion_for_session(ctx.tenant_id, upload_id=upload_id)
         try:
-            obj = await self.object_storage.head(command.physical_key)
+            obj = await self.object_storage.head(command.provider_target)
             if obj is None or getattr(obj, "key", command.physical_key) != command.physical_key:
                 raise ApiError("upload_verification_failed", "Object not found in storage", status_code=409)
             if getattr(obj, "content_length", None) != record["content_length"]:
@@ -673,8 +698,8 @@ class FileApplicationService:
         file_record = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(body.file_id))
         if file_record is None:
             raise ApiError("resource_not_found", "File not found", status_code=404)
-        await self._command_for_record(ctx, file_record, "presigned_urls.issue")
-        url = await self.object_storage.presign_get(file_record["object_key"], body.ttl_seconds)
+        command = await self._command_for_record(ctx, file_record, "presigned_urls.issue")
+        url = await self.object_storage.presign_get(command.provider_target, body.ttl_seconds)
         return {
             "method": "GET",
             "url": url,
@@ -719,7 +744,7 @@ class FileApplicationService:
             raise ApiError("storage_capability_unsupported", "Multipart storage is not configured", status_code=422)
         try:
             provider_upload_id = await self.object_storage.create_multipart_upload(
-                command.physical_key, body.content_type
+                command.provider_target, body.content_type
             )
             return await self.store.set_multipart_provider_id(
                 ctx.tenant_id, UUID(record["id"]), provider_upload_id
@@ -755,7 +780,8 @@ class FileApplicationService:
         provider_upload_id = record.get("provider_upload_id")
         if self.object_storage is not None and provider_upload_id:
             try:
-                await self.object_storage.abort_multipart_upload(record["object_key"], provider_upload_id)
+                command = await self._command_for_record(ctx, record, "multipart.manage")
+                await self.object_storage.abort_multipart_upload(command.provider_target, provider_upload_id)
             except Exception as exc:
                 raise ApiError("storage_unavailable", "Multipart abort requires retry", status_code=503) from exc
         await self.store.abort_multipart(ctx.tenant_id, UUID(multipart_id),
@@ -843,7 +869,7 @@ class FileApplicationService:
             total_size += int(stored.get("content_length", 0))
         if total_size != int(record["content_length"]):
             raise ApiError("multipart_parts_invalid", "Multipart size does not match declaration", status_code=409)
-        provider_inventory = await self.object_storage.list_parts(record["object_key"], provider_upload_id)
+        provider_inventory = await self.object_storage.list_parts(command.provider_target, provider_upload_id)
         provider_by_number = {int(part["part_number"]): part for part in provider_inventory}
         for part in provider_parts:
             provider = provider_by_number.get(int(part["part_number"]))
@@ -852,7 +878,7 @@ class FileApplicationService:
         ingestion = await self._ingestion_for_session(ctx.tenant_id, multipart_id=multipart_id)
         try:
             metadata = await self.object_storage.complete_multipart_upload(
-                command.physical_key, provider_upload_id, provider_parts
+                command.provider_target, provider_upload_id, provider_parts
             )
             if getattr(metadata, "key", command.physical_key) != command.physical_key or getattr(metadata, "content_length", None) != total_size:
                 raise ApiError("upload_verification_failed", "Completed multipart object metadata mismatch", status_code=409)

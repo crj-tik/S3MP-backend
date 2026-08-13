@@ -13,6 +13,13 @@ from s3mp.identity.domain.context import PrincipalContext
 from s3mp.main import create_app
 
 
+class AllowAllAuthorizationManagement:
+    """Explicit authorization double for router tests with injected contexts."""
+
+    async def require_permission(self, context: PrincipalContext, permission: str) -> None:
+        return None
+
+
 def make_app(
     services: dict[str, Any] | None = None,
     *,
@@ -28,6 +35,8 @@ def make_app(
     for name, svc in (services or {}).items():
         setattr(app.state, name, svc)
     if context is not None:
+        if "authorization_management" not in (services or {}):
+            app.state.authorization_management = AllowAllAuthorizationManagement()
 
         @app.middleware("http")
         async def _inject(request: Any, call_next: Any) -> Any:

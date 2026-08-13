@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+import pytest
+from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import scripts.check_openapi as check_openapi  # noqa: E402
@@ -94,10 +96,43 @@ def test_schema_check_fails_for_nested_success_response_drift(tmp_path: Path) ->
         check_openapi.BASELINE = original
 
 
-def test_management_permission_binding_check_rejects_contract_drift() -> None:
-    from scripts.check_contracts import validate_management_permission_bindings
+def test_operation_permission_classification_check_rejects_contract_drift() -> None:
+    from scripts.check_contracts import validate_operation_permission_classifications
 
     baseline = copy.deepcopy(_runtime_openapi())
     baseline["paths"]["/api/v1/roles"]["get"]["x-permission"] = "roles.manage"
 
-    assert validate_management_permission_bindings(baseline)
+    assert validate_operation_permission_classifications(baseline)
+
+
+def test_management_route_enforcement_check_accepts_current_routes() -> None:
+    from scripts.check_contracts import validate_management_route_enforcement
+
+    assert validate_management_route_enforcement() == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/users",
+        "/api/v1/groups",
+        "/api/v1/applications",
+        "/api/v1/api_keys/00000000-0000-0000-0000-000000000001",
+        "/api/v1/storage_connections",
+        "/api/v1/quotas",
+        "/api/v1/audit_events",
+    ],
+)
+async def test_api_key_is_rejected_for_each_management_category(path: str) -> None:
+    """Management denial is operation classification based, not URL-prefix based."""
+    from _http import make_app
+    from s3mp.identity.domain.context import PrincipalContext
+    from uuid import uuid4
+
+    context = PrincipalContext.for_application(uuid4(), uuid4(), application_id=uuid4())
+    app = make_app(context=context)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(path)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"

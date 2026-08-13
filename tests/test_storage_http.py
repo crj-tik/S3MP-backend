@@ -14,7 +14,11 @@ def _ctx() -> PrincipalContext:
 
 
 class FakeStorageService:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def list_connections(self, tenant_id: Any) -> list[dict[str, Any]]:
+        self.calls += 1
         return [{"id": str(uuid4()), "name": "primary", "status": "active"}]
 
     async def get_connection(self, tenant_id: Any, conn_id: str) -> dict[str, Any]:
@@ -41,6 +45,13 @@ class FakeStorageService:
 
     async def create_space(self, tenant_id: Any, body: Any) -> dict[str, Any]:
         return {"id": str(uuid4()), "name": body.name, "bucket": body.bucket}
+
+
+class DenyingAuthorizationManagement:
+    async def require_permission(self, _context: PrincipalContext, _permission: str) -> None:
+        from s3mp.common.errors import ApiError
+
+        raise ApiError("permission_denied", "Permission denied", status_code=403)
 
 
 def _app() -> Any:
@@ -90,3 +101,28 @@ async def test_unauthenticated_request_returns_401() -> None:
 
     assert response.status_code == 401
     assert response.json()["code"] == "authentication_required"
+
+
+async def test_api_key_cannot_call_storage_management_before_service() -> None:
+    service = FakeStorageService()
+    context = PrincipalContext.for_application(uuid4(), uuid4(), application_id=uuid4())
+    app = make_app({"storage_service": service}, context=context)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/storage_connections")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+    assert service.calls == 0
+
+
+async def test_human_without_permission_cannot_call_storage_management_before_service() -> None:
+    service = FakeStorageService()
+    app = make_app(
+        {"storage_service": service, "authorization_management": DenyingAuthorizationManagement()},
+        context=_ctx(),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/storage_connections")
+
+    assert response.status_code == 403
+    assert service.calls == 0

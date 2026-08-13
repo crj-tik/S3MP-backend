@@ -15,7 +15,7 @@ from s3mp.authorization.domain.evaluator import (
 )
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
-from s3mp.storage.domain.policy import canonical_object_key
+from s3mp.storage.domain.policy import ProviderTarget, canonical_object_key, derive_provider_target
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +32,7 @@ class AuthorizedFileCommand:
     bucket: str
     relative_key: str
     physical_key: str
+    provider_target_version: int
     action: str
     authorization_version: int
     authorization_evidence: dict[str, Any] = field(default_factory=dict)
@@ -57,8 +58,14 @@ class AuthorizedFileCommand:
         validate_canonical_prefix(rel)
 
         # 2. Compute physical key
-        root = (storage_space.get("root_prefix") or "").strip("/")
-        physical = f"{root}/{rel}" if root else rel
+        target = derive_provider_target(
+            tenant_id=ctx.tenant_id,
+            storage_space_id=UUID(str(storage_space["id"])),
+            bucket=str(storage_space["bucket"]),
+            relative_key=rel,
+            operator_prefix=str(storage_space.get("root_prefix") or ""),
+            version=int(storage_space.get("provider_target_version", 1)),
+        )
 
         # 3. Authorize
         now = datetime.now(UTC)
@@ -111,12 +118,17 @@ class AuthorizedFileCommand:
             tenant_id=ctx.tenant_id,
             acting_principal_id=ctx.principal_id,
             storage_space_id=UUID(storage_space["id"]),
-            bucket=storage_space.get("bucket", "unknown"),
+            bucket=target.bucket,
             relative_key=rel,
-            physical_key=physical,
+            physical_key=target.key,
+            provider_target_version=target.version,
             action=action,
             authorization_version=ctx.authorization_version,
             authorization_evidence=evidence,
             request_id=request_id,
             idempotency_fingerprint=fingerprint,
         )
+
+    @property
+    def provider_target(self) -> ProviderTarget:
+        return ProviderTarget(self.bucket, self.physical_key, self.provider_target_version)

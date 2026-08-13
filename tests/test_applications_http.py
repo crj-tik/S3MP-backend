@@ -73,6 +73,13 @@ class FakeApiKeyService:
         return {"id": str(key_id), "status": "revoked", "reason": reason}
 
 
+class DenyingAuthorizationManagement:
+    async def require_permission(self, _context: PrincipalContext, _permission: str) -> None:
+        from s3mp.common.errors import ApiError
+
+        raise ApiError("permission_denied", "Permission denied", status_code=403)
+
+
 def _app() -> Any:
     return make_app(
         {
@@ -154,3 +161,28 @@ async def test_unauthenticated_request_returns_401() -> None:
 
     assert response.status_code == 401
     assert response.json()["code"] == "authentication_required"
+
+
+async def test_api_key_cannot_manage_applications_before_service() -> None:
+    application_service = FakeApplicationService()
+    context = PrincipalContext.for_application(uuid4(), uuid4(), application_id=uuid4())
+    app = make_app({"application_service": application_service}, context=context)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/applications", json={"name": "blocked"})
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "permission_denied"
+    assert application_service.create_calls == 0
+
+
+async def test_human_without_permission_cannot_manage_applications_before_service() -> None:
+    application_service = FakeApplicationService()
+    app = make_app(
+        {"application_service": application_service, "authorization_management": DenyingAuthorizationManagement()},
+        context=_ctx(),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/applications", json={"name": "blocked"})
+
+    assert response.status_code == 403
+    assert application_service.create_calls == 0

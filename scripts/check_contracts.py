@@ -108,9 +108,9 @@ def validate_catalog(path: Path, candidates: tuple[str, ...]) -> list[str]:
     return errors
 
 
-def validate_management_permission_bindings(openapi: Any) -> list[str]:
-    """Verify management operation declarations use the executable permission map."""
-    from s3mp.common.api.dependencies import MANAGEMENT_OPERATION_PERMISSIONS
+def validate_operation_permission_classifications(openapi: Any) -> list[str]:
+    """Verify every permissioned OpenAPI operation has a runtime classification."""
+    from s3mp.common.api.dependencies import OPERATION_PERMISSION_CLASSIFICATIONS
 
     operations: dict[str, str] = {}
     for path_item in (openapi.get("paths") or {}).values():
@@ -121,19 +121,64 @@ def validate_management_permission_bindings(openapi: Any) -> list[str]:
                 continue
             operation_id = operation.get("operationId")
             permission = operation.get("x-permission")
-            if isinstance(operation_id, str) and operation_id in MANAGEMENT_OPERATION_PERMISSIONS:
+            if isinstance(operation_id, str) and isinstance(permission, str):
                 operations[operation_id] = permission if isinstance(permission, str) else ""
     errors = []
-    missing = set(MANAGEMENT_OPERATION_PERMISSIONS) - set(operations)
+    missing = set(operations) - set(OPERATION_PERMISSION_CLASSIFICATIONS)
     if missing:
-        errors.append("Management operations missing from OpenAPI: " + ", ".join(sorted(missing)))
+        errors.append("Permissioned operations missing runtime classification: " + ", ".join(sorted(missing)))
+    stale = set(OPERATION_PERMISSION_CLASSIFICATIONS) - set(operations)
+    if stale:
+        errors.append("Runtime classifications missing from OpenAPI: " + ", ".join(sorted(stale)))
     for operation_id, permission in operations.items():
-        if permission != MANAGEMENT_OPERATION_PERMISSIONS[operation_id]:
+        runtime_permission = OPERATION_PERMISSION_CLASSIFICATIONS.get(operation_id)
+        if runtime_permission is not None and permission != runtime_permission:
             errors.append(
-                f"Management permission mismatch for {operation_id}: "
-                f"OpenAPI={permission!r}, runtime={MANAGEMENT_OPERATION_PERMISSIONS[operation_id]!r}"
+                f"Permission mismatch for {operation_id}: "
+                f"OpenAPI={permission!r}, runtime={runtime_permission!r}"
             )
     return errors
+
+
+def validate_management_route_enforcement() -> list[str]:
+    """Verify each classified management operation has its permission dependency."""
+    from s3mp.common.api.dependencies import MANAGEMENT_OPERATION_PERMISSIONS
+    from s3mp.main import app
+
+    def walk(routes: Any) -> list[Any]:
+        flattened: list[Any] = []
+        for route in routes:
+            nested = getattr(route, "routes", None)
+            if nested is None:
+                original_router = getattr(route, "original_router", None)
+                nested = getattr(original_router, "routes", None)
+            if nested is not None:
+                flattened.extend(walk(nested))
+            else:
+                flattened.append(route)
+        return flattened
+
+    bound_operations: dict[str, str] = {}
+    for route in walk(app.routes):
+        operation_id = getattr(route, "operation_id", None)
+        if not isinstance(operation_id, str) or operation_id not in MANAGEMENT_OPERATION_PERMISSIONS:
+            continue
+        dependencies = getattr(getattr(route, "dependant", None), "dependencies", ())
+        dependency_operations = {
+            getattr(dependency.call, "__s3mp_management_operation_id__", None)
+            for dependency in dependencies
+            if getattr(dependency, "call", None) is not None
+        }
+        if operation_id in dependency_operations:
+            bound_operations[operation_id] = MANAGEMENT_OPERATION_PERMISSIONS[operation_id]
+
+    missing = set(MANAGEMENT_OPERATION_PERMISSIONS) - set(bound_operations)
+    if missing:
+        return [
+            "Management operations missing runtime permission dependency: "
+            + ", ".join(sorted(missing))
+        ]
+    return []
 
 
 def main() -> int:
@@ -153,7 +198,8 @@ def main() -> int:
         errors += validate_catalog(
             CONTRACTS / "permission-catalog.yaml", ("permissions", "operations")
         )
-        errors += validate_management_permission_bindings(openapi)
+        errors += validate_operation_permission_classifications(openapi)
+        errors += validate_management_route_enforcement()
         known_permissions = catalog_identifiers(permission_catalog, ("permissions", "operations"))
         referenced_permissions = collect_key_values(openapi, "x-permission")
         unknown_permissions = referenced_permissions - known_permissions

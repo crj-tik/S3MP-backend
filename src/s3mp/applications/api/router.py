@@ -1,10 +1,11 @@
 """Applications and API Key HTTP endpoints."""
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
@@ -68,34 +69,40 @@ def _key_service(request: Request) -> Any:
 
 
 @router.get("/applications", operation_id="list_applications")
-async def list_applications(request: Request) -> Any:
-    return await _app_service(request).list_apps(_context(request))
+async def list_applications(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("list_applications")],
+) -> Any:
+    return await _app_service(request).list_apps(context)
 
 
 @router.post("/applications", status_code=201, operation_id="create_application")
 async def create_application(
     request: Request,
     body: ApplicationCreate,
+    context: Annotated[PrincipalContext, management_permission("create_application")],
 ) -> Any:
-    return await _app_service(request).create_app(_context(request), body.name)
+    return await _app_service(request).create_app(context, body.name)
 
 
 @router.get("/applications/{application_id}", operation_id="get_application")
 async def get_application(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_application")],
     application_id: str = Path(min_length=1),
 ) -> Any:
-    return await _app_service(request).get_app(_context(request), application_id)
+    return await _app_service(request).get_app(context, application_id)
 
 
 @router.patch("/applications/{application_id}", operation_id="update_application")
 async def update_application(
     request: Request,
     body: ApplicationUpdate,
+    context: Annotated[PrincipalContext, management_permission("update_application")],
     application_id: str = Path(min_length=1),
 ) -> Any:
     return await _app_service(request).update_app(
-        _context(request), application_id, body.name
+        context, application_id, body.name
     )
 
 
@@ -105,33 +112,37 @@ async def update_application(
 @router.get("/applications/{application_id}/api_keys", operation_id="list_api_keys")
 async def list_api_keys(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("list_api_keys")],
     application_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).list_keys(_context(request), application_id)
+    return await _key_service(request).list_keys(context, application_id)
 
 
 @router.post("/applications/{application_id}/api_keys", status_code=201, operation_id="create_api_key")
 async def create_api_key(
     request: Request,
     body: ApiKeyCreate,
+    context: Annotated[PrincipalContext, management_permission("create_api_key")],
     application_id: str = Path(min_length=1),
 ) -> Any:
     return await _key_service(request).issue(
-        _context(request), application_id, body.scopes, body.ttl_days
+        context, application_id, body.scopes, body.ttl_days
     )
 
 
 @router.get("/api_keys/{api_key_id}", operation_id="get_api_key")
 async def get_api_key(
     request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_api_key")],
     api_key_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).get_key(_context(request), api_key_id)
+    return await _key_service(request).get_key(context, api_key_id)
 
 
 @router.get("/api_keys/{api_key_id}/secret", status_code=410, operation_id="get_api_key_secret")
 async def get_api_key_secret(
     request: Request,
+    _context: Annotated[PrincipalContext, management_permission("get_api_key_secret")],
     api_key_id: str = Path(min_length=1),
 ) -> Any:
     raise ApiError("secret_not_retrievable", "API key secrets are only shown once at creation", status_code=410)
@@ -141,10 +152,11 @@ async def get_api_key_secret(
 async def rotate_api_key(
     request: Request,
     body: ApiKeyRotate,
+    context: Annotated[PrincipalContext, management_permission("rotate_api_key")],
     api_key_id: str = Path(min_length=1),
 ) -> Any:
     return await _key_service(request).rotate(
-        _context(request), api_key_id, body.overlap_seconds
+        context, api_key_id, body.overlap_seconds
     )
 
 
@@ -152,6 +164,7 @@ async def rotate_api_key(
 async def revoke_api_key(
     request: Request,
     body: ApiKeyRevoke,
+    context: Annotated[PrincipalContext, management_permission("revoke_api_key")],
     api_key_id: str = Path(min_length=1),
 ) -> Any:
-    return await _key_service(request).revoke(_context(request), api_key_id, body.reason)
+    return await _key_service(request).revoke(context, api_key_id, body.reason)

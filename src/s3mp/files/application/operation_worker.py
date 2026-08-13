@@ -10,6 +10,7 @@ from uuid import UUID
 from s3mp.authorization.domain.evaluator import Decision, evaluate
 from s3mp.files.application.file_service import FileAuthorizationStore, ObjectStorage, StorageSpaceStore
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.storage.domain.policy import derive_provider_target
 
 
 class OperationStore(Protocol):
@@ -102,7 +103,19 @@ class FileOperationWorker:
         space = await self.storage_store.get_space(tenant_id, UUID(space_id))
         if space is None:
             return "cancelled", "storage_space_missing"
-        root = (space.get("root_prefix") or "").strip("/")
+
+        def target(key: str):
+            try:
+                return derive_provider_target(
+                    tenant_id=tenant_id,
+                    storage_space_id=UUID(space_id),
+                    bucket=str(space["bucket"]),
+                    relative_key=key,
+                    operator_prefix=str(space.get("root_prefix") or ""),
+                    version=int(space.get("provider_target_version", 1)),
+                )
+            except (KeyError, ValueError):
+                return None
 
         async def authorize(permission: str, key: str) -> bool:
             if ctx.subject_kind == "application" and permission not in (ctx.api_key_scopes or frozenset()):
@@ -122,17 +135,18 @@ class FileOperationWorker:
                     return "failed", "operation_keys_missing"
                 if not await authorize("files.read", source) or not await authorize("files.write", destination):
                     return "cancelled", "authorization_revoked"
-                source_physical = f"{root}/{source}" if root else source
-                destination_physical = f"{root}/{destination}" if root else destination
-                source_state = await self.object_storage.head(source_physical)
-                destination_state = await self.object_storage.head(destination_physical)
+                source_target, destination_target = target(source), target(destination)
+                if source_target is None or destination_target is None:
+                    return "cancelled", "storage_target_unverifiable"
+                source_state = await self.object_storage.head(source_target)
+                destination_state = await self.object_storage.head(destination_target)
                 # A previous attempt may have completed the provider effect and
                 # crashed before committing its database result.
                 if destination_state is None:
                     if source_state is None:
                         return "failed", "source_object_missing"
-                    await self.object_storage.copy(source_physical, destination_physical)
-                    destination_state = await self.object_storage.head(destination_physical)
+                    await self.object_storage.copy(source_target, destination_target)
+                    destination_state = await self.object_storage.head(destination_target)
                     if destination_state is None:
                         return "retry_wait", "copy_verification_failed"
                 if operation["operation_type"] == "move":
@@ -141,14 +155,17 @@ class FileOperationWorker:
                     if not await authorize("files.delete", source):
                         return "partial_failure", "source_delete_authorization_revoked"
                     try:
-                        await self.object_storage.delete(source_physical)
+                        await self.object_storage.delete(source_target)
                     except Exception:
                         return "partial_failure", "source_delete_failed"
             elif operation["operation_type"] == "delete":
                 for key in operation.get("keys") or ():
                     if not await authorize("files.delete", key):
                         return "cancelled", "authorization_revoked"
-                    await self.object_storage.delete(f"{root}/{key}" if root else key)
+                    key_target = target(key)
+                    if key_target is None:
+                        return "cancelled", "storage_target_unverifiable"
+                    await self.object_storage.delete(key_target)
             else:
                 return "failed", "unsupported_operation"
         except Exception:

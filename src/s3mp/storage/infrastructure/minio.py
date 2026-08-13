@@ -13,6 +13,7 @@ from botocore.config import Config  # type: ignore[import-untyped]
 from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-untyped]
 
 from s3mp.common.config import Settings
+from s3mp.storage.domain.policy import ProviderTarget
 
 
 class ObjectStorageUnavailable(RuntimeError):
@@ -60,17 +61,17 @@ class MinioObjectStorageAdapter:
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("configured S3 bucket is unavailable") from exc
 
-    async def head(self, key: str) -> ObjectMetadata | None:
+    async def head(self, target: ProviderTarget) -> ObjectMetadata | None:
         try:
             response: dict[str, Any] = await asyncio.to_thread(
-                self._client.head_object, Bucket=self._bucket, Key=key
+                self._client.head_object, Bucket=target.bucket, Key=target.key
             )
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
                 return None
             raise ObjectStorageUnavailable("S3 object lookup failed") from exc
         return ObjectMetadata(
-            key=key,
+            key=target.key,
             content_length=int(response["ContentLength"]),
             etag=str(response.get("ETag", "")).strip('"') or None,
             content_type=response.get("ContentType"),
@@ -78,49 +79,49 @@ class MinioObjectStorageAdapter:
             checksum_sha256=response.get("ChecksumSHA256"),
         )
 
-    async def put(self, key: str, body: bytes, content_type: str) -> ObjectMetadata:
+    async def put(self, target: ProviderTarget, body: bytes, content_type: str) -> ObjectMetadata:
         try:
             await asyncio.to_thread(
                 self._client.put_object,
-                Bucket=self._bucket,
-                Key=key,
+                Bucket=target.bucket,
+                Key=target.key,
                 Body=body,
                 ContentType=content_type,
             )
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 object upload failed") from exc
-        result = await self.head(key)
+        result = await self.head(target)
         if result is None:
             raise ObjectStorageUnavailable("uploaded object could not be verified")
         return result
 
-    async def delete(self, key: str) -> None:
+    async def delete(self, target: ProviderTarget) -> None:
         try:
-            await asyncio.to_thread(self._client.delete_object, Bucket=self._bucket, Key=key)
+            await asyncio.to_thread(self._client.delete_object, Bucket=target.bucket, Key=target.key)
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 object delete failed") from exc
 
-    async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
+    async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> ObjectMetadata:
         try:
             await asyncio.to_thread(
                 self._client.copy_object,
-                Bucket=self._bucket,
-                Key=destination_key,
-                CopySource={"Bucket": self._bucket, "Key": source_key},
+                Bucket=destination.bucket,
+                Key=destination.key,
+                CopySource={"Bucket": source.bucket, "Key": source.key},
             )
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 object copy failed") from exc
-        result = await self.head(destination_key)
+        result = await self.head(destination)
         if result is None:
             raise ObjectStorageUnavailable("copied object could not be verified")
         return result
 
-    async def presign_get(self, key: str, expires_in: int) -> str:
+    async def presign_get(self, target: ProviderTarget, expires_in: int) -> str:
         try:
             return await asyncio.to_thread(
                 self._client.generate_presigned_url,
                 "get_object",
-                Params={"Bucket": self._bucket, "Key": key},
+                Params={"Bucket": target.bucket, "Key": target.key},
                 ExpiresIn=expires_in,
             )
         except (BotoCoreError, ClientError) as exc:
@@ -128,13 +129,13 @@ class MinioObjectStorageAdapter:
 
     # ── Multipart ──────────────────────────────────────────────────────────
 
-    async def create_multipart_upload(self, key: str, content_type: str) -> str:
+    async def create_multipart_upload(self, target: ProviderTarget, content_type: str) -> str:
         """Initiate a provider-side multipart upload; returns the provider upload ID."""
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.create_multipart_upload,
-                Bucket=self._bucket,
-                Key=key,
+                Bucket=target.bucket,
+                Key=target.key,
                 ContentType=content_type,
             )
         except (BotoCoreError, ClientError) as exc:
@@ -145,14 +146,14 @@ class MinioObjectStorageAdapter:
         return upload_id
 
     async def upload_part(
-        self, key: str, upload_id: str, part_number: int, body: bytes
+        self, target: ProviderTarget, upload_id: str, part_number: int, body: bytes
     ) -> dict[str, object]:
         """Upload a single part; returns {'etag': str, 'part_number': int}."""
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.upload_part,
-                Bucket=self._bucket,
-                Key=key,
+                Bucket=target.bucket,
+                Key=target.key,
                 UploadId=upload_id,
                 PartNumber=part_number,
                 Body=body,
@@ -163,7 +164,7 @@ class MinioObjectStorageAdapter:
         return {"etag": etag, "part_number": part_number}
 
     async def complete_multipart_upload(
-        self, key: str, upload_id: str, parts: list[dict[str, object]]
+        self, target: ProviderTarget, upload_id: str, parts: list[dict[str, object]]
     ) -> ObjectMetadata:
         """Complete the multipart upload with the provider; returns final ObjectMetadata."""
         try:
@@ -173,25 +174,25 @@ class MinioObjectStorageAdapter:
             ]}
             await asyncio.to_thread(
                 self._client.complete_multipart_upload,
-                Bucket=self._bucket,
-                Key=key,
+                Bucket=target.bucket,
+                Key=target.key,
                 UploadId=upload_id,
                 MultipartUpload=multipart_upload,
             )
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 multipart complete failed") from exc
-        result = await self.head(key)
+        result = await self.head(target)
         if result is None:
             raise ObjectStorageUnavailable("completed multipart object could not be verified")
         return result
 
-    async def abort_multipart_upload(self, key: str, upload_id: str) -> None:
+    async def abort_multipart_upload(self, target: ProviderTarget, upload_id: str) -> None:
         """Abort a provider-side multipart upload best-effort."""
         try:
             await asyncio.to_thread(
                 self._client.abort_multipart_upload,
-                Bucket=self._bucket,
-                Key=key,
+                Bucket=target.bucket,
+                Key=target.key,
                 UploadId=upload_id,
             )
         except ClientError as exc:
@@ -199,13 +200,13 @@ class MinioObjectStorageAdapter:
                 return  # already cleaned up — not an error
             raise ObjectStorageUnavailable("S3 multipart abort failed") from exc
 
-    async def list_parts(self, key: str, upload_id: str) -> list[dict[str, object]]:
+    async def list_parts(self, target: ProviderTarget, upload_id: str) -> list[dict[str, object]]:
         """List uploaded parts for a provider-side multipart session."""
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.list_parts,
-                Bucket=self._bucket,
-                Key=key,
+                Bucket=target.bucket,
+                Key=target.key,
                 UploadId=upload_id,
             )
         except (BotoCoreError, ClientError) as exc:

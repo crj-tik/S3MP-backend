@@ -5,6 +5,7 @@ from sqlalchemy import text
 from _infrastructure import TEST_REDIS_URL, real_engine, real_settings
 from s3mp.common.redis import create_redis
 from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
+from s3mp.storage.domain.policy import ProviderTarget
 
 
 async def test_postgresql_connectivity() -> None:
@@ -32,13 +33,13 @@ async def test_minio_readiness_probe() -> None:
 
 async def test_minio_put_head_delete_round_trip() -> None:
     adapter = MinioObjectStorageAdapter(real_settings())
-    key = "infrastructure-test/round-trip.txt"
+    target = ProviderTarget("s3mp-dev", "v1/infrastructure-test/round-trip.txt")
     try:
-        metadata = await adapter.put(key, b"hello-s3mp", "text/plain")
+        metadata = await adapter.put(target, b"hello-s3mp", "text/plain")
         assert metadata.content_length == len(b"hello-s3mp")
-        head = await adapter.head(key)
+        head = await adapter.head(target)
         assert head is not None
         assert head.content_length == len(b"hello-s3mp")
     finally:
-        await adapter.delete(key)
-    assert await adapter.head(key) is None
+        await adapter.delete(target)
+    assert await adapter.head(target) is None
