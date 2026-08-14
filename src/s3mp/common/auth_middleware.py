@@ -19,6 +19,7 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
         "/redoc",
         "/docs/oauth2-redirect",
         "/api/v1/auth/login",
+        "/api/v1/account/register",
     }
 )
 

@@ -99,6 +99,24 @@ def test_expired_binding_and_unlisted_platform_permission_are_denied() -> None:
     assert platform_result.reason_code == "default_deny"
 
 
+def test_evaluator_normalizes_naive_persisted_binding_timestamps() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    persisted_binding = Binding(
+        uuid4(),
+        "files.read",
+        Decision.ALLOW,
+        "team",
+        (now - timedelta(minutes=1)).replace(tzinfo=None),
+        (now + timedelta(hours=1)).replace(tzinfo=None),
+        "legacy-naive-timestamps",
+    )
+
+    assert (
+        evaluate("files.read", [persisted_binding], object_key="team/a.txt", now=now).decision
+        == Decision.ALLOW
+    )
+
+
 @pytest.mark.parametrize(
     "prefix", ["/team", "team//reports", "team/../private", "team\\private", "team%2Fprivate"]
 )

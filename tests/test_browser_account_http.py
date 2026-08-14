@@ -111,6 +111,43 @@ async def test_logout_with_csrf_revokes_account_session_and_clears_cookies() -> 
 
 
 @pytest.mark.asyncio
+async def test_tenant_security_domain_wins_for_business_mutation_with_both_sessions() -> None:
+    app = app_with_account_context()
+
+    @app.post("/api/v1/test-tenant-mutation")
+    async def tenant_mutation() -> dict[str, bool]:
+        return {"ok": True}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set("s3mp_account_session", "account-opaque")
+        client.cookies.set("s3mp_account_csrf", "account-csrf")
+        client.cookies.set("s3mp_session", "tenant-opaque")
+        client.cookies.set("s3mp_csrf", "tenant-csrf")
+        accepted = await client.post(
+            "/api/v1/test-tenant-mutation", headers={"X-S3MP-CSRF": "tenant-csrf"}
+        )
+        rejected = await client.post(
+            "/api/v1/test-tenant-mutation", headers={"X-S3MP-CSRF": "account-csrf"}
+        )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_account_security_domain_wins_for_logout_with_both_sessions() -> None:
+    app = app_with_account_context()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set("s3mp_account_session", "account-opaque")
+        client.cookies.set("s3mp_account_csrf", "account-csrf")
+        client.cookies.set("s3mp_session", "tenant-opaque")
+        client.cookies.set("s3mp_csrf", "tenant-csrf")
+        response = await client.post("/api/v1/auth/logout", headers={"X-S3MP-CSRF": "account-csrf"})
+
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
 async def test_tenant_selection_denial_does_not_issue_tenant_cookie() -> None:
     app = app_with_account_context()
     app.state.account_authentication = DenyingTenantAccountService()

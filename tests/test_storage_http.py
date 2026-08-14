@@ -1,5 +1,6 @@
 """HTTP contract tests for the storage router (fake-service injection)."""
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -37,8 +38,23 @@ class FakeStorageService:
     ) -> dict[str, Any]:
         return {"connection_id": conn_id, "reachable": True, "writable": True}
 
-    async def list_spaces(self, tenant_id: Any) -> list[dict[str, Any]]:
-        return [{"id": str(uuid4()), "name": "default", "bucket": "s3mp-dev"}]
+    async def list_spaces(self, context: Any) -> dict[str, Any]:
+        return {
+            "items": [
+                {
+                    "id": str(uuid4()),
+                    "tenant_id": str(context.tenant_id),
+                    "connection_id": str(uuid4()),
+                    "name": "default",
+                    "bucket": "s3mp-dev",
+                    "root_prefix": "",
+                    "provider_target_version": 1,
+                    "status": "active",
+                    "created_at": datetime.now(UTC).isoformat(),
+                }
+            ],
+            "next_cursor": None,
+        }
 
     async def get_space(self, tenant_id: Any, space_id: str) -> dict[str, Any]:
         return {"id": space_id, "name": "default", "bucket": "s3mp-dev"}
@@ -92,6 +108,16 @@ async def test_get_storage_space_returns_200() -> None:
 
     assert response.status_code == 200
     assert response.json()["bucket"] == "s3mp-dev"
+
+
+async def test_list_storage_spaces_returns_page() -> None:
+    app = _app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/storage_spaces")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["bucket"] == "s3mp-dev"
+    assert response.json()["next_cursor"] is None
 
 
 async def test_unauthenticated_request_returns_401() -> None:

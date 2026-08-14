@@ -57,6 +57,13 @@ def _scope_matches(binding_prefix: str | None, object_key: str) -> bool:
     return object_key == binding_prefix or object_key.startswith(binding_prefix + "/")
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalize persisted timestamps before comparing authorization windows."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def evaluate(
     permission: str,
     bindings: list[Binding],
@@ -66,13 +73,13 @@ def evaluate(
     now: datetime | None = None,
 ) -> AuthorizationDecision:
     """Evaluate active bindings with explicit deny precedence and default deny."""
-    current = now or datetime.now(UTC)
+    current = _as_utc(now or datetime.now(UTC))
     validate_canonical_prefix(object_key)
     matches = [
         binding
         for binding in bindings
         if binding.permission == permission
-        and binding.starts_at <= current < binding.expires_at
+        and _as_utc(binding.starts_at) <= current < _as_utc(binding.expires_at)
         and (binding.storage_space_id is None or binding.storage_space_id == storage_space_id)
         and _scope_matches(binding.canonical_prefix, object_key)
     ]

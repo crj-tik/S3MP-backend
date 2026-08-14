@@ -73,11 +73,16 @@ class UserModel(Base):
     """A human account shared across its tenant memberships."""
 
     __tablename__ = "user_account"
-    __table_args__ = (UniqueConstraint("normalized_email"),)
+    __table_args__ = (
+        UniqueConstraint("normalized_email"),
+        UniqueConstraint("normalized_employee_number"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     email: Mapped[str] = mapped_column(String(320))
     normalized_email: Mapped[str] = mapped_column(String(320))
+    employee_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    normalized_employee_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     display_name: Mapped[str] = mapped_column(String(200))
     status: Mapped[UserStatus] = mapped_column(
         Enum(

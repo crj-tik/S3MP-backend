@@ -10,7 +10,5 @@ htmlcov/
 .env
 .env.*
 !.env.example
-deploy/secrets/*
-!deploy/secrets.example/
 *.log
 .uv-cache/

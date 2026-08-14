@@ -68,9 +68,9 @@ class StorageService:
             raise ApiError("resource_not_found", "Connection not found", status_code=404)
         return {"status": "ok", "readable": True, "writable": write_test_prefix is not None}
 
-    async def list_spaces(self, context: PrincipalContext) -> list[dict[str, Any]]:
+    async def list_spaces(self, context: PrincipalContext) -> dict[str, Any]:
         await self._require(context, "storage_spaces.read")
-        return await self.store.list_spaces(context.tenant_id)
+        return {"items": await self.store.list_spaces(context.tenant_id), "next_cursor": None}
 
     async def get_space(self, context: PrincipalContext, space_id: str) -> dict[str, Any]:
         await self._require(context, "storage_spaces.read")

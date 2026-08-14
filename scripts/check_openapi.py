@@ -13,28 +13,9 @@ from s3mp.main import app
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "contracts" / "openapi.yaml"
 HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "patch", "trace"})
-RUNTIME_ONLY_PATHS = frozenset({"/health/live", "/health/ready"})
 # FastAPI auto-generates 422 for any endpoint with validation (path/query/body params).
 # It is not a meaningful contract difference — exclude it from comparison.
 IGNORED_RESPONSE_STATUSES = frozenset({"422"})
-SCHEMA_ENFORCED_PATHS = frozenset(
-    {
-        "/api/v1/me",
-        "/api/v1/users",
-        "/api/v1/users/{user_id}",
-        "/api/v1/members",
-        "/api/v1/members/{membership_id}",
-        "/api/v1/groups",
-        "/api/v1/groups/{group_id}",
-        "/api/v1/groups/{group_id}/members",
-        "/api/v1/roles",
-        "/api/v1/roles/{role_id}",
-        "/api/v1/role_bindings",
-        "/api/v1/role_bindings/{role_binding_id}",
-        "/api/v1/principals/{principal_id}/effective_permissions",
-        "/api/v1/authorization/simulations",
-    }
-)
 
 
 def operation_signatures(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -80,7 +61,7 @@ def _resolve(document: dict[str, Any], value: Any) -> dict[str, Any]:
 
 def _operation_parameters(
     document: dict[str, Any], operation: dict[str, Any]
-) -> set[tuple[str, str]]:
+) -> set[tuple[str, str, str]]:
     """Return declared parameter identities.
 
     Idempotency and precondition headers deliberately stay optional in FastAPI
@@ -89,12 +70,13 @@ def _operation_parameters(
     semantics are exercised by HTTP tests, while this check ensures both
     documents expose the same parameter names and locations.
     """
-    parameters: set[tuple[str, str]] = set()
+    parameters: set[tuple[str, str, str]] = set()
     for raw_parameter in operation.get("parameters", []):
         parameter = _resolve(document, raw_parameter)
         name, location = parameter.get("name"), parameter.get("in")
+        description = parameter.get("description")
         if isinstance(name, str) and isinstance(location, str):
-            parameters.add((name, location))
+            parameters.add((name, location, description if isinstance(description, str) else ""))
     return parameters
 
 
@@ -109,12 +91,12 @@ def _request_body_media_types(
     return bool(body.get("required")), set(content) if isinstance(content, dict) else set()
 
 
-def _success_schemas(
+def _response_schemas(
     document: dict[str, Any], operation: dict[str, Any]
 ) -> dict[str, dict[str, Any]]:
     schemas: dict[str, dict[str, Any]] = {}
     for status, response in operation.get("responses", {}).items():
-        if not str(status).startswith("2"):
+        if str(status) in IGNORED_RESPONSE_STATUSES:
             continue
         resolved_response = _resolve(document, response)
         content = resolved_response.get("content", {})
@@ -126,12 +108,27 @@ def _success_schemas(
     return schemas
 
 
+def _request_schemas(document: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
+    raw_body = operation.get("requestBody")
+    if raw_body is None:
+        return {}
+    body = _resolve(document, raw_body)
+    content = body.get("content", {})
+    if not isinstance(content, dict):
+        return {}
+    return {
+        media_type: _normalise_schema(document, value["schema"])
+        for media_type, value in content.items()
+        if isinstance(value, dict) and isinstance(value.get("schema"), dict)
+    }
+
+
 def _normalise_schema(document: dict[str, Any], value: Any) -> dict[str, Any]:
     """Expand local references and drop generator-only schema metadata."""
     resolved = _resolve(document, value)
     result: dict[str, Any] = {}
     for key, item in resolved.items():
-        if key in {"title", "description", "examples", "example", "default", "pattern"}:
+        if key in {"title", "examples", "example", "default", "pattern"}:
             continue
         if key == "properties" and isinstance(item, dict):
             result[key] = {
@@ -195,8 +192,6 @@ def main() -> int:
     baseline_operations = operation_signatures(baseline)
     errors: list[str] = []
     for signature, runtime_operation in runtime_operations.items():
-        if signature[0] in RUNTIME_ONLY_PATHS:
-            continue
         baseline_operation = baseline_operations.get(signature)
         if baseline_operation is None:
             errors.append(
@@ -213,6 +208,11 @@ def main() -> int:
                 f"Baseline {signature[1].upper()} {signature[0]} lacks runtime responses "
                 + ", ".join(sorted(missing_statuses))
             )
+        for metadata in ("summary", "description"):
+            if runtime_operation.get(metadata) != baseline_operation.get(metadata):
+                errors.append(
+                    f"{metadata.capitalize()} differs for {signature[1].upper()} {signature[0]}"
+                )
         baseline_parameters = _operation_parameters(baseline, baseline_operation)
         runtime_parameters = _operation_parameters(runtime, runtime_operation)
         if baseline_parameters != runtime_parameters:
@@ -223,18 +223,18 @@ def main() -> int:
             errors.append(
                 f"Request body contract differs for {signature[1].upper()} {signature[0]}"
             )
-        if signature[0] in SCHEMA_ENFORCED_PATHS:
-            baseline_schemas = _success_schemas(baseline, baseline_operation)
-            runtime_schemas = _success_schemas(runtime, runtime_operation)
-            for status in sorted(set(baseline_schemas) | set(runtime_schemas)):
-                if baseline_schemas.get(status) != runtime_schemas.get(status):
-                    errors.append(
-                        "Success response schema differs for "
-                        f"{signature[1].upper()} {signature[0]} {status}"
-                    )
+        baseline_schemas = _response_schemas(baseline, baseline_operation)
+        runtime_schemas = _response_schemas(runtime, runtime_operation)
+        for status in sorted(set(baseline_schemas) | set(runtime_schemas)):
+            if baseline_schemas.get(status) != runtime_schemas.get(status):
+                errors.append(
+                    f"Response schema differs for {signature[1].upper()} {signature[0]} {status}"
+                )
+        if _request_schemas(baseline, baseline_operation) != _request_schemas(
+            runtime, runtime_operation
+        ):
+            errors.append(f"Request schema differs for {signature[1].upper()} {signature[0]}")
     for signature in baseline_operations:
-        if signature[0] in RUNTIME_ONLY_PATHS:
-            continue
         if signature not in runtime_operations:
             errors.append(
                 f"Baseline operation {signature[1].upper()} {signature[0]} is absent from runtime"

@@ -41,11 +41,11 @@ def _ensure_models_loaded() -> None:
 
 _ensure_models_loaded()
 
-# pg: same credentials as alembic.ini (platform_pg_admin); the ``s3mp`` role does
+# pg: same credentials as alembic.ini (s3mp_app); the ``s3mp`` role does
 # not exist in the deployed instance.
 TEST_DATABASE_URL = os.environ.get(
     "S3MP_TEST_DATABASE_URL",
-    "postgresql+asyncpg://platform_pg_admin:Bk-Skill@localhost:18110/s3mp",
+    "postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp",
 )
 
 # redis: dedicated DB 15 to avoid colliding with application data on DB 0.

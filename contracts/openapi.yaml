@@ -1,991 +1,4086 @@
 openapi: 3.1.0
 info:
   title: S3MP API
-  version: 1.0.0
-  summary: Tenant-isolated identity, authorization and private object storage API.
-  description: The normative API contract. See api-conventions.md, error-codes.yaml and permission-catalog.yaml.
-servers:
-  - url: /
-security:
-  - session_cookie: []
-  - s3mp_key: []
-tags:
-  - {name: Context}
-  - {name: Account authentication}
-  - {name: Platform tenants}
-  - {name: Platform roles}
-  - {name: Platform support}
-  - {name: Users}
-  - {name: Members}
-  - {name: Groups}
-  - {name: Roles}
-  - {name: Authorization}
-  - {name: Applications}
-  - {name: API Keys}
-  - {name: Storage}
-  - {name: Files}
-  - {name: Uploads}
-  - {name: Multipart}
-  - {name: Quotas}
-  - {name: Audit}
+  version: 1.1.0
+  description: S3MP 是面向多租户的受控文件存储服务。管理接口使用租户会话 Cookie `s3mp_session`；账户登录与平台控制接口使用账户会话 Cookie `s3mp_account_session`。浏览器发起变更请求时同时提交
+    `X-S3MP-CSRF`，服务端应用访问使用 API Key。错误响应统一返回稳定的 `code`、可读的 `message` 和用于排障的 `request_id`；任何会话值、API Key
+    或存储凭据均不会出现在响应中。
 paths:
-  /api/v1/platform/tenants:
+  /health/live:
     get:
-      tags: [Platform tenants]
-      operationId: list_platform_tenants
-      security: [{account_session_cookie: []}]
-      responses: {'200': {description: Tenant summaries, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenantPage'}}}}, '403': {$ref: '#/components/responses/PermissionDenied'}}
-    post:
-      tags: [Platform tenants]
-      operationId: create_platform_tenant
-      security: [{account_session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenantCreate'}}}}
-      responses: {'201': {description: Tenant created, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenant'}}}}, '403': {$ref: '#/components/responses/PermissionDenied'}}
-  /api/v1/platform/tenants/{tenant_id}:
+      tags:
+      - health
+      summary: 检查 API 进程是否存活
+      operationId: live_health_live_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Live Health Live Get
+      description: 检查 API 进程是否存活；不检查数据库、Redis 或对象存储。
+  /health/ready:
     get:
-      tags: [Platform tenants]
-      operationId: get_platform_tenant
-      security: [{account_session_cookie: []}]
-      parameters: [{name: tenant_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
-      responses: {'200': {description: Tenant summary, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenant'}}}}, '404': {$ref: '#/components/responses/NotFound'}}
-    patch:
-      tags: [Platform tenants]
-      operationId: update_platform_tenant
-      security: [{account_session_cookie: []}]
-      parameters: [{name: tenant_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenantUpdate'}}}}
-      responses: {'200': {description: Tenant updated, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformTenant'}}}}, '404': {$ref: '#/components/responses/NotFound'}}
-  /api/v1/platform/role-bindings:
-    post:
-      tags: [Platform roles]
-      operationId: grant_platform_role
-      security: [{account_session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlatformRoleGrant'}}}}
-      responses: {'201': {description: Role granted, content: {application/json: {schema: {type: object}}}}}
-  /api/v1/platform/role-bindings/{binding_id}:
-    delete:
-      tags: [Platform roles]
-      operationId: revoke_platform_role
-      security: [{account_session_cookie: []}]
-      parameters: [{name: binding_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
-      responses: {'204': {description: Role revoked}}
-  /api/v1/platform/support-access:
-    post:
-      tags: [Platform support]
-      operationId: request_support_access
-      security: [{account_session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SupportAccessCreate'}}}}
-      responses: {'201': {description: Support access requested, content: {application/json: {schema: {type: object}}}}}
-  /api/v1/platform/support-access/{request_id}/approvals:
-    post:
-      tags: [Platform support]
-      operationId: approve_support_access
-      security: [{account_session_cookie: []}]
-      parameters: [{name: request_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
-      responses: {'200': {description: Support access approved, content: {application/json: {schema: {type: object}}}}}
-  /api/v1/platform/support-access/{request_id}:
-    delete:
-      tags: [Platform support]
-      operationId: revoke_support_access
-      security: [{account_session_cookie: []}]
-      parameters: [{name: request_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}]
-      responses: {'204': {description: Support access revoked}}
-  /api/v1/auth/login:
-    post:
-      tags: [Account authentication]
-      operationId: account_login
-      security: []
-      summary: Authenticate a global browser account
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AccountLoginRequest'}}}}
+      tags:
+      - health
+      summary: 检查 API 是否已就绪，并验证已启用的外部依赖。
+      operationId: ready_health_ready_get
       responses:
-        '200': {description: Account context; opaque account and CSRF cookies are set, content: {application/json: {schema: {$ref: '#/components/schemas/AccountContext'}}}}
-        '401': {description: Uniform credential failure, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-  /api/v1/auth/me:
-    get:
-      tags: [Account authentication]
-      operationId: get_account_context
-      security: [{account_session_cookie: []}]
-      responses:
-        '200': {description: Global account and accessible tenant summaries, content: {application/json: {schema: {$ref: '#/components/schemas/AccountContext'}}}}
-        '401': {$ref: '#/components/responses/AuthenticationRequired'}
-  /api/v1/auth/logout:
-    post:
-      tags: [Account authentication]
-      operationId: account_logout
-      security: [{account_session_cookie: []}]
-      parameters: [{name: X-S3MP-CSRF, in: header, required: false, schema: {type: [string, 'null']}, description: Required when an account-session cookie is supplied.}]
-      responses:
-        '204': {description: Account session revoked and cookies cleared}
-        '401': {$ref: '#/components/responses/AuthenticationRequired'}
-        '403': {description: CSRF validation failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-  /api/v1/auth/tenant-sessions:
-    post:
-      tags: [Account authentication]
-      operationId: select_tenant_session
-      security: [{account_session_cookie: []}]
-      parameters: [{name: X-S3MP-CSRF, in: header, required: false, schema: {type: [string, 'null']}, description: Required when an account-session cookie is supplied.}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TenantSessionRequest'}}}}
-      responses:
-        '204': {description: Tenant session and CSRF cookies are set for an active membership}
-        '401': {$ref: '#/components/responses/AuthenticationRequired'}
-        '403': {description: The selected tenant is inaccessible or CSRF validation failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      description: 检查 API 是否已就绪，并验证已启用的外部依赖。
   /api/v1/me:
     get:
-      tags: [Context]
+      tags:
+      - Context
+      summary: 获取当前已选租户中的身份、成员关系与有效权限上下文。
       operationId: get_me
-      summary: Get the authenticated principal and tenant context
       responses:
-        '200': {description: Current context, content: {application/json: {schema: {$ref: '#/components/schemas/Me'}, examples: {success: {$ref: '#/components/examples/MeSuccess'}}}}}
-        '401': {$ref: '#/components/responses/AuthenticationRequired'}
-        '403': {$ref: '#/components/responses/MembershipInactive'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+      description: 获取当前已选租户中的身份、成员关系与有效权限上下文。
   /api/v1/users:
     get:
-      tags: [Users]
+      tags:
+      - Context
+      summary: 列出当前租户可见的用户账户。
       operationId: list_users
-      summary: List user identities visible in the current tenant
-      x-permission: members.read
-      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
       responses:
-        '200': {description: User page, content: {application/json: {schema: {$ref: '#/components/schemas/UserPage'}}}}
-        '400': {$ref: '#/components/responses/InvalidCursor'}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出当前租户可见的用户账户。
+      x-permission: members.read
   /api/v1/users/{user_id}:
-    parameters: [{$ref: '#/components/parameters/UserId'}]
     get:
-      tags: [Users]
+      tags:
+      - Context
+      summary: 获取当前租户中指定用户的公开身份信息。
       operationId: get_user
-      x-permission: members.read
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+        description: 全局用户账户的服务端唯一标识。
       responses:
-        '200': {description: User, content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取当前租户中指定用户的公开身份信息。
+      x-permission: members.read
   /api/v1/members:
     get:
-      tags: [Members]
+      tags:
+      - Context
+      summary: 列出当前租户的成员关系。
       operationId: list_members
-      x-permission: members.read
-      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
       responses:
-        '200': {description: Membership page, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipPage'}, examples: {empty: {$ref: '#/components/examples/EmptyPage'}}}}}
-        '400': {$ref: '#/components/responses/InvalidCursor'}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出当前租户的成员关系。
+      x-permission: members.read
     post:
-      tags: [Members]
+      tags:
+      - Context
+      summary: 将已有用户加入当前租户，或创建受邀成员关系。
       operationId: create_member
-      summary: Add an existing or invited user to the tenant
-      x-permission: members.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipCreate'}}}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MembershipCreate'
       responses:
-        '201': {description: Membership created, headers: {Location: {schema: {type: string}}}, content: {application/json: {schema: {$ref: '#/components/schemas/Membership'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 将已有用户加入当前租户，或创建受邀成员关系。
+      x-permission: members.manage
   /api/v1/members/{membership_id}:
-    parameters: [{$ref: '#/components/parameters/MembershipId'}]
     get:
-      tags: [Members]
+      tags:
+      - Context
+      summary: 获取当前租户中指定成员关系的详情。
       operationId: get_member
+      parameters:
+      - name: membership_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Membership Id
+        description: 租户成员关系的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取当前租户中指定成员关系的详情。
       x-permission: members.read
-      responses:
-        '200': {description: Membership, content: {application/json: {schema: {$ref: '#/components/schemas/Membership'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
     patch:
-      tags: [Members]
+      tags:
+      - Context
+      summary: 更新成员状态
       operationId: update_member
-      summary: Change membership status; suspension immediately revokes authority
-      x-permission: members.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipUpdate'}}}}
+      parameters:
+      - name: membership_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Membership Id
+        description: 租户成员关系的服务端唯一标识。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MembershipUpdate'
       responses:
-        '200': {description: Updated membership, content: {application/json: {schema: {$ref: '#/components/schemas/Membership'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
-        '428': {$ref: '#/components/responses/EtagRequired'}
-        '412': {$ref: '#/components/responses/EtagMismatch'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 更新成员状态；暂停、移除或到期会立即回收租户权限。
+      x-permission: members.manage
+  /api/v1/groups/{group_id}/members:
+    get:
+      tags:
+      - Context
+      summary: 列出指定用户组中的成员关系。
+      operationId: list_group_members
+      parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Group Id
+        description: 用户组的服务端唯一标识。
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出指定用户组中的成员关系。
+      x-permission: groups.read
+    post:
+      tags:
+      - Context
+      summary: 将当前租户成员加入指定用户组。
+      operationId: add_group_member
+      parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Group Id
+        description: 用户组的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddGroupMemberBody'
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 将当前租户成员加入指定用户组。
+      x-permission: groups.manage
+  /api/v1/groups/{group_id}/members/{membership_id}:
+    delete:
+      tags:
+      - Context
+      summary: 将成员从指定用户组移除。
+      operationId: remove_group_member
+      parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Group Id
+        description: 用户组的服务端唯一标识。
+      - name: membership_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Membership Id
+        description: 租户成员关系的服务端唯一标识。
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 将成员从指定用户组移除。
+      x-permission: groups.manage
+  /api/v1/auth/login:
+    post:
+      tags:
+      - Account authentication
+      summary: 校验邮箱或公司系统号及密码并建立账户会话
+      operationId: account_login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Account Login
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie 和可读的账户 CSRF Cookie，但不会自动选择租户。
+  /api/v1/auth/me:
+    get:
+      tags:
+      - Account authentication
+      summary: 获取当前账户及其可选择的活跃租户摘要。
+      operationId: get_account_context
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Account Context
+      description: 获取当前账户及其可选择的活跃租户摘要。
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - Account authentication
+      summary: 撤销当前账户会话并清除账户 Cookie
+      operationId: account_logout
+      parameters:
+      - name: X-S3MP-CSRF
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-S3Mp-Csrf
+        description: 浏览器会话的 CSRF 校验值；账户操作取自 s3mp_account_csrf Cookie，租户操作取自 s3mp_csrf Cookie，并原样放入此请求头。
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 撤销当前账户会话并清除账户 Cookie；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。
+  /api/v1/auth/tenant-sessions:
+    post:
+      tags:
+      - Account authentication
+      summary: 为账户选择一个活跃租户成员关系，并建立独立的租户会话
+      operationId: select_tenant_session
+      parameters:
+      - name: X-S3MP-CSRF
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-S3Mp-Csrf
+        description: 浏览器会话的 CSRF 校验值；账户操作取自 s3mp_account_csrf Cookie，租户操作取自 s3mp_csrf Cookie，并原样放入此请求头。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantSessionRequest'
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 为账户选择一个活跃租户成员关系，并建立独立的租户会话；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。
+  /api/v1/account/register:
+    post:
+      tags:
+      - Platform account
+      summary: 注册全局平台账户
+      operationId: register_account
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Register Account
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 注册全局平台账户；仅创建账户身份，不创建租户成员关系或平台角色。
+  /api/v1/platform/tenants:
+    get:
+      tags:
+      - Platform tenants
+      summary: 列出平台可管理的租户生命周期摘要
+      operationId: list_platform_tenants
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Platform Tenants
+      description: 列出平台可管理的租户生命周期摘要；不返回租户数据面内容。
+    post:
+      tags:
+      - Platform tenants
+      summary: 创建租户，并在同一事务中建立指定初始管理员的成员关系和管理员授权。
+      operationId: create_platform_tenant
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Platform Tenant
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建租户，并在同一事务中建立指定初始管理员的成员关系和管理员授权。
+  /api/v1/platform/tenants/{tenant_id}:
+    get:
+      tags:
+      - Platform tenants
+      summary: 获取平台视角下的租户生命周期摘要。
+      operationId: get_platform_tenant
+      parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Tenant Id
+        description: 租户的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Platform Tenant
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取平台视角下的租户生命周期摘要。
+    patch:
+      tags:
+      - Platform tenants
+      summary: 更新租户名称或生命周期状态。
+      operationId: update_platform_tenant
+      parameters:
+      - name: tenant_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Tenant Id
+        description: 租户的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Update Platform Tenant
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 更新租户名称或生命周期状态。
+  /api/v1/platform/role-bindings:
+    post:
+      tags:
+      - Platform roles
+      summary: 向全局账户授予限期或长期的平台角色
+      operationId: grant_platform_role
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformRoleGrant'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Grant Platform Role
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 向全局账户授予限期或长期的平台角色；不会授予任何租户数据面权限。
+  /api/v1/platform/role-bindings/{binding_id}:
+    delete:
+      tags:
+      - Platform roles
+      summary: 撤销指定的平台角色绑定。
+      operationId: revoke_platform_role
+      parameters:
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Binding Id
+        description: 平台角色绑定的服务端唯一标识。
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 撤销指定的平台角色绑定。
+  /api/v1/platform/support-access:
+    post:
+      tags:
+      - Platform support
+      summary: 提交针对指定租户的限时支持访问申请
+      operationId: request_support_access
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupportAccessCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Request Support Access
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 提交针对指定租户的限时支持访问申请；默认不包含文件内容权限。
+  /api/v1/platform/support-access/{request_id}/approvals:
+    post:
+      tags:
+      - Platform support
+      summary: 由不同的平台人员批准支持访问申请，并物化限时租户授权。
+      operationId: approve_support_access
+      parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Request Id
+        description: 请求的服务端唯一标识，用于问题追踪。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Approve Support Access
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 由不同的平台人员批准支持访问申请，并物化限时租户授权。
+  /api/v1/platform/support-access/{request_id}:
+    delete:
+      tags:
+      - Platform support
+      summary: 撤销已申请或已批准的支持访问，并回收其有效租户会话。
+      operationId: revoke_support_access
+      parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Request Id
+        description: 请求的服务端唯一标识，用于问题追踪。
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 撤销已申请或已批准的支持访问，并回收其有效租户会话。
   /api/v1/groups:
     get:
-      tags: [Groups]
+      tags:
+      - Authorization
+      summary: 列出当前租户的用户组。
       operationId: list_groups
-      x-permission: groups.read
-      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
       responses:
-        '200': {description: Group page, content: {application/json: {schema: {$ref: '#/components/schemas/GroupPage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出当前租户的用户组。
+      x-permission: groups.read
     post:
-      tags: [Groups]
+      tags:
+      - Authorization
+      summary: 创建当前租户的用户组。
       operationId: create_group
-      x-permission: groups.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GroupWrite'}}}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupWrite'
       responses:
-        '201': {description: Group created, content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建当前租户的用户组。
+      x-permission: groups.manage
   /api/v1/groups/{group_id}:
-    parameters: [{$ref: '#/components/parameters/GroupId'}]
     get:
-      tags: [Groups]
+      tags:
+      - Authorization
+      summary: 获取指定用户组详情。
       operationId: get_group
-      x-permission: groups.read
+      parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Group Id
+        description: 用户组的服务端唯一标识。
       responses:
-        '200': {description: Group, content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取指定用户组详情。
+      x-permission: groups.read
     patch:
-      tags: [Groups]
+      tags:
+      - Authorization
+      summary: 更新指定用户组的名称或描述。
       operationId: update_group
-      x-permission: groups.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GroupWrite'}}}}
+      parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Group Id
+        description: 用户组的服务端唯一标识。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GroupWrite'
       responses:
-        '200': {description: Updated group, content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}}
-        '428': {$ref: '#/components/responses/EtagRequired'}
-        '412': {$ref: '#/components/responses/EtagMismatch'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GroupResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 更新指定用户组的名称或描述。
+      x-permission: groups.manage
     delete:
-      tags: [Groups]
+      tags:
+      - Authorization
+      summary: 删除指定用户组
       operationId: delete_group
+      parameters:
+      - name: group_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Group Id
+        description: 用户组的服务端唯一标识。
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 删除指定用户组；存在依赖时会拒绝删除。
       x-permission: groups.manage
-      responses:
-        '204': {description: Group deleted}
-        '409': {$ref: '#/components/responses/Conflict'}
-  /api/v1/groups/{group_id}/members:
-    parameters: [{$ref: '#/components/parameters/GroupId'}]
-    get:
-      tags: [Groups]
-      operationId: list_group_members
-      x-permission: groups.read
-      parameters: [{$ref: '#/components/parameters/Cursor'}]
-      responses:
-        '200': {description: Membership page, content: {application/json: {schema: {$ref: '#/components/schemas/MembershipPage'}}}}
-    post:
-      tags: [Groups]
-      operationId: add_group_member
-      x-permission: groups.manage
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [membership_id], properties: {membership_id: {$ref: '#/components/schemas/Id'}}}}}}
-      responses:
-        '204': {description: Member added}
-        '409': {$ref: '#/components/responses/Conflict'}
-  /api/v1/groups/{group_id}/members/{membership_id}:
-    parameters: [{$ref: '#/components/parameters/GroupId'}, {$ref: '#/components/parameters/MembershipId'}]
-    delete:
-      tags: [Groups]
-      operationId: remove_group_member
-      x-permission: groups.manage
-      responses:
-        '204': {description: Member removed}
-        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/roles:
     get:
-      tags: [Roles]
+      tags:
+      - Authorization
+      summary: 列出当前租户的角色及其权限。
       operationId: list_roles
-      x-permission: roles.read
-      parameters: [{$ref: '#/components/parameters/Cursor'}]
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
       responses:
-        '200': {description: Role page, content: {application/json: {schema: {$ref: '#/components/schemas/RolePage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolePage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出当前租户的角色及其权限。
+      x-permission: roles.read
     post:
-      tags: [Roles]
+      tags:
+      - Authorization
+      summary: 创建当前租户的自定义角色。
       operationId: create_role
-      x-permission: roles.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RoleWrite'}}}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleWrite'
       responses:
-        '201': {description: Role created, content: {application/json: {schema: {$ref: '#/components/schemas/Role'}}}}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建当前租户的自定义角色。
+      x-permission: roles.manage
   /api/v1/roles/{role_id}:
-    parameters: [{$ref: '#/components/parameters/RoleId'}]
     get:
-      tags: [Roles]
+      tags:
+      - Authorization
+      summary: 获取指定角色及其权限详情。
       operationId: get_role
+      parameters:
+      - name: role_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Role Id
+        description: 角色的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取指定角色及其权限详情。
       x-permission: roles.read
-      responses:
-        '200': {description: Role, content: {application/json: {schema: {$ref: '#/components/schemas/Role'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
     patch:
-      tags: [Roles]
+      tags:
+      - Authorization
+      summary: 更新自定义角色
       operationId: update_role
-      x-permission: roles.manage
-      parameters: [{$ref: '#/components/parameters/IfMatch'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RoleWrite'}}}}
+      parameters:
+      - name: role_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Role Id
+        description: 角色的服务端唯一标识。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleWrite'
       responses:
-        '200': {description: Updated role, content: {application/json: {schema: {$ref: '#/components/schemas/Role'}}}}
-        '428': {$ref: '#/components/responses/EtagRequired'}
-        '412': {$ref: '#/components/responses/EtagMismatch'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 更新自定义角色；系统内置角色不可通过此接口修改。
+      x-permission: roles.manage
   /api/v1/role_bindings:
     get:
-      tags: [Authorization]
+      tags:
+      - Authorization
+      summary: 列出当前租户的角色绑定，可按主体筛选。
       operationId: list_role_bindings
-      x-permission: role_bindings.read
-      parameters: [{name: principal_id, in: query, schema: {type: [string, 'null']}}, {$ref: '#/components/parameters/Cursor'}]
+      parameters:
+      - name: principal_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Principal Id
+        description: 租户主体的服务端唯一标识。
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
       responses:
-        '200': {description: Binding page, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBindingPage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindingPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出当前租户的角色绑定，可按主体筛选。
+      x-permission: role_bindings.read
     post:
-      tags: [Authorization]
+      tags:
+      - Authorization
+      summary: 在调用者可委派的权限和资源范围内创建角色绑定。
       operationId: create_role_binding
-      x-permission: role_bindings.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBindingCreate'}}}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleBindingWrite'
       responses:
-        '201': {description: Binding created, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBinding'}}}}
-        '403': {description: Delegation denied, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {denied: {$ref: '#/components/examples/DelegationDenied'}}}}}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindingResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 在调用者可委派的权限和资源范围内创建角色绑定。
+      x-permission: role_bindings.manage
   /api/v1/role_bindings/{role_binding_id}:
-    parameters: [{$ref: '#/components/parameters/RoleBindingId'}]
     get:
-      tags: [Authorization]
+      tags:
+      - Authorization
+      summary: 获取指定角色绑定及其资源范围和有效期。
       operationId: get_role_binding
+      parameters:
+      - name: role_binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Role Binding Id
+        description: 角色绑定的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindingResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取指定角色绑定及其资源范围和有效期。
       x-permission: role_bindings.read
-      responses:
-        '200': {description: Binding, content: {application/json: {schema: {$ref: '#/components/schemas/RoleBinding'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
     delete:
-      tags: [Authorization]
+      tags:
+      - Authorization
+      summary: 撤销指定角色绑定并使相关授权立即失效。
       operationId: revoke_role_binding
+      parameters:
+      - name: role_binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Role Binding Id
+        description: 角色绑定的服务端唯一标识。
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 撤销指定角色绑定并使相关授权立即失效。
       x-permission: role_bindings.manage
-      responses:
-        '204': {description: Binding revoked}
-        '410': {$ref: '#/components/responses/Expired'}
   /api/v1/principals/{principal_id}/effective_permissions:
-    parameters: [{$ref: '#/components/parameters/PrincipalId'}]
     get:
-      tags: [Authorization]
+      tags:
+      - Authorization
+      summary: 解释指定主体在当前租户和资源范围内的有效权限来源。
       operationId: get_effective_permissions
-      x-permission: authorization.explain
-      parameters: [{name: storage_space_id, in: query, schema: {type: [string, 'null']}}, {name: object_key, in: query, schema: {type: [string, 'null']}}]
+      parameters:
+      - name: principal_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Principal Id
+        description: 租户主体的服务端唯一标识。
+      - name: storage_space_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Storage Space Id
+        description: 逻辑存储空间的服务端唯一标识。
+      - name: object_key
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Key
+        description: 逻辑存储空间内的规范相对对象路径。
       responses:
-        '200': {description: Effective permissions and sources, content: {application/json: {schema: {$ref: '#/components/schemas/EffectivePermissions'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectivePermissionsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 解释指定主体在当前租户和资源范围内的有效权限来源。
+      x-permission: authorization.explain
   /api/v1/authorization/simulations:
     post:
-      tags: [Authorization]
+      tags:
+      - Authorization
+      summary: 在不改变授权状态的前提下模拟一次访问决策。
       operationId: simulate_authorization
-      summary: Evaluate once without changing policy or access
-      x-permission: authorization.simulate
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AuthorizationSimulationRequest'}}}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulationRequest'
+        required: true
       responses:
-        '200': {description: Decision, content: {application/json: {schema: {$ref: '#/components/schemas/AuthorizationDecision'}, examples: {deny: {$ref: '#/components/examples/SimulationDenied'}}}}}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthorizationDecisionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 在不改变授权状态的前提下模拟一次访问决策。
+      x-permission: authorization.simulate
   /api/v1/applications:
     get:
-      tags: [Applications]
+      tags:
+      - Applications
+      - API Keys
+      summary: 列出当前租户的应用及其所有者状态。
       operationId: list_applications
-      x-permission: applications.read
-      security: [{session_cookie: []}]
-      description: Human management endpoint. API-Key credentials are rejected with `403 permission_denied`.
       responses:
-        '200': {description: Application page, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationPage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Applications
+      description: 列出当前租户的应用及其所有者状态。
+      x-permission: applications.read
     post:
-      tags: [Applications]
+      tags:
+      - Applications
+      - API Keys
+      summary: 创建应用并绑定当前主体为初始所有者。
       operationId: create_application
-      x-permission: applications.manage
-      security: [{session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationCreate'}}}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationCreate'
+        required: true
       responses:
-        '201': {description: Application created, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Application
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建应用并绑定当前主体为初始所有者。
+      x-permission: applications.manage
   /api/v1/applications/{application_id}:
-    parameters: [{$ref: '#/components/parameters/ApplicationId'}]
     get:
-      tags: [Applications]
+      tags:
+      - Applications
+      - API Keys
+      summary: 获取指定应用的元数据与状态。
       operationId: get_application
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Application
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取指定应用的元数据与状态。
       x-permission: applications.read
-      security: [{session_cookie: []}]
-      responses:
-        '200': {description: Application, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
     patch:
-      tags: [Applications]
+      tags:
+      - Applications
+      - API Keys
+      summary: 更新指定应用的名称或状态。
       operationId: update_application
-      x-permission: applications.manage
-      security: [{session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationUpdate'}}}}
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationUpdate'
       responses:
-        '200': {description: Updated application, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Update Application
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 更新指定应用的名称或状态。
+      x-permission: applications.manage
   /api/v1/applications/{application_id}/takeover:
-    parameters: [{$ref: '#/components/parameters/ApplicationId'}]
     post:
-      tags: [Applications]
+      tags:
+      - Applications
+      - API Keys
+      summary: 接管失去活跃所有者、处于待接管状态的应用。
       operationId: takeover_application
-      summary: Restore a pending application under the caller's ownership
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationTakeover'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Takeover Application
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 接管失去活跃所有者、处于待接管状态的应用。
       x-permission: applications.manage
-      security: [{session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApplicationTakeover'}}}}
-      responses:
-        '200': {description: Application reactivated, content: {application/json: {schema: {$ref: '#/components/schemas/Application'}}}}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
-        '404': {$ref: '#/components/responses/NotFound'}
-        '409': {$ref: '#/components/responses/Conflict'}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
   /api/v1/applications/{application_id}/api_keys:
-    parameters: [{$ref: '#/components/parameters/ApplicationId'}]
     get:
-      tags: [API Keys]
+      tags:
+      - Applications
+      - API Keys
+      summary: 列出指定应用的 API Key 元数据
       operationId: list_api_keys
-      x-permission: api_keys.read
-      security: [{session_cookie: []}]
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Id
+        description: 应用的服务端唯一标识。
       responses:
-        '200': {description: Key metadata page, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyPage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Api Keys
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出指定应用的 API Key 元数据；不会返回密钥明文。
+      x-permission: api_keys.read
     post:
-      tags: [API Keys]
+      tags:
+      - Applications
+      - API Keys
+      summary: 为指定应用签发 API Key
       operationId: create_api_key
-      summary: Issue a key; secret appears only in this response
-      x-permission: api_keys.manage
-      security: [{session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyCreate'}}}}
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreate'
       responses:
-        '201': {description: One-time key credential, content: {application/json: {schema: {$ref: '#/components/schemas/IssuedApiKey'}, examples: {success: {$ref: '#/components/examples/ApiKeyIssued'}}}}}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Api Key
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 为指定应用签发 API Key；密钥明文仅在本次响应中返回。
+      x-permission: api_keys.manage
   /api/v1/api_keys/{api_key_id}:
-    parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     get:
-      tags: [API Keys]
+      tags:
+      - Applications
+      - API Keys
+      summary: 获取 API Key 的非敏感元数据。
       operationId: get_api_key
-      x-permission: api_keys.read
-      security: [{session_cookie: []}]
+      parameters:
+      - name: api_key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Api Key Id
+        description: API Key 的服务端唯一标识。
       responses:
-        '200': {description: Non-secret key metadata, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKey'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Api Key
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取 API Key 的非敏感元数据。
+      x-permission: api_keys.read
   /api/v1/api_keys/{api_key_id}/secret:
-    parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     get:
-      tags: [API Keys]
+      tags:
+      - Applications
+      - API Keys
+      summary: 历史兼容接口，始终拒绝返回 API Key 密钥明文。
       operationId: get_api_key_secret
-      deprecated: true
-      summary: Always rejects because secrets are one-time values
+      parameters:
+      - name: api_key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Api Key Id
+        description: API Key 的服务端唯一标识。
+      responses:
+        '410':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Api Key Secret
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 历史兼容接口，始终拒绝返回 API Key 密钥明文。
       x-permission: api_keys.read
-      security: [{session_cookie: []}]
-      responses:
-        '410': {description: Secret cannot be retrieved, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {expired: {$ref: '#/components/examples/SecretGone'}}}}}
   /api/v1/api_keys/{api_key_id}/rotations:
-    parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     post:
-      tags: [API Keys]
+      tags:
+      - Applications
+      - API Keys
+      summary: 轮换 API Key，并按请求指定的重叠期保留旧 Key。
       operationId: rotate_api_key
-      x-permission: api_keys.manage
-      security: [{session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [overlap_seconds], properties: {overlap_seconds: {type: integer, minimum: 0, maximum: 86400}}}}}}
+      parameters:
+      - name: api_key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Api Key Id
+        description: API Key 的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyRotate'
       responses:
-        '201': {description: Replacement one-time credential, content: {application/json: {schema: {$ref: '#/components/schemas/IssuedApiKey'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Rotate Api Key
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 轮换 API Key，并按请求指定的重叠期保留旧 Key。
+      x-permission: api_keys.manage
   /api/v1/api_keys/{api_key_id}/revocations:
-    parameters: [{$ref: '#/components/parameters/ApiKeyId'}]
     post:
-      tags: [API Keys]
+      tags:
+      - Applications
+      - API Keys
+      summary: 撤销 API Key 并返回剩余的已签发 URL 风险信息。
       operationId: revoke_api_key
-      x-permission: api_keys.manage
-      security: [{session_cookie: []}]
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [reason], properties: {reason: {type: string, minLength: 1, maxLength: 500}}}}}}
+      parameters:
+      - name: api_key_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Api Key Id
+        description: API Key 的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyRevoke'
       responses:
-        '200': {description: Revoked key and residual presigned exposure, content: {application/json: {schema: {$ref: '#/components/schemas/ApiKeyRevocation'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Revoke Api Key
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 撤销 API Key 并返回剩余的已签发 URL 风险信息。
+      x-permission: api_keys.manage
   /api/v1/storage_connections:
     get:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 列出当前租户的对象存储连接摘要，不暴露连接凭据。
       operationId: list_storage_connections
-      x-permission: storage_connections.read
       responses:
-        '200': {description: Redacted connection page, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnectionPage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Storage Connections
+      description: 列出当前租户的对象存储连接摘要，不暴露连接凭据。
+      x-permission: storage_connections.read
     post:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 创建对象存储连接配置
       operationId: create_storage_connection
-      x-permission: storage_connections.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnectionCreate'}}}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageConnectionCreate'
+        required: true
       responses:
-        '201': {description: Connection created, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnection'}}}}
-        '422': {$ref: '#/components/responses/ValidationFailed'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Storage Connection
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建对象存储连接配置；凭据仅用于服务端访问。
+      x-permission: storage_connections.manage
   /api/v1/storage_connections/{connection_id}:
-    parameters: [{$ref: '#/components/parameters/ConnectionId'}]
     get:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 获取对象存储连接的脱敏配置和连通性状态。
       operationId: get_storage_connection
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Connection Id
+        description: 存储连接的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Storage Connection
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取对象存储连接的脱敏配置和连通性状态。
       x-permission: storage_connections.read
-      responses:
-        '200': {description: Redacted connection, content: {application/json: {schema: {$ref: '#/components/schemas/StorageConnection'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/storage_connections/{connection_id}/probes:
-    parameters: [{$ref: '#/components/parameters/ConnectionId'}]
     post:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 探测对象存储连接与其声明能力。
       operationId: probe_storage_connection
-      x-permission: storage_connections.manage
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, properties: {write_test_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}}}}}}
+      parameters:
+      - name: connection_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Connection Id
+        description: 存储连接的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProbeRequest'
       responses:
-        '200': {description: Capability probe result, content: {application/json: {schema: {$ref: '#/components/schemas/StorageProbe'}}}}
-        '503': {$ref: '#/components/responses/StorageUnavailable'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Probe Storage Connection
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 探测对象存储连接与其声明能力。
+      x-permission: storage_connections.manage
   /api/v1/storage_spaces:
     get:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 列出当前租户的逻辑存储空间。
       operationId: list_storage_spaces
-      x-permission: storage_spaces.read
       responses:
-        '200': {description: Space page, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpacePage'}}}}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageSpacePage'
+      description: 列出当前租户的逻辑存储空间。
+      x-permission: storage_spaces.read
     post:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 创建逻辑存储空间并映射到受控的对象存储根路径。
       operationId: create_storage_space
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageSpaceCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Storage Space
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建逻辑存储空间并映射到受控的对象存储根路径。
       x-permission: storage_spaces.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpaceCreate'}}}}
-      responses:
-        '201': {description: Space created, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpace'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/storage_spaces/{space_id}:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}]
     get:
-      tags: [Storage]
+      tags:
+      - Storage
+      summary: 获取逻辑存储空间详情。
       operationId: get_storage_space
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Storage Space
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取逻辑存储空间详情。
       x-permission: storage_spaces.read
-      responses:
-        '200': {description: Storage space, content: {application/json: {schema: {$ref: '#/components/schemas/StorageSpace'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/storage_spaces/{space_id}/files:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}]
     get:
-      tags: [Files]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 在授权的逻辑存储空间和目录范围内列出文件对象。
       operationId: list_files
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prefix
+        description: “prefix”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Files
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 在授权的逻辑存储空间和目录范围内列出文件对象。
       x-permission: files.list
-      parameters: [{name: prefix, in: query, schema: {type: [string, 'null']}}]
-      responses:
-        '200': {description: Authorized visible objects, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/FileObjectRuntime'}}}}}
-        '400': {$ref: '#/components/responses/InvalidCursor'}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
   /api/v1/storage_spaces/{space_id}/files/{file_id}:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}, {$ref: '#/components/parameters/FileId'}]
     get:
-      tags: [Files]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 获取指定文件对象的元数据
       operationId: get_file
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get File
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取指定文件对象的元数据；不直接返回对象存储凭据。
       x-permission: files.read
-      responses:
-        '200': {description: Verified object metadata, content: {application/json: {schema: {$ref: '#/components/schemas/FileObjectRuntime'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
     delete:
-      tags: [Files]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 提交文件删除
       operationId: delete_file
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Delete File
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 提交文件删除；接口按声明的幂等与并发前置条件执行。
       x-permission: files.delete
-      parameters: [{$ref: '#/components/parameters/IfMatch'}, {$ref: '#/components/parameters/IdempotencyKey'}]
-      responses:
-        '202': {description: Durable deletion intent accepted; reconciliation performs the provider delete, content: {application/json: {schema: {$ref: '#/components/schemas/DeleteQueued'}}}}
-        '412': {$ref: '#/components/responses/EtagMismatch'}
   /api/v1/storage_spaces/{space_id}/file_operations:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
-      tags: [Files]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 创建文件复制、移动或其他受控异步操作。
       operationId: create_file_operation
-      summary: Copy, move, or fixed-scope bulk-delete objects
-      description: Returns durable work. Poll the operation endpoint until a terminal status is reached.
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileOperationCreate'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create File Operation
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建文件复制、移动或其他受控异步操作。
       x-permission: files.copy
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationCreateRuntime'}}}}
-      responses:
-        '202': {description: Operation accepted, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationRuntime'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/file_operations/{operation_id}:
-    parameters: [{$ref: '#/components/parameters/OperationId'}]
     get:
-      tags: [Files]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 查询文件操作的状态、结果和可恢复错误。
       operationId: get_file_operation
-      summary: Read durable worker and reconciliation outcome
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Operation Id
+        description: 异步文件操作的服务端唯一标识。
       responses:
-        '200': {description: Operation state, content: {application/json: {schema: {$ref: '#/components/schemas/FileOperationRuntime'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get File Operation
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 查询文件操作的状态、结果和可恢复错误。
   /api/v1/storage_spaces/{space_id}/uploads:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
-      tags: [Uploads]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 创建受配额保护的上传会话。
       operationId: create_upload
-      summary: Reserve quota and choose proxy or direct PUT according to capabilities
-      x-permission: files.write
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadCreateRuntime'}}}}
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadCreate'
       responses:
-        '201': {description: Durable upload session and ingestion intent, content: {application/json: {schema: {$ref: '#/components/schemas/UploadSessionRuntime'}}}}
-        '409': {$ref: '#/components/responses/QuotaExceeded'}
-        '422': {$ref: '#/components/responses/InvalidObjectKey'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Upload
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建受配额保护的上传会话。
+      x-permission: files.write
   /api/v1/uploads/{upload_id}:
-    parameters: [{$ref: '#/components/parameters/UploadId'}]
     get:
-      tags: [Uploads]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 查询上传会话的状态和已验证对象信息。
       operationId: get_upload
+      parameters:
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Upload Id
+        description: 上传会话的服务端唯一标识。
       responses:
-        '200': {description: Upload state without a signed URL, content: {application/json: {schema: {$ref: '#/components/schemas/UploadSessionRuntime'}}}}
-        '410': {$ref: '#/components/responses/Expired'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Upload
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 查询上传会话的状态和已验证对象信息。
   /api/v1/uploads/{upload_id}/content:
-    parameters: [{$ref: '#/components/parameters/UploadId'}]
     put:
-      tags: [Uploads]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 通过服务端代理向指定上传会话写入内容。
       operationId: proxy_upload_content
-      summary: Stream exact content through the service for proxy-mode uploads
-      x-permission: files.write
-      parameters: [{name: Content-Length, in: header, required: true, schema: {type: integer, minimum: 0}}, {name: Content-Type, in: header, required: true, schema: {type: string}}]
-      requestBody: {required: true, content: {application/octet-stream: {schema: {type: string, contentEncoding: binary}}}}
+      parameters:
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Upload Id
+        description: 上传会话的服务端唯一标识。
+      - name: Content-Length
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: Content-Length
+        description: “Content-Length”字段；具体取值和约束见当前资源说明。
+      - name: Content-Type
+        in: header
+        required: true
+        schema:
+          type: string
+          title: Content-Type
+        description: “Content-Type”字段；具体取值和约束见当前资源说明。
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              contentMediaType: application/octet-stream
+              title: Body
       responses:
-        '204': {description: Content stored and verified}
-        '409': {$ref: '#/components/responses/UploadVerificationFailed'}
-        '410': {$ref: '#/components/responses/Expired'}
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 通过服务端代理向指定上传会话写入内容。
+      x-permission: files.write
   /api/v1/uploads/{upload_id}/completion:
-    parameters: [{$ref: '#/components/parameters/UploadId'}]
     post:
-      tags: [Uploads]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 验证已上传对象的元数据并将上传会话提交为可用文件。
       operationId: complete_upload
-      summary: Verify exact stored metadata before making the object available
+      parameters:
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Upload Id
+        description: 上传会话的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadComplete'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Complete Upload
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 验证已上传对象的元数据并将上传会话提交为可用文件。
       x-permission: files.write
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UploadCompleteRuntime'}}}}
-      responses:
-        '200': {description: Committed ingestion result, content: {application/json: {schema: {$ref: '#/components/schemas/IngestionCommitResult'}}}}
-        '409': {$ref: '#/components/responses/UploadVerificationFailed'}
-        '410': {$ref: '#/components/responses/Expired'}
   /api/v1/storage_spaces/{space_id}/presigned_downloads:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
-      tags: [Uploads]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 为已授权的单个文件签发短期下载 URL。
       operationId: create_presigned_download
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignedDownloadCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Presigned Download
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 为已授权的单个文件签发短期下载 URL。
       x-permission: presigned_urls.issue
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresignedDownloadCreate'}}}}
-      responses:
-        '201': {description: One-time response containing an exact GET request for a controlled file reference, content: {application/json: {schema: {$ref: '#/components/schemas/PresignedDownloadRuntime'}}}}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
-        '422': {$ref: '#/components/responses/UnsupportedCapability'}
   /api/v1/storage_spaces/{space_id}/multipart_uploads:
-    parameters: [{$ref: '#/components/parameters/SpaceId'}]
     post:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 创建受配额和授权保护的分段上传会话。
       operationId: create_multipart_upload
-      x-permission: multipart.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartCreateRuntime'}}}}
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartCreate'
       responses:
-        '201': {description: Bound multipart session and ingestion intent, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartUploadRuntime'}}}}
-        '409': {$ref: '#/components/responses/QuotaExceeded'}
-        '422': {$ref: '#/components/responses/UnsupportedCapability'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Multipart Upload
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 创建受配额和授权保护的分段上传会话。
+      x-permission: multipart.manage
   /api/v1/multipart_uploads/{multipart_id}:
-    parameters: [{$ref: '#/components/parameters/MultipartId'}]
     get:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 查询分段上传会话状态。
       operationId: get_multipart_upload
+      parameters:
+      - name: multipart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Multipart Id
+        description: 分段上传会话的服务端唯一标识。
       responses:
-        '200': {description: Multipart session, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartUploadRuntime'}}}}
-        '410': {$ref: '#/components/responses/Expired'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Multipart Upload
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 查询分段上传会话状态。
     delete:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 中止分段上传并释放相关保留资源。
       operationId: abort_multipart_upload
-      x-permission: multipart.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      parameters:
+      - name: multipart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Multipart Id
+        description: 分段上传会话的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
       responses:
-        '204': {description: Multipart upload aborted and reservation released}
-        '410': {$ref: '#/components/responses/Expired'}
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 中止分段上传并释放相关保留资源。
+      x-permission: multipart.manage
   /api/v1/multipart_uploads/{multipart_id}/parts:
-    parameters: [{$ref: '#/components/parameters/MultipartId'}]
     get:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 列出已确认的分段上传分片。
       operationId: list_multipart_parts
+      parameters:
+      - name: multipart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Multipart Id
+        description: 分段上传会话的服务端唯一标识。
       responses:
-        '200': {description: Bound multipart parts, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/MultipartPartRuntime'}}}}}
-        '410': {$ref: '#/components/responses/Expired'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Multipart Parts
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出已确认的分段上传分片。
     post:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 为分段上传创建一个待上传分片。
       operationId: create_multipart_part
-      summary: Issue an exact part PUT request
-      x-permission: multipart.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartCreate'}}}}
+      parameters:
+      - name: multipart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Multipart Id
+        description: 分段上传会话的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartPartCreate'
       responses:
-        '201': {description: Bound multipart part state, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartRuntime'}}}}
-        '410': {$ref: '#/components/responses/Expired'}
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Multipart Part
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 为分段上传创建一个待上传分片。
+      x-permission: multipart.manage
   /api/v1/multipart_uploads/{multipart_id}/parts/{part_number}:
-    parameters: [{$ref: '#/components/parameters/MultipartId'}, {name: part_number, in: path, required: true, schema: {type: integer, minimum: 1, maximum: 10000}}]
     put:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 确认已上传分片的 ETag 和实际内容长度。
       operationId: confirm_multipart_part
-      summary: Record an opaque ETag after validating this bound part
-      x-permission: multipart.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartConfirm'}}}}
+      parameters:
+      - name: multipart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Multipart Id
+        description: 分段上传会话的服务端唯一标识。
+      - name: part_number
+        in: path
+        required: true
+        schema:
+          type: integer
+          maximum: 10000
+          minimum: 1
+          title: Part Number
+        description: 分段上传中从 1 开始的分片序号。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartPartConfirm'
       responses:
-        '200': {description: Confirmed part, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartPartRuntime'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
-        '410': {$ref: '#/components/responses/Expired'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Confirm Multipart Part
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 确认已上传分片的 ETag 和实际内容长度。
+      x-permission: multipart.manage
   /api/v1/multipart_uploads/{multipart_id}/completion:
-    parameters: [{$ref: '#/components/parameters/MultipartId'}]
     post:
-      tags: [Multipart]
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 按已确认分片完成分段上传并验证最终对象。
       operationId: complete_multipart_upload
-      x-permission: multipart.manage
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MultipartComplete'}}}}
+      parameters:
+      - name: multipart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Multipart Id
+        description: 分段上传会话的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartComplete'
       responses:
-        '200': {description: Committed ingestion result, content: {application/json: {schema: {$ref: '#/components/schemas/IngestionCommitResult'}}}}
-        '409': {$ref: '#/components/responses/MultipartInvalid'}
-        '410': {$ref: '#/components/responses/Expired'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Complete Multipart Upload
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 按已确认分片完成分段上传并验证最终对象。
+      x-permission: multipart.manage
   /api/v1/quotas:
     get:
-      tags: [Quotas]
+      tags:
+      - Quotas
+      - Audit
+      summary: 列出当前租户或存储空间的配额与使用量。
       operationId: list_quotas
-      x-permission: quotas.read
-      parameters: [{name: storage_space_id, in: query, schema: {type: [string, 'null']}}]
+      parameters:
+      - name: storage_space_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Storage Space Id
+        description: 逻辑存储空间的服务端唯一标识。
       responses:
-        '200': {description: Quota page, content: {application/json: {schema: {$ref: '#/components/schemas/QuotaPage'}}}}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Quotas
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 列出当前租户或存储空间的配额与使用量。
+      x-permission: quotas.read
   /api/v1/quotas/{quota_id}:
-    parameters: [{$ref: '#/components/parameters/QuotaId'}]
     get:
-      tags: [Quotas]
+      tags:
+      - Quotas
+      - Audit
+      summary: 获取指定配额的限制、已用量和预留量。
       operationId: get_quota
+      parameters:
+      - name: quota_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Quota Id
+        description: 配额记录的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Quota
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取指定配额的限制、已用量和预留量。
       x-permission: quotas.read
-      responses:
-        '200': {description: Quota, content: {application/json: {schema: {$ref: '#/components/schemas/Quota'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
     patch:
-      tags: [Quotas]
+      tags:
+      - Quotas
+      - Audit
+      summary: 更新配额上限
       operationId: update_quota
-      x-permission: quotas.manage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/QuotaUpdate'}}}}
+      parameters:
+      - name: quota_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Quota Id
+        description: 配额记录的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuotaUpdate'
       responses:
-        '200': {description: Updated quota, content: {application/json: {schema: {$ref: '#/components/schemas/Quota'}}}}
-        '409': {$ref: '#/components/responses/Conflict'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Update Quota
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 更新配额上限；需要当前 ETag 以防并发覆盖。
+      x-permission: quotas.manage
   /api/v1/audit_events:
     get:
-      tags: [Audit]
+      tags:
+      - Quotas
+      - Audit
+      summary: 检索当前租户可见的脱敏审计事件。
       operationId: list_audit_events
-      summary: Search immutable tenant audit events
-      x-permission: audit.read
-      parameters: [{name: occurred_from, in: query, schema: {type: [string, 'null']}}, {name: occurred_to, in: query, schema: {type: [string, 'null']}}, {name: action, in: query, schema: {type: [string, 'null']}}, {name: actor_principal_id, in: query, schema: {type: [string, 'null']}}]
+      parameters:
+      - name: occurred_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Occurred From
+        description: “occurred_from”字段；具体取值和约束见当前资源说明。
+      - name: occurred_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Occurred To
+        description: “occurred_to”字段；具体取值和约束见当前资源说明。
+      - name: action
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Action
+        description: “action”字段；具体取值和约束见当前资源说明。
+      - name: actor_principal_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Actor Principal Id
+        description: “actor_principal_id”字段；具体取值和约束见当前资源说明。
       responses:
-        '200': {description: Audit page, content: {application/json: {schema: {$ref: '#/components/schemas/AuditEventPage'}, examples: {empty: {$ref: '#/components/examples/EmptyPage'}}}}}
-        '400': {$ref: '#/components/responses/InvalidCursor'}
-        '403': {$ref: '#/components/responses/PermissionDenied'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response List Audit Events
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 检索当前租户可见的脱敏审计事件。
+      x-permission: audit.read
   /api/v1/audit_events/{audit_event_id}:
-    parameters: [{$ref: '#/components/parameters/AuditEventId'}]
     get:
-      tags: [Audit]
+      tags:
+      - Quotas
+      - Audit
+      summary: 获取单条脱敏审计事件详情。
       operationId: get_audit_event
-      x-permission: audit.read
+      parameters:
+      - name: audit_event_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Audit Event Id
+        description: 审计事件的服务端唯一标识。
       responses:
-        '200': {description: Immutable audit event, content: {application/json: {schema: {$ref: '#/components/schemas/AuditEvent'}}}}
-        '404': {$ref: '#/components/responses/NotFound'}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Get Audit Event
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 获取单条脱敏审计事件详情。
+      x-permission: audit.read
 components:
-  securitySchemes:
-    account_session_cookie: {type: apiKey, in: cookie, name: s3mp_account_session, description: Global account session; it does not authorize tenant APIs.}
-    session_cookie: {type: apiKey, in: cookie, name: s3mp_session, description: Secure HttpOnly browser session; unsafe requests also require CSRF protection.}
-    s3mp_key: {type: apiKey, in: header, name: Authorization, description: 'S3MP-Key <key_id>.<secret>'}
-  parameters:
-    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
-    Cursor: {name: cursor, in: query, schema: {type: string, minLength: 1, maxLength: 4096}, description: Opaque cursor bound to tenant, principal, authorization version and query.}
-    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 8, maxLength: 128}}
-    IfMatch: {name: If-Match, in: header, required: true, schema: {type: string}, description: Current opaque resource etag.}
-    UserId: {name: user_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    MembershipId: {name: membership_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    GroupId: {name: group_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    RoleId: {name: role_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    RoleBindingId: {name: role_binding_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    PrincipalId: {name: principal_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    ApplicationId: {name: application_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    ApiKeyId: {name: api_key_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    ConnectionId: {name: connection_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    SpaceId: {name: space_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    FileId: {name: file_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    OperationId: {name: operation_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    UploadId: {name: upload_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    MultipartId: {name: multipart_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    QuotaId: {name: quota_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-    AuditEventId: {name: audit_event_id, in: path, required: true, schema: {$ref: '#/components/schemas/Id'}}
-  responses:
-    AuthenticationRequired: {description: Authentication required, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    MembershipInactive: {description: Membership inactive, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    PermissionDenied: {description: Permission denied, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {denied: {$ref: '#/components/examples/PermissionDenied'}}}}}
-    NotFound: {description: Not found or concealed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    InvalidCursor: {description: Cursor invalid or stale, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    Conflict: {description: State conflict, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {conflict: {$ref: '#/components/examples/Conflict'}}}}}
-    ValidationFailed: {description: Validation failed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    EtagMismatch: {description: Resource changed, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    EtagRequired: {description: If-Match is required, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    Expired: {description: Resource expired, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}, examples: {expired: {$ref: '#/components/examples/Expired'}}}}}
-    QuotaExceeded: {description: Quota cannot be reserved, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    InvalidObjectKey: {description: Unsafe or ambiguous object key, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    UploadVerificationFailed: {description: Actual object does not match declaration, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    MultipartInvalid: {description: Multipart parts invalid, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    UnsupportedCapability: {description: Required connection capability unsupported, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-    StorageUnavailable: {description: Storage unavailable, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   schemas:
-    Id: {type: string}
-    Timestamp: {type: string, format: date-time, pattern: 'Z$'}
-    ObjectKey: {type: string, minLength: 1, maxLength: 1024, description: Canonical relative object key; no leading slash, dot segments, backslash, controls or ambiguous encoding.}
-    CanonicalPrefix: {type: string, maxLength: 1024, description: Canonical relative prefix; empty string denotes the complete storage space.}
-    Error:
-      type: object
-      additionalProperties: false
-      required: [code, message, request_id]
+    AddGroupMemberBody:
       properties:
-        code: {type: string, pattern: '^[a-z][a-z0-9_]*$'}
-        message: {type: string}
-        request_id: {$ref: '#/components/schemas/Id'}
-        details: {type: object, additionalProperties: true}
-    AccountLoginRequest: {type: object, additionalProperties: false, required: [email, password], properties: {email: {type: string, minLength: 3, maxLength: 320}, password: {type: string, minLength: 1, maxLength: 1024, writeOnly: true}}}
-    TenantSessionRequest: {type: object, additionalProperties: false, required: [tenant_id], properties: {tenant_id: {$ref: '#/components/schemas/Id'}}}
-    Account: {type: object, additionalProperties: false, required: [id, email, display_name], properties: {id: {$ref: '#/components/schemas/Id'}, email: {type: string, format: email}, display_name: {type: string}}}
-    AccountTenantSummary: {type: object, additionalProperties: false, required: [id, name, slug], properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, slug: {type: string}}}
-    AccountContext: {type: object, additionalProperties: false, required: [account, tenants], properties: {account: {$ref: '#/components/schemas/Account'}, tenants: {type: array, items: {$ref: '#/components/schemas/AccountTenantSummary'}}, platform_permissions: {type: array, uniqueItems: true, items: {type: string}}}}
-    PlatformTenant: {type: object, additionalProperties: false, required: [id, slug, name, status], properties: {id: {$ref: '#/components/schemas/Id'}, slug: {type: string}, name: {type: string}, status: {type: string, enum: [active, suspended]}}}
-    PlatformTenantPage: {type: object, additionalProperties: false, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/PlatformTenant'}}}}
-    PlatformTenantCreate: {type: object, additionalProperties: false, required: [slug, name, initial_admin_user_id], properties: {slug: {type: string, minLength: 1, maxLength: 100}, name: {type: string, minLength: 1, maxLength: 200}, initial_admin_user_id: {$ref: '#/components/schemas/Id'}}}
-    PlatformTenantUpdate: {type: object, additionalProperties: false, properties: {name: {type: [string, 'null']}, status: {type: [string, 'null'], enum: [active, suspended, null]}}}
-    PlatformRoleGrant: {type: object, additionalProperties: false, required: [user_id, role_name], properties: {user_id: {$ref: '#/components/schemas/Id'}, role_name: {type: string}, expires_at: {type: [string, 'null'], format: date-time}}}
-    SupportAccessCreate: {type: object, additionalProperties: false, required: [tenant_id, reason, expires_at], properties: {tenant_id: {$ref: '#/components/schemas/Id'}, reason: {type: string, minLength: 1, maxLength: 500}, expires_at: {type: string, format: date-time}}}
-    PageBase:
-      type: object
+        membership_id:
+          type: string
+          format: uuid
+          title: Membership Id
+          description: 租户成员关系的服务端唯一标识。
       additionalProperties: false
-      required: [items, next_cursor]
-      properties: {next_cursor: {type: [string, 'null']}}
-    TenantSummary:
       type: object
-      additionalProperties: false
-      required: [id, name, membership_status]
-      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, membership_status: {$ref: '#/components/schemas/MembershipStatus'}}
-    PrincipalSummary:
-      type: object
-      additionalProperties: false
-      required: [id, type, display_name]
-      properties: {id: {$ref: '#/components/schemas/Id'}, type: {type: string, enum: [user, group, application]}, display_name: {type: string}}
-    Me:
-      type: object
-      additionalProperties: false
-      required: [principal, current_tenant, available_tenants, coarse_permissions, authorization_version]
+      required:
+      - membership_id
+      title: AddGroupMemberBody
+    ApiKeyCreate:
       properties:
-        principal: {$ref: '#/components/schemas/PrincipalSummary'}
-        current_tenant: {$ref: '#/components/schemas/TenantSummary'}
-        available_tenants: {type: array, items: {$ref: '#/components/schemas/TenantSummary'}}
-        coarse_permissions: {type: array, uniqueItems: true, items: {type: string}}
-        authorization_version: {type: integer, minimum: 1}
-    User:
-      type: object
+        scopes:
+          items:
+            type: string
+          type: array
+          title: Scopes
+          description: API Key 被允许使用的权限范围集合。
+        ttl_days:
+          type: integer
+          maximum: 365.0
+          minimum: 1.0
+          title: Ttl Days
+          default: 90
+          description: 资源或授权的有效天数。
       additionalProperties: false
-      required: [id, email, display_name, status, created_at]
-      properties: {id: {$ref: '#/components/schemas/Id'}, email: {type: string, format: email}, display_name: {type: string}, status: {type: string, enum: [active, disabled]}, created_at: {$ref: '#/components/schemas/Timestamp'}}
-    UserPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/User'}}}}]}
-    MembershipStatus: {type: string, enum: [invited, active, suspended, removed]}
-    Membership:
       type: object
+      title: ApiKeyCreate
+    ApiKeyRevoke:
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Reason
+          description: 执行该敏感操作的业务原因。
       additionalProperties: false
-      required: [id, user, principal, status, authorization_version, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, user: {$ref: '#/components/schemas/User'}, principal: {$ref: '#/components/schemas/PrincipalSummary'}, status: {$ref: '#/components/schemas/MembershipStatus'}, authorization_version: {type: integer, minimum: 1}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    MembershipCreate:
       type: object
+      required:
+      - reason
+      title: ApiKeyRevoke
+    ApiKeyRotate:
+      properties:
+        overlap_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 0.0
+          title: Overlap Seconds
+          default: 300
+          description: 轮换 API Key 时旧 Key 仍可使用的重叠时长，单位为秒。
       additionalProperties: false
-      required: [email]
-      properties: {email: {type: string, minLength: 3, maxLength: 320}, display_name: {type: [string, 'null'], maxLength: 200}}
-    MembershipUpdate:
       type: object
+      title: ApiKeyRotate
+    ApplicationCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
       additionalProperties: false
-      required: [status, reason]
-      properties: {status: {type: string}, reason: {type: string, minLength: 1, maxLength: 500}}
-    MembershipPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Membership'}}}}]}
-    Group:
       type: object
+      required:
+      - name
+      title: ApplicationCreate
+    ApplicationTakeover:
+      properties:
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Reason
+          description: 执行该敏感操作的业务原因。
       additionalProperties: false
-      required: [id, principal, name, description, member_count, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, principal: {$ref: '#/components/schemas/PrincipalSummary'}, name: {type: string}, description: {type: string}, member_count: {type: integer, minimum: 0}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    GroupWrite: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}, description: {type: [string, 'null'], maxLength: 1000}}}
-    GroupPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Group'}}}}]}
-    Role:
       type: object
+      required:
+      - reason
+      title: ApplicationTakeover
+    ApplicationUpdate:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
       additionalProperties: false
-      required: [id, name, description, permissions, system, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, description: {type: string}, permissions: {type: array, uniqueItems: true, items: {type: string}}, system: {type: boolean}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    RoleWrite: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}, description: {type: [string, 'null'], maxLength: 1000}, permissions: {type: array, items: {type: string}}}}
-    RolePage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Role'}}}}]}
-    ResourceScope:
       type: object
+      title: ApplicationUpdate
+    AuthorizationDecisionResponse:
+      properties:
+        permission:
+          type: string
+          title: Permission
+          description: 需要判定、授予或模拟的单个权限名称。
+        decision:
+          type: string
+          enum:
+          - allow
+          - deny
+          title: Decision
+          description: 本次授权模拟得出的允许或拒绝决定。
+        reason_code:
+          type: string
+          title: Reason Code
+          description: 可供程序处理的稳定原因代码。
+        authorization_version:
+          type: integer
+          title: Authorization Version
+          description: 授权状态版本；变化后旧会话和缓存会被重新验证。
+        evaluated_at:
+          type: string
+          format: date-time
+          title: Evaluated At
+          description: 本次权限或状态计算完成的时间，采用 UTC RFC 3339 格式。
+        sources:
+          items:
+            $ref: '#/components/schemas/DecisionSource'
+          type: array
+          title: Sources
+          description: 用于得出当前权限或结果的来源列表。
       additionalProperties: false
-      required: [type]
-      properties: {type: {type: string, enum: [tenant, storage_space, directory]}, storage_space_id: {type: [string, 'null']}, canonical_prefix: {type: [string, 'null']}}
-    RoleBinding:
       type: object
-      additionalProperties: false
-      required: [id, principal, role_id, effect, scope, reason, starts_at, expires_at, created_by, created_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, principal: {$ref: '#/components/schemas/PrincipalSummary'}, role_id: {$ref: '#/components/schemas/Id'}, effect: {type: string, enum: [allow, deny]}, scope: {$ref: '#/components/schemas/ResourceScope'}, reason: {type: string}, starts_at: {$ref: '#/components/schemas/Timestamp'}, expires_at: {$ref: '#/components/schemas/Timestamp'}, created_by: {$ref: '#/components/schemas/Id'}, created_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    RoleBindingCreate:
-      type: object
-      additionalProperties: false
-      required: [principal_id, role_id, effect, scope, reason, expires_at]
-      properties: {principal_id: {$ref: '#/components/schemas/Id'}, role_id: {$ref: '#/components/schemas/Id'}, effect: {type: string, enum: [allow, deny]}, scope: {$ref: '#/components/schemas/ResourceScope'}, reason: {type: string, minLength: 1, maxLength: 500}, starts_at: {$ref: '#/components/schemas/Timestamp'}, expires_at: {$ref: '#/components/schemas/Timestamp'}}
-    RoleBindingPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/RoleBinding'}}}}]}
+      required:
+      - permission
+      - decision
+      - reason_code
+      - authorization_version
+      - evaluated_at
+      - sources
+      title: AuthorizationDecisionResponse
     DecisionSource:
-      type: object
+      properties:
+        source_type:
+          type: string
+          enum:
+          - role_binding
+          - group
+          - key_scope
+          - directory_policy
+          - tenant_policy
+          - operation_allowlist
+          - default
+          title: Source Type
+          description: 授权、审计或操作来源的分类。
+        source_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Id
+          description: 源资源的服务端唯一标识。
+        effect:
+          type: string
+          enum:
+          - allow
+          - deny
+          title: Effect
+          description: 角色绑定对权限产生的允许或拒绝效果。
+        reason_code:
+          type: string
+          title: Reason Code
+          description: 可供程序处理的稳定原因代码。
       additionalProperties: false
-      required: [source_type, source_id, effect, reason_code]
-      properties: {source_type: {type: string, enum: [role_binding, group, key_scope, directory_policy, tenant_policy, operation_allowlist, default]}, source_id: {type: [string, 'null']}, effect: {type: string, enum: [allow, deny]}, reason_code: {type: string}}
+      type: object
+      required:
+      - source_type
+      - source_id
+      - effect
+      - reason_code
+      title: DecisionSource
     EffectivePermission:
-      type: object
+      properties:
+        permission:
+          type: string
+          title: Permission
+          description: 需要判定、授予或模拟的单个权限名称。
+        decision:
+          type: string
+          enum:
+          - allow
+          - deny
+          title: Decision
+          description: 本次授权模拟得出的允许或拒绝决定。
+        reason_code:
+          type: string
+          title: Reason Code
+          description: 可供程序处理的稳定原因代码。
+        sources:
+          items:
+            $ref: '#/components/schemas/DecisionSource'
+          type: array
+          title: Sources
+          description: 用于得出当前权限或结果的来源列表。
       additionalProperties: false
-      required: [permission, decision, reason_code, sources]
-      properties: {permission: {type: string}, decision: {type: string, enum: [allow, deny]}, reason_code: {type: string}, sources: {type: array, items: {$ref: '#/components/schemas/DecisionSource'}}}
-    EffectivePermissions: {type: object, additionalProperties: false, required: [principal_id, authorization_version, evaluated_at, permissions], properties: {principal_id: {$ref: '#/components/schemas/Id'}, authorization_version: {type: integer}, evaluated_at: {$ref: '#/components/schemas/Timestamp'}, permissions: {type: array, items: {$ref: '#/components/schemas/EffectivePermission'}}}}
-    AuthorizationSimulationRequest: {type: object, additionalProperties: false, required: [principal_id, permission], properties: {principal_id: {type: string}, permission: {type: string}, storage_space_id: {type: [string, 'null']}, object_key: {type: [string, 'null']}}}
-    AuthorizationDecision: {type: object, additionalProperties: false, required: [permission, decision, reason_code, authorization_version, evaluated_at, sources], properties: {permission: {type: string}, decision: {type: string, enum: [allow, deny]}, reason_code: {type: string}, authorization_version: {type: integer}, evaluated_at: {$ref: '#/components/schemas/Timestamp'}, sources: {type: array, items: {$ref: '#/components/schemas/DecisionSource'}}}}
-    OwnerRef: {type: object, additionalProperties: false, required: [principal_id, principal_type], properties: {principal_id: {$ref: '#/components/schemas/Id'}, principal_type: {type: string, enum: [user, group]}}}
-    Application:
       type: object
+      required:
+      - permission
+      - decision
+      - reason_code
+      - sources
+      title: EffectivePermission
+    EffectivePermissionsResponse:
+      properties:
+        principal_id:
+          type: string
+          title: Principal Id
+          description: 租户主体的服务端唯一标识。
+        authorization_version:
+          type: integer
+          title: Authorization Version
+          description: 授权状态版本；变化后旧会话和缓存会被重新验证。
+        evaluated_at:
+          type: string
+          format: date-time
+          title: Evaluated At
+          description: 本次权限或状态计算完成的时间，采用 UTC RFC 3339 格式。
+        permissions:
+          items:
+            $ref: '#/components/schemas/EffectivePermission'
+          type: array
+          title: Permissions
+          description: 角色或主体拥有的权限名称集合。
       additionalProperties: false
-      required: [id, name, status, owners, takeover_required, created_at, updated_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, status: {type: string, enum: [active, disabled, pending_takeover]}, owners: {type: array, minItems: 1, items: {$ref: '#/components/schemas/OwnerRef'}}, takeover_required: {type: boolean}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}
-    ApplicationCreate: {type: object, additionalProperties: false, required: [name], properties: {name: {type: string, minLength: 1, maxLength: 200}}}
-    ApplicationUpdate: {type: object, additionalProperties: false, properties: {name: {type: [string, 'null'], maxLength: 200}}}
-    ApplicationTakeover: {type: object, additionalProperties: false, required: [reason], properties: {reason: {type: string, minLength: 1, maxLength: 500}}}
-    ApplicationPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Application'}}}}]}
-    ApiKey:
       type: object
+      required:
+      - principal_id
+      - authorization_version
+      - evaluated_at
+      - permissions
+      title: EffectivePermissionsResponse
+    FileOperationCreate:
+      properties:
+        operation_type:
+          type: string
+          maxLength: 32
+          minLength: 1
+          title: Operation Type
+          description: 异步文件操作的类型，例如复制或移动。
+        source_key:
+          anyOf:
+          - type: string
+            maxLength: 1024
+          - type: 'null'
+          title: Source Key
+          description: 文件复制或移动操作的源规范相对对象路径。
+        destination_key:
+          anyOf:
+          - type: string
+            maxLength: 1024
+          - type: 'null'
+          title: Destination Key
+          description: 文件复制或移动操作的目标规范相对对象路径。
+        keys:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Keys
+          description: 本次操作涉及的 API Key 或对象键摘要列表。
       additionalProperties: false
-      required: [id, application_id, name, prefix, scopes, status, created_at, expires_at, last_used_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, application_id: {$ref: '#/components/schemas/Id'}, name: {type: string}, prefix: {type: string}, scopes: {type: array, uniqueItems: true, items: {type: string}}, status: {type: string, enum: [active, disabled, revoked, expired, rotating]}, created_at: {$ref: '#/components/schemas/Timestamp'}, expires_at: {$ref: '#/components/schemas/Timestamp'}, last_used_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: "null"}]}, etag: {type: string}}
-    ApiKeyCreate: {type: object, additionalProperties: false, properties: {scopes: {type: array, items: {type: string}}, ttl_days: {type: integer, minimum: 1, maximum: 365, default: 90}}}
-    IssuedApiKey: {type: object, additionalProperties: false, required: [api_key, credential], properties: {api_key: {$ref: '#/components/schemas/ApiKey'}, credential: {type: string, writeOnly: true, description: One-time `key_id.secret`; never retrievable again.}}}
-    ApiKeyPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/ApiKey'}}}}]}
-    ApiKeyRevocation: {type: object, additionalProperties: false, required: [api_key, revoked_at, presigned_exposure_until], properties: {api_key: {$ref: '#/components/schemas/ApiKey'}, revoked_at: {$ref: '#/components/schemas/Timestamp'}, presigned_exposure_until: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: "null"}]}}}
-    StorageCapabilities: {type: object, additionalProperties: false, required: [list, head, proxy_upload, presigned_get, presigned_put, multipart, copy, delete], properties: {list: {type: boolean}, head: {type: boolean}, proxy_upload: {type: boolean}, presigned_get: {type: boolean}, presigned_put: {type: boolean}, multipart: {type: boolean}, copy: {type: boolean}, delete: {type: boolean}, max_presign_ttl_seconds: {type: integer, minimum: 1}}}
-    StorageConnection:
       type: object
+      required:
+      - operation_type
+      title: FileOperationCreate
+    GroupPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/GroupResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
       additionalProperties: false
-      required: [id, name, endpoint, region, signature_version, path_style, credential_reference, status, capabilities, last_probed_at, etag]
-      properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, endpoint: {type: string, format: uri}, region: {type: string}, signature_version: {type: string, const: sigv4}, path_style: {type: boolean}, credential_reference: {type: string, description: Redacted external secret reference, pattern: '^secret://'}, status: {type: string, enum: [pending, available, unavailable]}, capabilities: {$ref: '#/components/schemas/StorageCapabilities'}, last_probed_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: "null"}]}, etag: {type: string}}
-    StorageConnectionCreate: {type: object, additionalProperties: false, required: [name, endpoint, region, credential_reference], properties: {name: {type: string, minLength: 1, maxLength: 200}, endpoint: {type: string, minLength: 1, maxLength: 500}, region: {type: string, minLength: 1, maxLength: 100}, path_style: {type: boolean, default: true}, credential_reference: {type: string, minLength: 1, maxLength: 500}}}
-    StorageConnectionPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/StorageConnection'}}}}]}
-    StorageProbe: {type: object, additionalProperties: false, required: [connection_id, status, probed_at, capabilities, checks], properties: {connection_id: {$ref: '#/components/schemas/Id'}, status: {type: string, enum: [available, unavailable]}, probed_at: {$ref: '#/components/schemas/Timestamp'}, capabilities: {$ref: '#/components/schemas/StorageCapabilities'}, checks: {type: array, items: {type: object, additionalProperties: false, required: [name, status], properties: {name: {type: string}, status: {type: string, enum: [passed, failed, unsupported]}, reason_code: {type: [string, 'null']}}}}}}
-    StorageSpace: {type: object, additionalProperties: false, required: [id, name, connection_id, bucket, root_prefix, status, created_at, etag], properties: {id: {$ref: '#/components/schemas/Id'}, name: {type: string}, connection_id: {$ref: '#/components/schemas/Id'}, bucket: {type: string}, root_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}, status: {type: string, enum: [active, disabled]}, created_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}}
-    StorageSpaceCreate: {type: object, additionalProperties: false, required: [name, connection_id, bucket], properties: {name: {type: string, minLength: 1, maxLength: 200}, connection_id: {type: string}, bucket: {type: string, minLength: 1, maxLength: 255}, root_prefix: {type: string, maxLength: 1024, default: ''}}}
-    StorageSpacePage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/StorageSpace'}}}}]}
-    FileObject: {type: object, additionalProperties: false, required: [id, storage_space_id, object_key, size_bytes, content_type, etag, status, created_at, updated_at], properties: {id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 0}, content_type: {type: string}, checksum_sha256: {type: [string, 'null']}, etag: {type: string, description: Opaque storage validator; not assumed to be MD5.}, status: {type: string, enum: [pending, available, quarantined, deleting, deleted, partial_failure]}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}}}
-    FilePage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/FileObject'}}}}]}
-    FileOperationCreate: {type: object, additionalProperties: false, required: [type, source_keys], properties: {type: {type: string, enum: [copy, move, bulk_delete]}, source_keys: {type: array, minItems: 1, maxItems: 1000, uniqueItems: true, items: {$ref: '#/components/schemas/ObjectKey'}}, destination_space_id: {$ref: '#/components/schemas/Id'}, destination_prefix: {$ref: '#/components/schemas/CanonicalPrefix'}, confirmation: {type: string, description: Required server-issued confirmation for bulk delete.}}}
-    FileOperationCreateRuntime: {type: object, additionalProperties: false, required: [operation_type], properties: {operation_type: {type: string, enum: [copy, move, delete]}, source_key: {type: [string, 'null'], maxLength: 1024}, destination_key: {type: [string, 'null'], maxLength: 1024}, keys: {type: [array, 'null'], items: {$ref: '#/components/schemas/ObjectKey'}}}}
-    FileOperationItem: {type: object, additionalProperties: false, required: [source_key, status], properties: {source_key: {$ref: '#/components/schemas/ObjectKey'}, destination_key: {oneOf: [{$ref: '#/components/schemas/ObjectKey'}, {type: "null"}]}, status: {type: string, enum: [pending, succeeded, failed, copied_source_delete_failed]}, error: {oneOf: [{$ref: '#/components/schemas/Error'}, {type: "null"}]}}}
-    FileOperation: {type: object, additionalProperties: false, required: [id, type, status, created_at, updated_at, items], properties: {id: {$ref: '#/components/schemas/Id'}, type: {type: string, enum: [copy, move, bulk_delete]}, status: {type: string, enum: [pending, running, succeeded, failed, partial_failure]}, created_at: {$ref: '#/components/schemas/Timestamp'}, updated_at: {$ref: '#/components/schemas/Timestamp'}, items: {type: array, items: {$ref: '#/components/schemas/FileOperationItem'}}}}
-    FileOperationRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, operation_type, status, attempt_count, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, operation_type: {type: string, enum: [copy, move, delete]}, status: {type: string, enum: [pending, running, retry_wait, succeeded, failed, partial_failure, cancelled]}, source_key: {type: [string, 'null']}, destination_key: {type: [string, 'null']}, failure_reason: {type: [string, 'null'], description: Redacted stable reason code.}, attempt_count: {type: integer, minimum: 0}, next_retry_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]}, completed_at: {oneOf: [{$ref: '#/components/schemas/Timestamp'}, {type: 'null'}]}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
-    UploadCreate: {type: object, additionalProperties: false, required: [object_key, size_bytes, content_type, mode], properties: {object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 0}, content_type: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}, mode: {type: string, enum: [auto, proxy, direct]}, overwrite: {type: boolean, default: false}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}}}
-    UploadCreateRuntime: {type: object, additionalProperties: false, required: [object_key, content_length, content_type], properties: {object_key: {type: string, minLength: 1, maxLength: 1024}, content_length: {type: integer, minimum: 0}, content_type: {type: string, minLength: 1, maxLength: 255}, checksum: {type: [string, 'null'], maxLength: 512}, direct_requested: {type: boolean, default: false}}}
-    UploadSessionRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, principal_id, storage_space_id, object_key, content_length, content_type, status, expires_at, ingestion_id], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, principal_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, checksum: {type: [string, 'null']}, status: {type: string, enum: [pending, completed, expired, failed, reconciliation_required]}, expires_at: {$ref: '#/components/schemas/Timestamp'}, ingestion_id: {$ref: '#/components/schemas/Id'}}}
-    PresignedRequest: {type: object, additionalProperties: false, required: [method, url, headers, expires_at], properties: {method: {type: string, enum: [GET, PUT]}, url: {type: string, format: uri, writeOnly: true}, headers: {type: object, additionalProperties: {type: string}}, expires_at: {$ref: '#/components/schemas/Timestamp'}}}
-    UploadSession: {type: object, additionalProperties: false, required: [id, storage_space_id, object_key, declared_size_bytes, content_type, mode, status, quota_reservation_id, expires_at, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, declared_size_bytes: {type: integer}, content_type: {type: string}, mode: {type: string, enum: [proxy, direct]}, status: {type: string, enum: [pending, uploaded, verifying, completed, failed, expired]}, quota_reservation_id: {$ref: '#/components/schemas/Id'}, presigned_request: {oneOf: [{$ref: '#/components/schemas/PresignedRequest'}, {type: "null"}], description: Present only in the direct-mode creation response.}, expires_at: {$ref: '#/components/schemas/Timestamp'}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
-    UploadCompleteRuntime: {type: object, additionalProperties: false, properties: {checksum: {type: [string, 'null'], maxLength: 512}}}
-    UploadComplete: {type: object, additionalProperties: false, properties: {observed_etag: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}}}
-    PresignedDownloadCreate: {type: object, additionalProperties: false, required: [file_id], properties: {file_id: {type: string, minLength: 1, maxLength: 64}, ttl_seconds: {type: integer, minimum: 30, maximum: 3600, default: 900}}}
-    PresignedDownloadRuntime: {type: object, additionalProperties: false, required: [method, url, file_id, expires_in], properties: {method: {type: string, const: GET}, url: {type: string, format: uri, writeOnly: true}, file_id: {$ref: '#/components/schemas/Id'}, expires_in: {type: integer, minimum: 30, maximum: 3600}}}
-    MultipartCreate: {type: object, additionalProperties: false, required: [object_key, size_bytes, content_type], properties: {object_key: {$ref: '#/components/schemas/ObjectKey'}, size_bytes: {type: integer, minimum: 1}, content_type: {type: string}, checksum_sha256: {type: string, pattern: '^[A-Fa-f0-9]{64}$'}, expires_in_seconds: {type: integer, minimum: 300, maximum: 86400, default: 3600}}}
-    MultipartCreateRuntime: {type: object, additionalProperties: false, required: [object_key, content_length, content_type], properties: {object_key: {type: string, minLength: 1, maxLength: 1024}, content_length: {type: integer, minimum: 0}, content_type: {type: string, minLength: 1, maxLength: 255}}}
-    MultipartUploadRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, principal_id, storage_space_id, object_key, content_length, content_type, status, expires_at, ingestion_id], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, principal_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, provider_upload_id: {type: [string, 'null']}, status: {type: string, enum: [pending, completed, aborted, expired, failed, reconciliation_required]}, expires_at: {$ref: '#/components/schemas/Timestamp'}, ingestion_id: {$ref: '#/components/schemas/Id'}}}
-    MultipartUpload: {type: object, additionalProperties: false, required: [id, storage_space_id, object_key, declared_size_bytes, content_type, status, quota_reservation_id, expires_at, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, declared_size_bytes: {type: integer}, content_type: {type: string}, status: {type: string, enum: [pending, completing, completed, aborted, expired, failed]}, quota_reservation_id: {$ref: '#/components/schemas/Id'}, expires_at: {$ref: '#/components/schemas/Timestamp'}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
-    MultipartPartCreate: {type: object, additionalProperties: false, required: [part_number], properties: {part_number: {type: integer, minimum: 1, maximum: 10000}}}
-    MultipartPartConfirm: {type: object, additionalProperties: false, required: [etag, content_length], properties: {etag: {type: string, minLength: 1, maxLength: 512}, content_length: {type: integer, minimum: 0}}}
-    MultipartPart: {type: object, additionalProperties: false, required: [part_number, size_bytes, etag, confirmed_at], properties: {part_number: {type: integer}, size_bytes: {type: integer}, etag: {type: string}, checksum_sha256: {type: [string, 'null']}, confirmed_at: {$ref: '#/components/schemas/Timestamp'}}}
-    MultipartPartRuntime: {type: object, additionalProperties: false, required: [part_number], properties: {id: {$ref: '#/components/schemas/Id'}, part_number: {type: integer, minimum: 1, maximum: 10000}, etag: {type: string}, content_length: {type: integer, minimum: 0}}}
-    MultipartPartPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/MultipartPart'}}}}]}
-    MultipartComplete: {type: object, additionalProperties: false, required: [parts], properties: {parts: {type: array, minItems: 1, items: {type: object, additionalProperties: false, required: [part_number, etag], properties: {part_number: {type: integer, minimum: 1}, etag: {type: string}}}}}}
-    FileObjectRuntime: {type: object, additionalProperties: false, required: [id, tenant_id, storage_space_id, object_key, content_length, content_type, status, created_at], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, object_key: {$ref: '#/components/schemas/ObjectKey'}, content_length: {type: integer, minimum: 0}, content_type: {type: string}, etag: {type: [string, 'null']}, checksum: {type: [string, 'null']}, status: {type: string, enum: [available, deleting]}, created_at: {$ref: '#/components/schemas/Timestamp'}}}
-    IngestionCommitResult: {type: object, additionalProperties: false, required: [id, tenant_id, storage_space_id, status, file_object], properties: {id: {$ref: '#/components/schemas/Id'}, tenant_id: {$ref: '#/components/schemas/Id'}, storage_space_id: {$ref: '#/components/schemas/Id'}, status: {type: string, const: committed}, file_object: {$ref: '#/components/schemas/FileObjectRuntime'}}}
-    DeleteQueued: {type: object, additionalProperties: false, required: [status], properties: {status: {type: string, const: deletion_queued}}}
-    Quota: {type: object, additionalProperties: false, required: [id, scope_type, limit_bytes, used_bytes, reserved_bytes, available_bytes, measured_at, etag], properties: {id: {$ref: '#/components/schemas/Id'}, scope_type: {type: string, enum: [tenant, storage_space]}, storage_space_id: {oneOf: [{$ref: '#/components/schemas/Id'}, {type: "null"}]}, limit_bytes: {type: integer, minimum: 0}, used_bytes: {type: integer, minimum: 0}, reserved_bytes: {type: integer, minimum: 0}, available_bytes: {type: integer}, measured_at: {$ref: '#/components/schemas/Timestamp'}, etag: {type: string}}}
-    QuotaUpdate: {type: object, additionalProperties: false, required: [limit_bytes], properties: {limit_bytes: {type: integer, minimum: 0}}}
-    QuotaPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Quota'}}}}]}
-    AuditActor: {type: object, additionalProperties: false, required: [principal_id, principal_type, credential_id], properties: {principal_id: {$ref: '#/components/schemas/Id'}, principal_type: {type: string, enum: [user, application, system]}, credential_id: {type: [string, 'null']}}}
-    AuditEvent: {type: object, additionalProperties: false, required: [id, occurred_at, actor, action, outcome, request_id, resource_type, resource_id, metadata], properties: {id: {$ref: '#/components/schemas/Id'}, occurred_at: {$ref: '#/components/schemas/Timestamp'}, actor: {$ref: '#/components/schemas/AuditActor'}, action: {type: string}, outcome: {type: string, enum: [success, denied, failed, partial_failure]}, request_id: {$ref: '#/components/schemas/Id'}, resource_type: {type: string}, resource_id: {type: [string, 'null']}, storage_space_id: {type: [string, 'null']}, object_key_fingerprint: {type: [string, 'null'], description: Non-reversible fingerprint; complete presigned URLs are forbidden.}, metadata: {type: object, additionalProperties: true, description: Redacted non-secret metadata.}}}
-    AuditEventPage: {allOf: [{$ref: '#/components/schemas/PageBase'}, {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/AuditEvent'}}}}]}
-  examples:
-    MeSuccess: {$ref: './examples/success.yaml'}
-    ApiKeyIssued: {$ref: './examples/api-key-issued.yaml'}
-    UploadCreated: {$ref: './examples/upload-created.yaml'}
-    EmptyPage: {$ref: './examples/empty-state.yaml'}
-    PermissionDenied: {$ref: './examples/permission-denied.yaml'}
-    DelegationDenied: {$ref: './examples/delegation-denied.yaml'}
-    SimulationDenied: {$ref: './examples/simulation-denied.yaml'}
-    Conflict: {$ref: './examples/conflict.yaml'}
-    SecretGone: {$ref: './examples/secret-gone.yaml'}
-    Expired: {$ref: './examples/expired.yaml'}
-    MovePartialFailure: {$ref: './examples/partial-failure.yaml'}
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: GroupPage
+    GroupResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        principal:
+          $ref: '#/components/schemas/PrincipalSummary'
+          description: 作为授权主体的账户、成员或服务身份摘要。
+        name:
+          type: string
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        description:
+          type: string
+          title: Description
+          description: 资源的可读说明。
+        member_count:
+          type: integer
+          minimum: 0.0
+          title: Member Count
+          description: 资源关联的有效成员数量。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+        etag:
+          type: string
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - principal
+      - name
+      - description
+      - member_count
+      - created_at
+      - updated_at
+      - etag
+      title: GroupResponse
+    GroupWrite:
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Description
+          description: 资源的可读说明。
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      title: GroupWrite
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+          description: 面向调用方的错误或结果补充说明。
+      type: object
+      title: HTTPValidationError
+    LoginRequest:
+      properties:
+        identifier:
+          anyOf:
+          - type: string
+            maxLength: 320
+            minLength: 2
+          - type: 'null'
+          title: Identifier
+          description: 登录标识，可填写邮箱或公司的系统号、员工工号。
+        password:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Password
+          description: 用户登录密码；仅用于本次认证，不会在响应中返回。
+        email:
+          anyOf:
+          - type: string
+            maxLength: 320
+            minLength: 3
+          - type: 'null'
+          title: Email
+          deprecated: true
+          description: 用户登录邮箱地址。
+      additionalProperties: false
+      type: object
+      required:
+      - password
+      title: LoginRequest
+    MeResponse:
+      properties:
+        principal:
+          $ref: '#/components/schemas/PrincipalSummary'
+          description: 作为授权主体的账户、成员或服务身份摘要。
+        current_tenant:
+          $ref: '#/components/schemas/TenantSummary'
+          description: 当前账户已选择的租户摘要；未选择时为 null。
+        available_tenants:
+          items:
+            $ref: '#/components/schemas/TenantSummary'
+          type: array
+          title: Available Tenants
+          description: 当前账户可选择的活跃租户摘要列表。
+        coarse_permissions:
+          items:
+            type: string
+          type: array
+          uniqueItems: true
+          title: Coarse Permissions
+          description: 用于快速判定的粗粒度有效权限名称集合。
+        authorization_version:
+          type: integer
+          minimum: 1.0
+          title: Authorization Version
+          description: 授权状态版本；变化后旧会话和缓存会被重新验证。
+      additionalProperties: false
+      type: object
+      required:
+      - principal
+      - current_tenant
+      - available_tenants
+      - coarse_permissions
+      - authorization_version
+      title: MeResponse
+    MembershipCreate:
+      properties:
+        email:
+          type: string
+          maxLength: 320
+          minLength: 3
+          format: email
+          title: Email
+          description: 用户登录邮箱地址。
+        display_name:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Display Name
+          description: 面向用户展示的名称。
+      additionalProperties: false
+      type: object
+      required:
+      - email
+      title: MembershipCreate
+    MembershipPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/MembershipResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: MembershipPage
+    MembershipResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        user:
+          $ref: '#/components/schemas/UserResponse'
+          description: 全局用户账户的公开身份摘要。
+        principal:
+          $ref: '#/components/schemas/PrincipalSummary'
+          description: 作为授权主体的账户、成员或服务身份摘要。
+        status:
+          type: string
+          enum:
+          - invited
+          - active
+          - suspended
+          - removed
+          title: Status
+          description: 资源当前生命周期状态。
+        authorization_version:
+          type: integer
+          minimum: 1.0
+          title: Authorization Version
+          description: 授权状态版本；变化后旧会话和缓存会被重新验证。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+        etag:
+          type: string
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - user
+      - principal
+      - status
+      - authorization_version
+      - created_at
+      - updated_at
+      - etag
+      title: MembershipResponse
+    MembershipUpdate:
+      properties:
+        status:
+          type: string
+          enum:
+          - invited
+          - active
+          - suspended
+          - removed
+          title: Status
+          description: 资源当前生命周期状态。
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Reason
+          description: 执行该敏感操作的业务原因。
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      - reason
+      title: MembershipUpdate
+    MultipartComplete:
+      properties:
+        parts:
+          items:
+            $ref: '#/components/schemas/MultipartCompletePart'
+          type: array
+          minItems: 1
+          title: Parts
+          description: 已确认或待处理的分段上传分片列表。
+      additionalProperties: false
+      type: object
+      required:
+      - parts
+      title: MultipartComplete
+    MultipartCompletePart:
+      properties:
+        part_number:
+          type: integer
+          maximum: 10000.0
+          minimum: 1.0
+          title: Part Number
+          description: 分段上传中从 1 开始的分片序号。
+        etag:
+          type: string
+          maxLength: 512
+          minLength: 1
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+      additionalProperties: false
+      type: object
+      required:
+      - part_number
+      - etag
+      title: MultipartCompletePart
+    MultipartCreate:
+      properties:
+        object_key:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Object Key
+          description: 逻辑存储空间内的规范相对对象路径。
+        content_length:
+          type: integer
+          minimum: 0.0
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        content_type:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Content Type
+          description: 对象的媒体类型。
+      additionalProperties: false
+      type: object
+      required:
+      - object_key
+      - content_length
+      - content_type
+      title: MultipartCreate
+    MultipartPartConfirm:
+      properties:
+        etag:
+          type: string
+          maxLength: 512
+          minLength: 1
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+        content_length:
+          type: integer
+          minimum: 0.0
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+      additionalProperties: false
+      type: object
+      required:
+      - etag
+      - content_length
+      title: MultipartPartConfirm
+    MultipartPartCreate:
+      properties:
+        part_number:
+          type: integer
+          maximum: 10000.0
+          minimum: 1.0
+          title: Part Number
+          description: 分段上传中从 1 开始的分片序号。
+      additionalProperties: false
+      type: object
+      required:
+      - part_number
+      title: MultipartPartCreate
+    PlatformRoleGrant:
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          title: User Id
+          description: 全局用户账户的服务端唯一标识。
+        role_name:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Role Name
+          description: 角色的显示名称。
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+      additionalProperties: false
+      type: object
+      required:
+      - user_id
+      - role_name
+      title: PlatformRoleGrant
+    PresignedDownloadCreate:
+      properties:
+        file_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: File Id
+          description: 文件对象的服务端唯一标识。
+        ttl_seconds:
+          type: integer
+          maximum: 3600.0
+          minimum: 30.0
+          title: Ttl Seconds
+          default: 900
+          description: 临时 URL 或会话的有效秒数。
+      additionalProperties: false
+      type: object
+      required:
+      - file_id
+      title: PresignedDownloadCreate
+    PrincipalSummary:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        type:
+          type: string
+          enum:
+          - user
+          - group
+          - application
+          title: Type
+          description: 资源、错误或操作的类型标识。
+        display_name:
+          type: string
+          title: Display Name
+          description: 面向用户展示的名称。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - type
+      - display_name
+      title: PrincipalSummary
+    ProbeRequest:
+      properties:
+        write_test_prefix:
+          anyOf:
+          - type: string
+            maxLength: 1024
+          - type: 'null'
+          title: Write Test Prefix
+          description: 连接探测时允许写入和清理测试对象的受控目录前缀。
+      additionalProperties: false
+      type: object
+      title: ProbeRequest
+    QuotaUpdate:
+      properties:
+        limit_bytes:
+          type: integer
+          minimum: 0.0
+          title: Limit Bytes
+          description: 可使用容量的最大字节数。
+      additionalProperties: false
+      type: object
+      required:
+      - limit_bytes
+      title: QuotaUpdate
+    RegisterRequest:
+      properties:
+        email:
+          type: string
+          maxLength: 320
+          minLength: 3
+          format: email
+          title: Email
+          description: 用户登录邮箱地址。
+        employee_number:
+          type: string
+          maxLength: 64
+          minLength: 2
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$
+          title: Employee Number
+          description: 公司的唯一系统号或员工工号，用于账户识别和登录。
+        display_name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Display Name
+          description: 面向用户展示的名称。
+        password:
+          type: string
+          maxLength: 1024
+          minLength: 8
+          title: Password
+          description: 用户登录密码；仅用于本次认证，不会在响应中返回。
+      additionalProperties: false
+      type: object
+      required:
+      - email
+      - employee_number
+      - display_name
+      - password
+      title: RegisterRequest
+    ResourceScope:
+      properties:
+        type:
+          type: string
+          enum:
+          - tenant
+          - storage_space
+          - directory
+          title: Type
+          description: 资源、错误或操作的类型标识。
+        storage_space_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Storage Space Id
+          description: 逻辑存储空间的服务端唯一标识。
+        canonical_prefix:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Canonical Prefix
+          description: 授权或存储空间覆盖的规范相对目录前缀。
+      additionalProperties: false
+      type: object
+      required:
+      - type
+      title: ResourceScope
+    RoleBindingPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RoleBindingResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: RoleBindingPage
+    RoleBindingResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        principal:
+          $ref: '#/components/schemas/PrincipalSummary'
+          description: 作为授权主体的账户、成员或服务身份摘要。
+        role_id:
+          type: string
+          title: Role Id
+          description: 角色的服务端唯一标识。
+        effect:
+          type: string
+          enum:
+          - allow
+          - deny
+          title: Effect
+          description: 角色绑定对权限产生的允许或拒绝效果。
+        scope:
+          $ref: '#/components/schemas/ResourceScope'
+          description: 授权、查询或操作生效的资源范围。
+        reason:
+          type: string
+          title: Reason
+          description: 执行该敏感操作的业务原因。
+        starts_at:
+          type: string
+          format: date-time
+          title: Starts At
+          description: 授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+        created_by:
+          type: string
+          title: Created By
+          description: 创建该资源的主体标识。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+        etag:
+          type: string
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - principal
+      - role_id
+      - effect
+      - scope
+      - reason
+      - starts_at
+      - expires_at
+      - created_by
+      - created_at
+      - etag
+      title: RoleBindingResponse
+    RoleBindingWrite:
+      properties:
+        principal_id:
+          type: string
+          format: uuid
+          title: Principal Id
+          description: 租户主体的服务端唯一标识。
+        role_id:
+          type: string
+          format: uuid
+          title: Role Id
+          description: 角色的服务端唯一标识。
+        effect:
+          type: string
+          enum:
+          - allow
+          - deny
+          title: Effect
+          description: 角色绑定对权限产生的允许或拒绝效果。
+        scope:
+          $ref: '#/components/schemas/ResourceScope'
+          description: 授权、查询或操作生效的资源范围。
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Reason
+          description: 执行该敏感操作的业务原因。
+        starts_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Starts At
+          description: 授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+      additionalProperties: false
+      type: object
+      required:
+      - principal_id
+      - role_id
+      - effect
+      - scope
+      - reason
+      - expires_at
+      title: RoleBindingWrite
+    RolePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/RoleResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: RolePage
+    RoleResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        name:
+          type: string
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        description:
+          type: string
+          title: Description
+          description: 资源的可读说明。
+        permissions:
+          items:
+            type: string
+          type: array
+          uniqueItems: true
+          title: Permissions
+          description: 角色或主体拥有的权限名称集合。
+        system:
+          type: boolean
+          title: System
+          description: 资源是否由系统内置并受额外修改限制。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+        etag:
+          type: string
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - name
+      - description
+      - permissions
+      - system
+      - created_at
+      - updated_at
+      - etag
+      title: RoleResponse
+    RoleWrite:
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        description:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Description
+          description: 资源的可读说明。
+        permissions:
+          items:
+            type: string
+          type: array
+          title: Permissions
+          description: 角色或主体拥有的权限名称集合。
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      title: RoleWrite
+    SimulationRequest:
+      properties:
+        principal_id:
+          type: string
+          format: uuid
+          title: Principal Id
+          description: 租户主体的服务端唯一标识。
+        permission:
+          type: string
+          title: Permission
+          description: 需要判定、授予或模拟的单个权限名称。
+        storage_space_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Storage Space Id
+          description: 逻辑存储空间的服务端唯一标识。
+        object_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Key
+          description: 逻辑存储空间内的规范相对对象路径。
+      additionalProperties: false
+      type: object
+      required:
+      - principal_id
+      - permission
+      title: SimulationRequest
+    StorageConnectionCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        endpoint:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Endpoint
+          description: 对象存储服务的访问端点地址。
+        region:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Region
+          description: 对象存储服务所在的区域标识。
+        path_style:
+          type: boolean
+          title: Path Style
+          default: true
+          description: 是否使用路径风格的对象存储寻址方式。
+        credential_reference:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Credential Reference
+          description: 服务端保存的存储凭据引用；不返回凭据明文。
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      - endpoint
+      - region
+      - credential_reference
+      title: StorageConnectionCreate
+    StorageSpaceCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        connection_id:
+          type: string
+          title: Connection Id
+          description: 存储连接的服务端唯一标识。
+        bucket:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Bucket
+          description: 对象存储服务中承载数据的存储桶名称。
+        root_prefix:
+          type: string
+          maxLength: 1024
+          title: Root Prefix
+          default: ''
+          description: 逻辑存储空间在对象存储中的受控根目录前缀。
+      additionalProperties: false
+      type: object
+      required:
+      - name
+      - connection_id
+      - bucket
+      title: StorageSpaceCreate
+    StorageSpacePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/StorageSpaceResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      type: object
+      required:
+      - items
+      title: StorageSpacePage
+      description: 租户存储空间分页结果。
+    StorageSpaceResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 资源的服务端唯一标识。
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+        connection_id:
+          type: string
+          format: uuid
+          title: Connection Id
+          description: 存储连接的服务端唯一标识。
+        name:
+          type: string
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        bucket:
+          type: string
+          title: Bucket
+          description: 对象存储服务中承载数据的存储桶名称。
+        root_prefix:
+          type: string
+          title: Root Prefix
+          description: 逻辑存储空间在对象存储中的受控根目录前缀。
+        provider_target_version:
+          type: integer
+          title: Provider Target Version
+          description: “provider_target_version”字段；具体取值和约束见当前资源说明。
+        status:
+          type: string
+          title: Status
+          description: 资源当前生命周期状态。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+      type: object
+      required:
+      - id
+      - tenant_id
+      - connection_id
+      - name
+      - bucket
+      - root_prefix
+      - provider_target_version
+      - status
+      - created_at
+      title: StorageSpaceResponse
+      description: 公开的租户存储空间信息，不包含对象存储凭据。
+    SupportAccessCreate:
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Reason
+          description: 执行该敏感操作的业务原因。
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+      additionalProperties: false
+      type: object
+      required:
+      - tenant_id
+      - reason
+      - expires_at
+      title: SupportAccessCreate
+    TenantCreate:
+      properties:
+        slug:
+          type: string
+          maxLength: 100
+          minLength: 1
+          pattern: ^[a-z0-9][a-z0-9-]*$
+          title: Slug
+          description: 租户的稳定、可读标识，仅由小写字母、数字和连字符组成。
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        initial_admin_user_id:
+          type: string
+          format: uuid
+          title: Initial Admin User Id
+          description: 新租户的初始管理员全局用户账户标识。
+      additionalProperties: false
+      type: object
+      required:
+      - slug
+      - name
+      - initial_admin_user_id
+      title: TenantCreate
+    TenantSessionRequest:
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+      additionalProperties: false
+      type: object
+      required:
+      - tenant_id
+      title: TenantSessionRequest
+    TenantSummary:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        name:
+          type: string
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        membership_status:
+          type: string
+          enum:
+          - invited
+          - active
+          - suspended
+          - removed
+          title: Membership Status
+          description: 租户成员关系的当前状态。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - name
+      - membership_status
+      title: TenantSummary
+    TenantUpdate:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 200
+            minLength: 1
+          - type: 'null'
+          title: Name
+          description: 资源名称，在所属租户范围内使用。
+        status:
+          anyOf:
+          - type: string
+            enum:
+            - active
+            - suspended
+          - type: 'null'
+          title: Status
+          description: 资源当前生命周期状态。
+      additionalProperties: false
+      type: object
+      title: TenantUpdate
+    UploadComplete:
+      properties:
+        checksum:
+          anyOf:
+          - type: string
+            maxLength: 512
+          - type: 'null'
+          title: Checksum
+          description: 内容校验和，用于验证上传数据的完整性。
+      additionalProperties: false
+      type: object
+      title: UploadComplete
+    UploadCreate:
+      properties:
+        object_key:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Object Key
+          description: 逻辑存储空间内的规范相对对象路径。
+        content_length:
+          type: integer
+          minimum: 0.0
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        content_type:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Content Type
+          description: 对象的媒体类型。
+        checksum:
+          anyOf:
+          - type: string
+            maxLength: 512
+          - type: 'null'
+          title: Checksum
+          description: 内容校验和，用于验证上传数据的完整性。
+        direct_requested:
+          type: boolean
+          title: Direct Requested
+          default: false
+          description: 是否直接请求对象存储访问，而非通过服务端代理。
+      additionalProperties: false
+      type: object
+      required:
+      - object_key
+      - content_length
+      - content_type
+      title: UploadCreate
+    UserPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/UserResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: UserPage
+    UserResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        email:
+          type: string
+          format: email
+          title: Email
+          description: 用户登录邮箱地址。
+        display_name:
+          type: string
+          title: Display Name
+          description: 面向用户展示的名称。
+        status:
+          type: string
+          enum:
+          - active
+          - disabled
+          title: Status
+          description: 资源当前生命周期状态。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - email
+      - display_name
+      - status
+      - created_at
+      title: UserResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+          description: 请求中发生校验问题的字段位置。
+        msg:
+          type: string
+          title: Message
+          description: 校验或错误信息的简要文本。
+        type:
+          type: string
+          title: Error Type
+          description: 资源、错误或操作的类型标识。
+        input:
+          title: Input
+          description: 用于授权模拟的输入条件。
+        ctx:
+          type: object
+          title: Context
+          description: 认证或授权计算使用的上下文信息。
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

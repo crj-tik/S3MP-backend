@@ -36,7 +36,9 @@ async def _delete_users(store: SqlAlchemyPlatformStore, *user_ids: UUID) -> None
     """Remove only rows created by these tests, including immutable audit rows."""
     async with store.session_factory.begin() as session:
         await session.execute(
-            delete(PlatformAuditEventModel).where(PlatformAuditEventModel.actor_user_id.in_(user_ids))
+            delete(PlatformAuditEventModel).where(
+                PlatformAuditEventModel.actor_user_id.in_(user_ids)
+            )
         )
         await session.execute(delete(UserModel).where(UserModel.id.in_(user_ids)))
 
@@ -52,12 +54,14 @@ async def test_bootstrap_can_create_only_one_platform_administrator(engine: Asyn
     try:
         first_user_id = await store.create_initial_platform_admin(
             email=f"bootstrap-{suffix}@example.test",
+            employee_number=f"BOOT-{suffix[:8]}",
             display_name="Bootstrap test",
             password_hash="test-hash",  # noqa: S106 - no credential is persisted after the test
         )
         with pytest.raises(ValueError, match="already exists"):
             await store.create_initial_platform_admin(
                 email=f"second-{suffix}@example.test",
+                employee_number=f"SECOND-{suffix[:8]}",
                 display_name="Second bootstrap test",
                 password_hash="test-hash",  # noqa: S106 - no credential is persisted after the test
             )
@@ -99,12 +103,18 @@ async def test_tenant_creation_rejects_invalid_initial_admin_without_partial_ten
                 actor_user_id=actor_id,
             )
         async with store.session_factory() as session:
-            assert await session.scalar(
-                select(TenantModel.id).where(TenantModel.slug == f"atomic-{suffix}")
-            ) is None
-            assert await session.scalar(
-                select(MembershipModel.id).where(MembershipModel.user_id == user_id)
-            ) is None
+            assert (
+                await session.scalar(
+                    select(TenantModel.id).where(TenantModel.slug == f"atomic-{suffix}")
+                )
+                is None
+            )
+            assert (
+                await session.scalar(
+                    select(MembershipModel.id).where(MembershipModel.user_id == user_id)
+                )
+                is None
+            )
     finally:
         await _delete_users(store, user_id, actor_id)
 
@@ -176,9 +186,12 @@ async def test_support_access_expiry_revokes_materialized_tenant_access(
             approver_user_id=approver_id, request_id=request_id
         )
         assert approved is not None
-        assert await store.expire_support_access(
-            now=expires_at + timedelta(seconds=1), request_ids=(request_id,)
-        ) == 1
+        assert (
+            await store.expire_support_access(
+                now=expires_at + timedelta(seconds=1), request_ids=(request_id,)
+            )
+            == 1
+        )
         async with store.session_factory() as session:
             request = await session.get(SupportAccessRequestModel, request_id)
             assert request is not None and request.revoked_at is not None

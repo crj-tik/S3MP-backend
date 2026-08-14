@@ -11,7 +11,7 @@ from s3mp.platform.application.baseline import seed_platform_roles
 from s3mp.platform.infrastructure.repository import SqlAlchemyPlatformStore
 
 
-async def bootstrap(email: str, display_name: str) -> None:
+async def bootstrap(email: str, employee_number: str, display_name: str) -> None:
     password = getpass.getpass("Initial platform administrator password: ")
     confirmation = getpass.getpass("Confirm password: ")
     if password != confirmation:
@@ -28,6 +28,7 @@ async def bootstrap(email: str, display_name: str) -> None:
         store = SqlAlchemyPlatformStore(sessions)
         await store.create_initial_platform_admin(
             email=email,
+            employee_number=employee_number,
             display_name=display_name,
             password_hash=PasswordHasher().hash(password),
         )
@@ -38,9 +39,10 @@ async def bootstrap(email: str, display_name: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bootstrap S3MP's first platform administrator")
     parser.add_argument("--email", required=True)
+    parser.add_argument("--employee-number", required=True)
     parser.add_argument("--display-name", required=True)
     args = parser.parse_args()
-    asyncio.run(bootstrap(args.email, args.display_name))
+    asyncio.run(bootstrap(args.email, args.employee_number, args.display_name))
     print("Platform administrator bootstrap completed.")
 
 

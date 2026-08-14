@@ -1,9 +1,7 @@
 ## Purpose
 
 定义由后端兑现并维护的版本化接口契约，使前端能够只读生成类型、客户端与 Mock，同时确保错误、分页、权限和状态机语义不会在两个实施对话之间漂移。
-
 ## Requirements
-
 ### Requirement: 版本化契约基线
 系统 SHALL 在 `contracts/**` 提供 `/api/v1` OpenAPI、API 约定、错误码、权限操作目录和示例，且 SHALL 在实现接口前先更新契约。
 
@@ -35,6 +33,7 @@ JSON 字段 SHALL 使用 snake_case，时间 SHALL 使用 UTC RFC 3339，分页 
 #### Scenario: 实现与契约不一致（运行时多出基线端点）
 - **WHEN** CI 检测到运行时 Schema、路径或响应与契约基线不一致
 - **THEN** 系统 SHALL 使检查失败并阻止无审阅的漂移
+
 ### Requirement: Executable public API baseline
 Every OpenAPI operation declared in the backend-owned contract SHALL be executable through the runtime application and SHALL preserve its declared path, method, required parameters, response status, and stable error envelope.
 
@@ -70,3 +69,47 @@ Authentication, authorization, object verification, and mutation-precondition fa
 #### Scenario: Unauthorized multipart access
 - **WHEN** an authenticated caller accesses a multipart session owned by another principal or outside its authorized prefix
 - **THEN** the API SHALL reject the request with a registered error code and request ID without returning session or provider details
+
+### Requirement: Authentication and platform APIs are contract-declared
+The service SHALL declare login, logout, account context, tenant-session
+selection, and platform tenant lifecycle operations in the published contract
+before exposing them at runtime. The contract SHALL distinguish public account
+authentication from account-session, tenant-session, and platform authorization.
+
+#### Scenario: Frontend performs browser login
+- **WHEN** the frontend calls the declared login operation with a supported credential payload
+- **THEN** the runtime SHALL provide the declared status, cookie behavior, and stable error envelope
+
+### Requirement: Platform account registration and identifier login are published
+The runtime service and checked-in contract SHALL describe global account registration, email or company employee-number login, account and tenant CSRF cookies, and the `X-S3MP-CSRF` header with identical semantics. Account control-plane mutations SHALL use `s3mp_account_csrf`; tenant-scoped mutations SHALL use `s3mp_csrf`, including when both sessions exist.
+
+#### Scenario: Frontend reads account authentication contract
+- **WHEN** the frontend loads Swagger or `contracts/openapi.yaml`
+- **THEN** it SHALL know that login sets `s3mp_account_session` and `s3mp_account_csrf`, logout and tenant selection require the account CSRF value in `X-S3MP-CSRF`, and tenant APIs use `s3mp_csrf`
+
+#### Scenario: Tenant mutation with both browser sessions
+- **WHEN** a browser has both `s3mp_account_session` and `s3mp_session` and sends a tenant-scoped mutation
+- **THEN** the server SHALL validate `X-S3MP-CSRF` against `s3mp_csrf` and SHALL accept the request when they match
+
+#### Scenario: Account mutation with both browser sessions
+- **WHEN** a browser has both sessions and sends an account control-plane mutation
+- **THEN** the server SHALL validate `X-S3MP-CSRF` against `s3mp_account_csrf`
+
+### Requirement: Contract documentation remains synchronized with Swagger
+The published `contracts/openapi.yaml` and runtime Swagger schema SHALL contain the same Chinese operation, parameter, request-field, and response-field descriptions for every public operation.
+
+#### Scenario: Contract documentation is validated
+- **WHEN** CI validates the runtime schema against the published OpenAPI contract
+- **THEN** it SHALL reject missing or divergent required Chinese documentation metadata
+
+### Requirement: CSRF documentation matches the enforced security domain
+The runtime and published contract SHALL explain that account control-plane mutations use `s3mp_account_csrf`, while tenant-scoped mutations use `s3mp_csrf`. This rule SHALL remain valid when both account and tenant session cookies are present.
+
+#### Scenario: Tenant mutation after tenant selection
+- **WHEN** a browser has both `s3mp_account_session` and `s3mp_session` and sends a tenant-scoped mutation
+- **THEN** the server SHALL validate `X-S3MP-CSRF` against `s3mp_csrf` and SHALL accept the request when they match
+
+#### Scenario: Account mutation after tenant selection
+- **WHEN** a browser has both sessions and sends an account control-plane mutation
+- **THEN** the server SHALL validate `X-S3MP-CSRF` against `s3mp_account_csrf`
+

@@ -1,6 +1,8 @@
 """Storage connections and spaces HTTP endpoints."""
 
+from datetime import datetime
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,6 +37,27 @@ class StorageSpaceCreate(BaseModel):
 class ProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     write_test_prefix: str | None = Field(default=None, max_length=1024)
+
+
+class StorageSpaceResponse(BaseModel):
+    """公开的租户存储空间信息，不包含对象存储凭据。"""
+
+    id: UUID
+    tenant_id: UUID
+    connection_id: UUID
+    name: str
+    bucket: str
+    root_prefix: str
+    provider_target_version: int
+    status: str
+    created_at: datetime
+
+
+class StorageSpacePage(BaseModel):
+    """租户存储空间分页结果。"""
+
+    items: list[StorageSpaceResponse]
+    next_cursor: str | None = None
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -96,11 +119,15 @@ async def probe_storage_connection(
 # ── Spaces ────────────────────────────────────────────────────────────────────
 
 
-@router.get("/storage_spaces", operation_id="list_storage_spaces")
+@router.get(
+    "/storage_spaces",
+    response_model=StorageSpacePage,
+    operation_id="list_storage_spaces",
+)
 async def list_storage_spaces(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_storage_spaces")],
-) -> Any:
+) -> StorageSpacePage:
     return await _svc(request).list_spaces(context)
 
 

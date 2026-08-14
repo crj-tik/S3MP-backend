@@ -26,6 +26,8 @@ def main() -> int:
 
     declared = set()
     for path, item in (baseline.get("paths") or {}).items():
+        if path in SKIP_PATHS:
+            continue
         if not isinstance(item, dict):
             continue
         for method in item:

@@ -16,9 +16,12 @@ uv run python scripts/check_openapi.py
 uv run alembic upgrade head --sql
 ```
 
-For local PostgreSQL and Redis, copy `deploy/.env.example` to `deploy/.env`, create
-`deploy/secrets/postgres_password` from the example, then run
-`docker compose -f deploy/compose.yaml up --build`.
+For local integration, `deploy/compose.yaml` starts only the API and worker and
+reuses the existing PostgreSQL, Redis, and MinIO containers. Copy
+`deploy/.env.example` to `deploy/.env`, configure the Docker-host URLs and
+credentials there, then run `docker compose -f deploy/compose.yaml up --build`.
+The optional `deploy/compose.managed-infra.yaml` retains the self-managed
+PostgreSQL/Redis topology for a future isolated deployment.
 
-Secrets are supplied only through `S3MP_*` environment variables or mounted files using
-`S3MP_*_FILE`; real secret files must not be committed.
+Local integration configuration is supplied through untracked `deploy/.env`; real
+credentials must not be committed.
