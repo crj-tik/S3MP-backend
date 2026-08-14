@@ -51,6 +51,61 @@ class SqlAlchemyPlatformStore:
                 return None
             return PasswordCredential(user_id=row.id, password_hash=row.password_hash)
 
+    async def find_by_identifier(self, identifier: str) -> PasswordCredential | None:
+        """Resolve either the normalized email or normalized employee number."""
+        async with self.session_factory() as session:
+            identity_column = (
+                UserModel.normalized_email
+                if "@" in identifier
+                else UserModel.normalized_employee_number
+            )
+            statement = select(UserModel).where(
+                identity_column == identifier,
+                UserModel.status == UserStatus.ACTIVE,
+            )
+            row = await session.scalar(statement)
+            if row is None:
+                return None
+            return PasswordCredential(user_id=row.id, password_hash=row.password_hash)
+
+    async def create_account(
+        self,
+        *,
+        email: str,
+        normalized_email: str,
+        employee_number: str,
+        normalized_employee_number: str,
+        display_name: str,
+        password_hash: str,
+    ) -> dict[str, object]:
+        async with self.session_factory.begin() as session:
+            user = UserModel(
+                email=email,
+                normalized_email=normalized_email,
+                employee_number=employee_number,
+                normalized_employee_number=normalized_employee_number,
+                display_name=display_name,
+                status=UserStatus.ACTIVE,
+                password_hash=password_hash,
+            )
+            session.add(user)
+            await session.flush()
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=None,
+                    action="platform.account_registered",
+                    resource_type="user_account",
+                    resource_id=str(user.id),
+                    details={"registration": "public"},
+                )
+            )
+            return {
+                "id": str(user.id),
+                "email": user.email,
+                "employee_number": user.employee_number,
+                "display_name": user.display_name,
+            }
+
     async def create_account_session(
         self, user_id: UUID, token_digest: bytes, csrf_digest: bytes, expires_at: datetime
     ) -> UUID:
@@ -117,6 +172,7 @@ class SqlAlchemyPlatformStore:
                 "account": {
                     "id": str(user.id),
                     "email": user.email,
+                    "employee_number": user.employee_number,
                     "display_name": user.display_name,
                 },
                 "tenants": [
@@ -527,11 +583,7 @@ class SqlAlchemyPlatformStore:
             )
             if request_ids is not None:
                 statement = statement.where(SupportAccessRequestModel.id.in_(request_ids))
-            request_ids = list(
-                (
-                    await session.scalars(statement)
-                ).all()
-            )
+            request_ids = list((await session.scalars(statement)).all())
         for request_id in request_ids:
             await self.revoke_support_access(actor_user_id=None, request_id=request_id)
         return len(request_ids)
@@ -571,7 +623,7 @@ class SqlAlchemyPlatformStore:
             return row is not None
 
     async def create_initial_platform_admin(
-        self, *, email: str, display_name: str, password_hash: str
+        self, *, email: str, employee_number: str, display_name: str, password_hash: str
     ) -> UUID:
         """Atomically create the first administrator or fail if one already exists."""
         async with self.session_factory.begin() as session:
@@ -588,6 +640,8 @@ class SqlAlchemyPlatformStore:
             user = UserModel(
                 email=email,
                 normalized_email=email.strip().casefold(),
+                employee_number=employee_number,
+                normalized_employee_number=employee_number.strip().casefold(),
                 display_name=display_name,
                 status=UserStatus.ACTIVE,
                 password_hash=password_hash,

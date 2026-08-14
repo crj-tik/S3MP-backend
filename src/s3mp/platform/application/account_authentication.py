@@ -1,8 +1,11 @@
 """Global browser account authentication, deliberately separate from tenant sessions."""
 
+import re
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError
 
 from s3mp.common.errors import ApiError
 from s3mp.identity.application.security import (
@@ -10,6 +13,7 @@ from s3mp.identity.application.security import (
     LocalPasswordAuthenticator,
     LoginRateLimited,
     PasswordCredential,
+    PasswordHasher,
     SessionTokenService,
 )
 from s3mp.platform.domain.context import PlatformContext
@@ -40,6 +44,19 @@ class AccountAuthStore(Protocol):
     ) -> bool: ...
 
 
+class AccountRegistrationStore(Protocol):
+    async def create_account(
+        self,
+        *,
+        email: str,
+        normalized_email: str,
+        employee_number: str,
+        normalized_employee_number: str,
+        display_name: str,
+        password_hash: str,
+    ) -> dict[str, object]: ...
+
+
 class AccountLoginRateLimiter(Protocol):
     async def allow(self, key: str, *, now: float | None = None) -> bool: ...
 
@@ -59,13 +76,40 @@ class AccountAuthenticationService:
         self._authenticator = authenticator
         self._tokens = token_service
         self._ttl = timedelta(seconds=session_ttl_seconds)
+        self._hasher = PasswordHasher()
+
+    async def register(
+        self, *, email: str, employee_number: str, display_name: str, password: str
+    ) -> dict[str, object]:
+        normalized_email = email.strip().casefold()
+        normalized_employee_number = employee_number.strip().casefold()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,63}", normalized_employee_number):
+            raise ApiError(
+                "validation_failed", "Employee number format is invalid", status_code=422
+            )
+        if not display_name.strip():
+            raise ApiError("validation_failed", "Display name must not be blank", status_code=422)
+        try:
+            create_account = cast(AccountRegistrationStore, self._store).create_account
+            return await create_account(
+                email=email.strip(),
+                normalized_email=normalized_email,
+                employee_number=employee_number.strip(),
+                normalized_employee_number=normalized_employee_number,
+                display_name=display_name.strip(),
+                password_hash=self._hasher.hash(password),
+            )
+        except IntegrityError as exc:
+            raise ApiError(
+                "account_already_exists", "Account identity already exists", status_code=409
+            ) from exc
 
     async def login(
-        self, email: str, password: str, *, rate_limit_key: str
+        self, identifier: str, password: str, *, rate_limit_key: str
     ) -> tuple[dict[str, object], str, str]:
         try:
             user_id = await self._authenticator.authenticate(
-                email, password, rate_limit_key=rate_limit_key
+                identifier, password, rate_limit_key=rate_limit_key
             )
         except (AuthenticationFailed, LoginRateLimited) as exc:
             raise ApiError(

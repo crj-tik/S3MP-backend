@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.1.0
 semantics:
   authority_scope: global-account-only
   tenant_data_plane_bypass: forbidden

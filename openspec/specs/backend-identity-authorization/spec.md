@@ -64,3 +64,19 @@ The service SHALL expose the contract-declared member detail, group membership, 
 #### Scenario: Effective permissions for another tenant principal
 - **WHEN** an authenticated principal requests effective permissions for an identifier outside its tenant
 - **THEN** the service SHALL return `404 resource_not_found` without revealing cross-tenant existence
+
+### Requirement: Account and tenant sessions remain distinct
+The system SHALL validate global account sessions independently from tenant
+sessions. A valid account session alone MUST NOT be treated as a tenant
+PrincipalContext or confer tenant permissions.
+
+#### Scenario: Logged-in account has no selected tenant
+- **WHEN** an account session calls a tenant-scoped endpoint before selecting a tenant
+- **THEN** the system SHALL reject the request as requiring tenant authentication
+
+### Requirement: Global accounts support company employee identity
+The global user identity SHALL support a unique non-secret company employee number in addition to email, while keeping account identity separate from tenant membership, roles, and permissions.
+
+#### Scenario: Account context exposes safe identity
+- **WHEN** an authenticated account requests its account context
+- **THEN** the response SHALL include email, employee number, display name and user identifier without password hash or session material

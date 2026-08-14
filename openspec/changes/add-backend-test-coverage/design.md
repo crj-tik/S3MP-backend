@@ -3,7 +3,7 @@
 See proposal.md — Why. 后端已实现 64 个声明操作，运行时路由与契约双向对齐（`scripts/check_openapi.py` 已校验），但测试金字塔中间断裂：19 个 domain 单元、3 个 HTTP（领域端点仅 `/me`）、3 个 DB 测试（全属 identity，且用 aiosqlite）。更关键的是现有测试全程不连真实基础设施——后端能否连上已部署的 docker 服务（pg/redis/minio）无任何验证。被验证的可观察行为（租户隔离、多 membership 选择、契约可执行性、idempotency/ETag/audit 横切语义、基础设施连通性）在现有 6 个 capability spec 中已声明，缺的是持续验证它们的测试信号。约束：pytest-asyncio auto 模式、Protocol-based fake（不用 `unittest.mock`）、不引入共享 conftest。本次变更：持久化与集成测试连真实 docker 服务（docker 必运行），HTTP 契约层 fake 与真实端到端并存，移除 aiosqlite。
 
 配置核实结论（docker 已验证可连）：
-- pg：`postgresql+asyncpg://platform_pg_admin:Bk-Skill@localhost:18110/s3mp`（与 `alembic.ini` 一致；`s3mp` 用户不存在，须改 `deploy/secrets/database_url`）；`s3mp` 库已迁移 30 张表。
+- pg：`postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp`（与 `alembic.ini` 一致；`s3mp` 用户不存在，须改 `deploy/secrets/database_url`）；`s3mp` 库已迁移 30 张表。
 - redis：`redis://:Bk-Skill@localhost:18113/0`（须改 `deploy/.env`：端口 6379→18113、加密码 `Bk-Skill`）。
 - minio：`http://localhost:9000`，bucket `s3mp-dev`，AK `s3mp-app` / SK `bk-s3mp-backend`，path-style（`deploy/.env` 的 `S3MP_S3_*` 已正确）。
 
@@ -99,7 +99,7 @@ fake 层注入属于 tenant B 的 PrincipalContext，请求 tenant A 的资源 I
 ### 10. 配置注入：`tests/_infrastructure.py` 普通模块暴露连接常量
 
 因 `Settings(env_file=None)` 不自动加载 `.env`，新建 `tests/_infrastructure.py`（普通 Python 模块，**不是 conftest**，遵守项目无共享 conftest 约定）暴露：
-- `TEST_DATABASE_URL`：默认 `postgresql+asyncpg://platform_pg_admin:Bk-Skill@localhost:18110/s3mp`，env `S3MP_TEST_DATABASE_URL` 可覆盖。
+- `TEST_DATABASE_URL`：默认 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp`，env `S3MP_TEST_DATABASE_URL` 可覆盖。
 - `TEST_REDIS_URL`：默认 `redis://:Bk-Skill@localhost:18113/0`，env 可覆盖。
 - `TEST_S3_ENDPOINT/REGION/BUCKET/ACCESS_KEY/SECRET_KEY`：默认 `http://localhost:9000` / `us-east-1` / `s3mp-dev` / `s3mp-app` / `bk-s3mp-backend`，env 可覆盖。
 - `real_settings()` 工厂：返回注入上述真实值的 `Settings`，供真实端到端与持久化测试用。
@@ -123,7 +123,7 @@ fake 层注入属于 tenant B 的 PrincipalContext，请求 tenant A 的资源 I
 
 ## Migration Plan
 
-1. 配置前置：修正 `deploy/secrets/database_url`（s3mp→platform_pg_admin 凭证）、`deploy/.env` redis（6379→18113 + 密码）；新建 `tests/_infrastructure.py`。
+1. 配置前置：修正 `deploy/secrets/database_url`（s3mp→s3mp_app 凭证）、`deploy/.env` redis（6379→18113 + 密码）；新建 `tests/_infrastructure.py`。
 2. P0.1 `select_membership` 回归（1 文件，纯单元）。
 3. P0.2 6 个 router fake HTTP 契约测试文件，逐 router 提交，每完成一个跑 `uv run pytest tests/test_<ctx>_http.py -q` 验证。
 4. P0.3 租户隔离 HTTP 证据。

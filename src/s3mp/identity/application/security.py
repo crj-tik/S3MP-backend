@@ -10,7 +10,7 @@ import time
 from collections import defaultdict, deque
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 
@@ -119,6 +119,10 @@ class PasswordCredentialStore(Protocol):
     ) -> PasswordCredential | None: ...
 
 
+class IdentifierCredentialStore(Protocol):
+    async def find_by_identifier(self, identifier: str) -> PasswordCredential | None: ...
+
+
 class AuthenticationFailed(Exception):
     """Safe authentication failure that does not disclose which check failed."""
 
@@ -135,11 +139,16 @@ class LocalPasswordAuthenticator:
         self._limiter = limiter
         self._hasher = PasswordHasher()
 
-    async def authenticate(self, email: str, password: str, *, rate_limit_key: str) -> UUID:
+    async def authenticate(self, identifier: str, password: str, *, rate_limit_key: str) -> UUID:
         if not await self._limiter.allow(rate_limit_key):
             raise LoginRateLimited
-        normalized_email = email.strip().casefold()
-        credential = await self._store.find_by_normalized_email(normalized_email)
+        normalized_identifier = identifier.strip().casefold()
+        if hasattr(self._store, "find_by_identifier"):
+            credential = await cast(IdentifierCredentialStore, self._store).find_by_identifier(
+                normalized_identifier
+            )
+        else:
+            credential = await self._store.find_by_normalized_email(normalized_identifier)
         if credential is None or credential.password_hash is None:
             raise AuthenticationFailed
         if not self._hasher.verify(password, credential.password_hash):

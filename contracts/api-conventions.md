@@ -9,7 +9,11 @@
 
 ## Authentication and tenancy
 
-- Browser sessions use a Secure, HttpOnly session cookie. Unsafe browser requests also require the CSRF header configured by the service.
+- `POST /api/v1/account/register` creates a global account with an email, company employee number, display name and password. Registration creates no tenant membership, platform role, session or API key.
+- `POST /api/v1/auth/login` accepts the canonical `identifier` field, containing either an email or employee number. The legacy `email` field is retained temporarily for existing clients. Login creates only the account session; tenant data access still requires explicit tenant selection.
+- Browser login creates a global `s3mp_account_session` HttpOnly cookie and a readable `s3mp_account_csrf` cookie. It authorizes only `/api/v1/auth/*` and `/api/v1/platform/*`; it never authorizes a tenant data-plane operation.
+- `POST /api/v1/auth/tenant-sessions` explicitly selects an active tenant Membership and creates the separate `s3mp_session` HttpOnly cookie and readable `s3mp_csrf` cookie used by tenant APIs. Switching tenants requires selecting again.
+- Unsafe requests authenticated by either browser session require the matching `X-S3MP-CSRF` header. Login is the only browser-authentication mutation exempt from this requirement.
 - Applications use `Authorization: S3MP-Key <key_id>.<secret>`. The secret is returned only once when a key is created or rotated.
 - The server derives the principal and tenant from credentials. A client-supplied resource ID never selects or overrides tenant context.
 - Cross-tenant and unauthorized resource lookups return the same `404 resource_not_found` response where disclosure would reveal existence.

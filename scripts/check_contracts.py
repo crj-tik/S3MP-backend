@@ -14,6 +14,10 @@ CONTRACTS = ROOT / "contracts"
 REQUIRED = ("openapi.yaml", "error-codes.yaml", "permission-catalog.yaml")
 
 
+def _contains_chinese(value: object) -> bool:
+    return isinstance(value, str) and any("\u4e00" <= character <= "\u9fff" for character in value)
+
+
 def load_document(path: Path) -> Any:
     with path.open(encoding="utf-8") as stream:
         if path.suffix == ".json":
@@ -31,6 +35,51 @@ def validate_openapi(document: Any) -> list[str]:
         errors.append("openapi.yaml must contain info")
     if not isinstance(document.get("paths"), dict):
         errors.append("openapi.yaml must contain paths")
+    return errors
+
+
+def validate_openapi_documentation(document: Any) -> list[str]:
+    """Ensure the frontend contract keeps complete Chinese Swagger prose."""
+    if not isinstance(document, dict):
+        return ["openapi.yaml must contain an object"]
+    errors: list[str] = []
+    paths = document.get("paths", {})
+    if not isinstance(paths, dict):
+        return ["openapi.yaml must contain paths"]
+    methods = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+    for path, path_item in paths.items():
+        if not isinstance(path_item, dict):
+            continue
+        for method, operation in path_item.items():
+            if method.lower() not in methods or not isinstance(operation, dict):
+                continue
+            label = f"{method.upper()} {path}"
+            if not _contains_chinese(operation.get("description")):
+                errors.append(f"{label} needs a Chinese operation description")
+            for parameter in operation.get("parameters", []):
+                if isinstance(parameter, dict) and not _contains_chinese(
+                    parameter.get("description")
+                ):
+                    errors.append(
+                        f"{label} parameter {parameter.get('name')!r} needs Chinese description"
+                    )
+
+    def walk(value: Any, location: str) -> None:
+        if isinstance(value, dict):
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                for name, property_schema in properties.items():
+                    if not isinstance(property_schema, dict) or not _contains_chinese(
+                        property_schema.get("description")
+                    ):
+                        errors.append(f"{location} property {name!r} needs Chinese description")
+            for key, nested in value.items():
+                walk(nested, f"{location}.{key}")
+        elif isinstance(value, list):
+            for index, nested in enumerate(value):
+                walk(nested, f"{location}[{index}]")
+
+    walk(document.get("components", {}), "components")
     return errors
 
 
@@ -199,6 +248,7 @@ def main() -> int:
         error_catalog = load_document(CONTRACTS / "error-codes.yaml")
         permission_catalog = load_document(CONTRACTS / "permission-catalog.yaml")
         errors = validate_openapi(openapi)
+        errors += validate_openapi_documentation(openapi)
         errors += validate_catalog(CONTRACTS / "error-codes.yaml", ("errors", "error_codes"))
         errors += validate_catalog(
             CONTRACTS / "permission-catalog.yaml", ("permissions", "operations")

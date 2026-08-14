@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.1.0
 error_envelope:
   required: [code, message, request_id]
   optional: [details]
@@ -12,6 +12,9 @@ error_codes:
   - code: authentication_failed
     http_status: 401
     description: The supplied account credentials are not valid.
+  - code: account_already_exists
+    http_status: 409
+    description: The email or employee number is already registered.
   - code: tenant_session_denied
     http_status: 403
     description: The account cannot create a session for the selected tenant.

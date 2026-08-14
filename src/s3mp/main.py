@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -28,6 +29,7 @@ from s3mp.common.errors import install_error_handlers
 from s3mp.common.health import router as health_router
 from s3mp.common.logging import configure_logging
 from s3mp.common.middleware import RequestIDMiddleware
+from s3mp.common.openapi_documentation import document_openapi
 from s3mp.common.redis import create_redis
 from s3mp.files.api.router import router as files_router
 from s3mp.files.application.file_service import FileApplicationService
@@ -44,6 +46,7 @@ from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.identity.application.security import InMemoryLoginRateLimiter, LocalPasswordAuthenticator
 from s3mp.platform.api.role_router import router as platform_role_router
+from s3mp.platform.api.router import registration_router
 from s3mp.platform.api.router import router as account_auth_router
 from s3mp.platform.api.support_router import router as platform_support_router
 from s3mp.platform.api.tenant_router import router as platform_tenant_router
@@ -244,7 +247,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await engine.dispose()
 
     configure_logging(configured.log_level)
-    app = FastAPI(title="S3MP API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="S3MP API", version="1.1.0", lifespan=lifespan)
     app.state.settings = configured
     app.state.readiness_timeout = configured.readiness_timeout_seconds
     app.state.readiness_checks = {}
@@ -265,6 +268,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(identity_router)
     app.include_router(account_auth_router)
+    app.include_router(registration_router)
     app.include_router(platform_tenant_router)
     app.include_router(platform_role_router)
     app.include_router(platform_support_router)
@@ -273,6 +277,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(storage_router)
     app.include_router(files_router)
     app.include_router(governance_router)
+
+    def custom_openapi() -> dict[str, Any]:
+        """Generate the public schema and enrich it with canonical Chinese guidance."""
+        if app.openapi_schema is None:
+            generated = get_openapi(
+                title=app.title,
+                version=app.version,
+                openapi_version=app.openapi_version,
+                summary=app.summary,
+                description=app.description,
+                routes=app.routes,
+            )
+            app.openapi_schema = document_openapi(generated)
+        return app.openapi_schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
     return app
 
 

@@ -4,13 +4,14 @@
 
 | 文件 | 版本 | 说明 |
 |------|------|------|
-| `contracts/openapi.yaml` | 1.0.0 | 规范 REST API 契约，覆盖 Context/Users/Members/Groups/Roles/Authorization/Applications/API Keys/Storage/Files/Uploads/Multipart/Quotas/Audit |
-| `contracts/api-conventions.md` | 1.0.0 | 通用约定：认证、分页、幂等、错误码、时间格式、文件语义 |
-| `contracts/error-codes.yaml` | 1.0.0 | 稳定机器错误码目录 |
-| `contracts/permission-catalog.yaml` | 1.0.0 | 权限操作目录 |
-| `contracts/examples/` | 1.0.0 | 成功/空状态/拒绝/冲突/过期/部分失败 契约示例 |
+| `contracts/openapi.yaml` | 1.1.0 | 规范 REST API 契约，覆盖账户会话、平台控制面及租户数据面 |
+| `contracts/api-conventions.md` | 1.1.0 | 通用约定：账户/租户会话、分页、幂等、错误码、时间格式、文件语义 |
+| `contracts/error-codes.yaml` | 1.1.0 | 稳定机器错误码目录 |
+| `contracts/permission-catalog.yaml` | 1.1.0 | 租户权限操作目录 |
+| `contracts/platform-permission-catalog.yaml` | 1.1.0 | 平台控制面权限目录 |
+| `contracts/examples/` | 1.1.0 | 成功/空状态/拒绝/冲突/过期/部分失败契约示例 |
 
-**契约兼容性级别**: 1.0.0（向后兼容）。新增可选字段和端点不视为 breaking change。
+**契约兼容性级别**: 1.1.0（向后兼容）。新增账户/平台端点和可选字段不视为 breaking change。
 
 ---
 
@@ -82,11 +83,9 @@ npx prism mock contracts/s3mp-backend/contracts/openapi.yaml --port 4010
 # 1. 安装依赖
 uv sync
 
-# 2. 准备密钥（生产环境使用文件挂载）
+# 2. 准备本地联调配置
 cp deploy/.env.example deploy/.env
-mkdir -p deploy/secrets
-echo "postgres://s3mp:s3mp@localhost:5432/s3mp" > deploy/secrets/database_url
-echo "s3mp-dev-password" > deploy/secrets/postgres_password
+# 在 deploy/.env 中填入现有 PostgreSQL、Redis、MinIO 的连接信息与 API key pepper
 
 # 3. 启动基础设施
 docker compose -f deploy/compose.yaml up -d postgres redis
@@ -104,16 +103,13 @@ uv run uvicorn s3mp.main:app --host 0.0.0.0 --port 8000 --reload
 # 1. 构建镜像
 docker build -f deploy/Dockerfile -t s3mp-api:latest .
 
-# 2. 准备生产密钥文件（不可提交到仓库）
-#   deploy/secrets/database_url       → postgresql://user:pass@host:5432/s3mp
-#   deploy/secrets/postgres_password  → <strong-password>
-#   deploy/secrets/redis_url          → redis://user:pass@host:6379/0
+# 2. 准备生产环境变量（不可提交到仓库）
 
 # 3. 设置环境变量
 #   S3MP_ENVIRONMENT=production
 #   S3MP_LOG_LEVEL=WARNING
-#   S3MP_DATABASE_URL_FILE=/run/secrets/database_url
-#   S3MP_REDIS_URL_FILE=/run/secrets/redis_url
+#   S3MP_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/s3mp
+#   S3MP_REDIS_URL=redis://user:pass@host:6379/0
 
 # 4. 启动服务栈
 docker compose -f deploy/compose.yaml up -d
@@ -134,7 +130,7 @@ curl http://localhost:8000/api/v1/health
 
 ### 3.5 安全配置清单
 
-- [ ] 生产环境强制使用 `S3MP_*_FILE` 秘密文件引用，禁止环境变量直接传递密钥
+- [ ] 生产环境从受管密钥服务注入运行环境变量，禁止将凭据写入镜像或版本库
 - [ ] PostgreSQL 使用 TLS 连接
 - [ ] Redis 配置 `requirepass`
 - [ ] 会话 Cookie 设置 `Secure; HttpOnly; SameSite=Lax`
@@ -346,4 +342,4 @@ Owner enters `pending_takeover` and its API Keys cannot authenticate. A human wi
 `POST /api/v1/applications/{application_id}/takeover`; this adds the accountable
 Owner, advances authorization state, and never reveals an API Key secret.
 
-生产环境强制使用 `S3MP_S3_ACCESS_KEY_FILE` 和 `S3MP_S3_SECRET_KEY_FILE` 文件引用。
+生产环境通过受管密钥服务注入 `S3MP_S3_ACCESS_KEY` 和 `S3MP_S3_SECRET_KEY`。

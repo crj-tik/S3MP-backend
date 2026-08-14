@@ -12,6 +12,7 @@ from s3mp.platform.application.account_authentication import AccountAuthenticati
 from s3mp.platform.domain.context import PlatformContext
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Account authentication"])
+registration_router = APIRouter(prefix="/api/v1/account", tags=["Platform account"])
 account_service = application_service("account_authentication")
 
 
@@ -20,8 +21,18 @@ class _Strict(BaseModel):
 
 
 class LoginRequest(_Strict):
-    email: str = Field(min_length=3, max_length=320)
+    identifier: str | None = Field(default=None, min_length=2, max_length=320)
     password: str = Field(min_length=1, max_length=1024)
+    email: str | None = Field(default=None, min_length=3, max_length=320, deprecated=True)
+
+
+class RegisterRequest(_Strict):
+    email: str = Field(min_length=3, max_length=320, json_schema_extra={"format": "email"})
+    employee_number: str = Field(
+        min_length=2, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$"
+    )
+    display_name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=8, max_length=1024)
 
 
 class TenantSessionRequest(_Strict):
@@ -68,13 +79,33 @@ async def login(
     service: Annotated[AccountAuthenticationService, account_service],
 ) -> object:
     client = request.client.host if request.client else "unknown"
+    identifier = body.identifier
+    if body.email is not None:
+        if body.identifier is not None and body.identifier != body.email:
+            raise ApiError("validation_failed", "Conflicting login identifiers", status_code=422)
+        identifier = body.email
+    if identifier is None:
+        raise ApiError("validation_failed", "Login identifier is required", status_code=422)
     result, session_token, csrf_token = await service.login(
-        body.email,
+        identifier,
         body.password,
-        rate_limit_key=f"account-login:{client}:{body.email.strip().casefold()}",
+        rate_limit_key=f"account-login:{client}:{identifier.strip().casefold()}",
     )
     _set_account_cookies(response, request, session_token, csrf_token)
     return result
+
+
+@registration_router.post("/register", status_code=201, operation_id="register_account")
+async def register(
+    body: RegisterRequest,
+    service: Annotated[AccountAuthenticationService, account_service],
+) -> object:
+    return await service.register(
+        email=body.email,
+        employee_number=body.employee_number,
+        display_name=body.display_name,
+        password=body.password,
+    )
 
 
 @router.get("/me", operation_id="get_account_context")
