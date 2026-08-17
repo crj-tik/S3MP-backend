@@ -1,39 +1,4 @@
-# platform-control-plane Specification
-
-## Purpose
-
-Provide a platform governance plane that manages tenant lifecycle without
-silently bypassing the authorization or data boundaries of any tenant.
-
-## Requirements
-
-### Requirement: Platform authority is independent of tenant authority
-The system SHALL assign platform roles directly to global user accounts and
-SHALL NOT represent platform authority as a tenant principal, Membership, Role,
-or RoleBinding. Platform authority MUST NOT grant direct file, object-storage,
-application API-Key, or tenant-management access.
-
-#### Scenario: Platform administrator requests tenant file data
-- **WHEN** a platform administrator calls a tenant data-plane operation without a tenant-scoped grant
-- **THEN** the system SHALL reject the request as unauthorized
-
-### Requirement: Bootstrap first platform administrator
-The system SHALL provide an audited bootstrap mechanism that creates the first
-active platform administrator only when none exists. It MUST NOT expose a public
-HTTP registration path for this privilege.
-
-#### Scenario: Bootstrap is attempted after initialization
-- **WHEN** an active platform administrator already exists
-- **THEN** the bootstrap mechanism SHALL fail without creating another administrator
-
-### Requirement: Tenant creation has an accountable initial administrator
-The system SHALL create a tenant, its initial active Membership, and the initial
-tenant-administrator grant atomically. A newly created tenant MUST NOT be left
-without an active tenant administrator.
-
-#### Scenario: Initial administrator setup fails
-- **WHEN** a tenant creation request cannot create its initial administrator grant
-- **THEN** the system SHALL roll back tenant creation
+## MODIFIED Requirements
 
 ### Requirement: Support access is explicit and temporary
 The system SHALL require a reason, target tenant, approved duration, and audit
@@ -62,6 +27,8 @@ container process exists.
 #### Scenario: Scheduler loses database connectivity
 - **WHEN** the scheduler health check runs while its configured persistence dependency is unreachable
 - **THEN** the health check SHALL fail so orchestration can mark the scheduler unhealthy
+
+## ADDED Requirements
 
 ### Requirement: Platform role baselines include explicit read authority
 The system SHALL grant each built-in platform role every explicit platform read

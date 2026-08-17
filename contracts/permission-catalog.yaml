@@ -5,6 +5,14 @@ semantics:
   storage_scope_required_for_file_permissions: true
   direct_binding_requires_reason_and_expiry: true
 permissions:
+  - {name: platform.accounts.read, resource_type: platform_account, delegable: false, description: View safe platform account summaries.}
+  - {name: platform.tenants.read, resource_type: platform_tenant, delegable: false, description: View platform tenant lifecycle summaries.}
+  - {name: platform.tenants.manage, resource_type: platform_tenant, delegable: false, description: Create and update platform tenants.}
+  - {name: platform.roles.read, resource_type: platform_role, delegable: false, description: View platform roles and bindings.}
+  - {name: platform.roles.manage, resource_type: platform_role, delegable: false, description: Grant and revoke platform roles.}
+  - {name: platform.support.read, resource_type: platform_support, delegable: false, description: View support access requests.}
+  - {name: platform.support.manage, resource_type: platform_support, delegable: false, description: Request, approve and revoke support access.}
+  - {name: platform.audit.read, resource_type: platform_audit, delegable: false, description: View platform audit events.}
   - {name: tenant.read, resource_type: tenant, delegable: true, description: View tenant metadata.}
   - {name: members.read, resource_type: membership, delegable: true, description: List and view tenant members.}
   - {name: members.manage, resource_type: membership, delegable: true, description: Invite, suspend, reactivate and remove members.}

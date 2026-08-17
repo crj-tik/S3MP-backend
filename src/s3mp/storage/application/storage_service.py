@@ -1,6 +1,7 @@
 """Storage connection and space application service."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -11,10 +12,14 @@ from s3mp.storage.domain.policy import StorageCapabilities, canonical_operator_p
 
 
 class StorageStore(Protocol):
-    async def list_connections(self, tenant_id: UUID) -> list[dict[str, Any]]: ...
+    async def list_connections(
+        self, tenant_id: UUID, limit: int, cursor: str | None
+    ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_connection(self, tenant_id: UUID, conn_id: UUID) -> dict[str, Any] | None: ...
     async def create_connection(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
-    async def list_spaces(self, tenant_id: UUID) -> list[dict[str, Any]]: ...
+    async def list_spaces(
+        self, tenant_id: UUID, limit: int, cursor: str | None
+    ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any] | None: ...
     async def create_space(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
 
@@ -28,10 +33,14 @@ class StorageService:
     store: StorageStore
     authorizer: PermissionAuthorizer | None = None
 
-    async def list_connections(self, context: PrincipalContext) -> list[dict[str, Any]]:
+    async def list_connections(
+        self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "storage_connections.read")
-        connections = await self.store.list_connections(context.tenant_id)
-        return [_public_connection(connection) for connection in connections]
+        connections, next_cursor = await self.store.list_connections(
+            context.tenant_id, min(limit, 200), cursor
+        )
+        return [_public_connection(connection) for connection in connections], next_cursor
 
     async def get_connection(self, context: PrincipalContext, conn_id: str) -> dict[str, Any]:
         await self._require(context, "storage_connections.read")
@@ -66,11 +75,19 @@ class StorageService:
         result = await self.store.get_connection(context.tenant_id, UUID(conn_id))
         if result is None:
             raise ApiError("resource_not_found", "Connection not found", status_code=404)
-        return {"status": "ok", "readable": True, "writable": write_test_prefix is not None}
+        return {
+            "status": "ok",
+            "readable": True,
+            "writable": write_test_prefix is not None,
+            "checked_at": datetime.now(UTC),
+            "failure_reason": None,
+        }
 
-    async def list_spaces(self, context: PrincipalContext) -> dict[str, Any]:
+    async def list_spaces(
+        self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "storage_spaces.read")
-        return {"items": await self.store.list_spaces(context.tenant_id), "next_cursor": None}
+        return await self.store.list_spaces(context.tenant_id, min(limit, 200), cursor)
 
     async def get_space(self, context: PrincipalContext, space_id: str) -> dict[str, Any]:
         await self._require(context, "storage_spaces.read")
@@ -107,4 +124,8 @@ class StorageService:
 
 def _public_connection(connection: dict[str, Any]) -> dict[str, Any]:
     """Credential references are internal secret-store locators, never API output."""
-    return {key: value for key, value in connection.items() if key != "credential_reference"}
+    public = {key: value for key, value in connection.items() if key != "credential_reference"}
+    # boto3's S3 client uses AWS Signature Version 4 for this adapter.  Expose
+    # the effective protocol, not the secret-store locator used to obtain creds.
+    public.setdefault("signature_version", "s3v4")
+    return public

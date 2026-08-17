@@ -45,12 +45,14 @@ from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, Sq
 from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.identity.application.security import InMemoryLoginRateLimiter, LocalPasswordAuthenticator
+from s3mp.platform.api.control_router import router as platform_control_router
 from s3mp.platform.api.role_router import router as platform_role_router
 from s3mp.platform.api.router import registration_router
 from s3mp.platform.api.router import router as account_auth_router
 from s3mp.platform.api.support_router import router as platform_support_router
 from s3mp.platform.api.tenant_router import router as platform_tenant_router
 from s3mp.platform.application.account_authentication import AccountAuthenticationService
+from s3mp.platform.application.control_plane import PlatformControlPlaneService
 from s3mp.platform.application.role_management import PlatformRoleManagementService
 from s3mp.platform.application.support_access import SupportAccessService
 from s3mp.platform.application.tenant_lifecycle import PlatformTenantLifecycleService
@@ -141,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             platform_store = SqlAlchemyPlatformStore(session_factory)
             app.state.platform_store = platform_store
             app.state.platform_tenant_lifecycle = PlatformTenantLifecycleService(platform_store)
+            app.state.platform_control_plane = PlatformControlPlaneService(platform_store)
             app.state.platform_role_management = PlatformRoleManagementService(platform_store)
             app.state.platform_support_access = SupportAccessService(platform_store)
             login_limiter = (
@@ -270,6 +273,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(account_auth_router)
     app.include_router(registration_router)
     app.include_router(platform_tenant_router)
+    app.include_router(platform_control_router)
     app.include_router(platform_role_router)
     app.include_router(platform_support_router)
     app.include_router(authorization_router)

@@ -1,6 +1,6 @@
 # 本地容器联调
 
-默认 `compose.yaml` 仅启动 S3MP 的 API 和 worker，复用已在 Windows 主机
+默认 `compose.yaml` 启动 S3MP 的 API、worker 和 platform-scheduler，复用已在 Windows 主机
 运行的 PostgreSQL、Redis 和 MinIO，不会创建新的数据库、Redis 卷或 MinIO
 实例。Docker Desktop 容器通过 `host.docker.internal` 访问这些现有服务。
 
@@ -19,7 +19,7 @@
 ```powershell
 docker compose -f deploy/compose.yaml build
 docker compose -f deploy/compose.yaml run --rm api python -m alembic upgrade head
-docker compose -f deploy/compose.yaml up -d api worker
+docker compose -f deploy/compose.yaml up -d api worker platform-scheduler
 docker compose -f deploy/compose.yaml ps
 Invoke-WebRequest http://localhost:19101/health/ready | Select-Object -Expand Content
 ```
@@ -29,7 +29,7 @@ Redis 不需要 schema 初始化。MinIO bucket 不由该 Compose 自动创建�
 操作现有对象存储；就绪检查会验证 bucket 与应用凭据。
 
 首个平台管理员须在迁移后通过受控脚本单独创建。支持访问到期回收须由外部调度
-至少每分钟运行 `python scripts/expire_support_access.py`。
+`platform-scheduler` 会每 60 秒执行一次支持访问过期回收；发生临时故障时会记录结构化日志并在下一轮重试。仍可使用 `python scripts/expire_support_access.py` 手工执行一次回收。
 
 ## 自管基础设施模式
 

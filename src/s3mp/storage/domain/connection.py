@@ -13,7 +13,9 @@ class S3ConnectionConfig:
     region: str
     path_style: bool
     max_presign_ttl_seconds: int = 3600
-    tls_required: bool = True
+    # Approved production-compatible S3 may be reachable over HTTP inside a
+    # trusted network; HTTPS remains recommended where available.
+    tls_required: bool = False
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.endpoint)

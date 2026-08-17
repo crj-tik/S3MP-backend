@@ -7,17 +7,31 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from s3mp.authorization.infrastructure.models import PermissionModel, RoleModel, RolePermissionModel
-from s3mp.platform.infrastructure.models import PlatformRoleModel
+from s3mp.platform.infrastructure.models import PlatformAuditEventModel, PlatformRoleModel
 
 PLATFORM_ROLES: dict[str, tuple[str, ...]] = {
     "platform_admin": (
+        "platform.accounts.read",
+        "platform.tenants.read",
         "platform.tenants.manage",
+        "platform.roles.read",
         "platform.roles.manage",
+        "platform.support.read",
         "platform.support.manage",
         "platform.audit.read",
     ),
-    "platform_operator": ("platform.tenants.read", "platform.support.manage"),
-    "platform_auditor": ("platform.audit.read", "platform.tenants.read"),
+    "platform_operator": (
+        "platform.accounts.read",
+        "platform.tenants.read",
+        "platform.support.read",
+        "platform.support.manage",
+    ),
+    "platform_auditor": (
+        "platform.tenants.read",
+        "platform.roles.read",
+        "platform.support.read",
+        "platform.audit.read",
+    ),
 }
 
 TENANT_ADMIN_PERMISSIONS: tuple[str, ...] = (
@@ -78,12 +92,41 @@ TENANT_PERMISSION_METADATA: dict[str, tuple[str, bool, str]] = {
 }
 
 
-async def seed_platform_roles(session: AsyncSession) -> None:
-    """Create missing built-in roles without modifying existing role definitions."""
-    existing = set((await session.scalars(select(PlatformRoleModel.name))).all())
+async def reconcile_platform_roles(session: AsyncSession) -> set[str]:
+    """Add missing baseline permissions without modifying custom roles or removing grants."""
+    existing = {
+        role.name: role
+        for role in (await session.scalars(select(PlatformRoleModel))).all()
+    }
+    changed: set[str] = set()
     for name, permissions in PLATFORM_ROLES.items():
-        if name not in existing:
+        role = existing.get(name)
+        if role is None:
             session.add(PlatformRoleModel(name=name, permissions=list(permissions), built_in=True))
+            changed.add(name)
+            continue
+        if not role.built_in:
+            continue
+        merged = list(dict.fromkeys([*role.permissions, *permissions]))
+        if merged != role.permissions:
+            role.permissions = merged
+            changed.add(name)
+    if changed:
+        session.add(
+            PlatformAuditEventModel(
+                actor_user_id=None,
+                action="platform.role_baseline_reconciled",
+                resource_type="platform_role",
+                resource_id=None,
+                details={"roles": sorted(changed)},
+            )
+        )
+    return changed
+
+
+async def seed_platform_roles(session: AsyncSession) -> None:
+    """Backward-compatible bootstrap entry point for built-in platform roles."""
+    await reconcile_platform_roles(session)
 
 
 async def ensure_tenant_admin_role(session: AsyncSession, tenant_id: UUID) -> RoleModel:

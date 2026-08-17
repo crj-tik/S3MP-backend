@@ -1,6 +1,6 @@
 """Dependencies for routes authorized by a global account session."""
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import Depends, Request
 
@@ -16,10 +16,14 @@ def platform_context(request: Request) -> PlatformContext:
     return context
 
 
-def platform_permission(permission: str) -> Any:
+def platform_permission(permission: str, operation_id: str | None = None) -> Any:
     def resolver(request: Request) -> PlatformContext:
         context = platform_context(request)
         PlatformAuthorizer().require(context, permission)
         return context
 
+    annotated_resolver = cast(Any, resolver)
+    if operation_id is not None:
+        annotated_resolver.__s3mp_management_operation_id__ = operation_id
+    annotated_resolver.__s3mp_platform_permission__ = permission
     return Depends(resolver)

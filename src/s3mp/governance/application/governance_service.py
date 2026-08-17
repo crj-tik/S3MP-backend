@@ -10,8 +10,8 @@ from s3mp.identity.domain.context import PrincipalContext
 
 class QuotaStore(Protocol):
     async def list_quotas(
-        self, tenant_id: UUID, storage_space_id: str | None
-    ) -> list[dict[str, Any]]: ...
+        self, tenant_id: UUID, storage_space_id: str | None, limit: int, cursor: str | None
+    ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_quota(self, tenant_id: UUID, quota_id: UUID) -> dict[str, Any] | None: ...
     async def update_quota(
         self, tenant_id: UUID, quota_id: UUID, limit_bytes: int
@@ -20,8 +20,8 @@ class QuotaStore(Protocol):
 
 class AuditStore(Protocol):
     async def list_events(
-        self, tenant_id: UUID, filters: dict[str, Any]
-    ) -> list[dict[str, Any]]: ...
+        self, tenant_id: UUID, filters: dict[str, Any], limit: int, cursor: str | None
+    ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_event(self, tenant_id: UUID, event_id: UUID) -> dict[str, Any] | None: ...
 
 
@@ -35,10 +35,16 @@ class QuotaService:
     authorizer: PermissionAuthorizer | None = None
 
     async def list_quotas(
-        self, context: PrincipalContext, storage_space_id: str | None
-    ) -> list[dict[str, Any]]:
+        self,
+        context: PrincipalContext,
+        storage_space_id: str | None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "quotas.read")
-        return await self.store.list_quotas(context.tenant_id, storage_space_id)
+        return await self.store.list_quotas(
+            context.tenant_id, storage_space_id, min(limit, 200), cursor
+        )
 
     async def get_quota(self, context: PrincipalContext, quota_id: str) -> dict[str, Any]:
         await self._require(context, "quotas.read")
@@ -70,11 +76,14 @@ class AuditService:
     authorizer: PermissionAuthorizer | None = None
 
     async def list_audit_events(
-        self, context: PrincipalContext, **filters: Any
-    ) -> list[dict[str, Any]]:
+        self, context: PrincipalContext, limit: int = 50, cursor: str | None = None, **filters: Any
+    ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "audit.read")
         return await self.store.list_events(
-            context.tenant_id, {k: v for k, v in filters.items() if v is not None}
+            context.tenant_id,
+            {key: value for key, value in filters.items() if value is not None},
+            min(limit, 200),
+            cursor,
         )
 
     async def get_audit_event(self, context: PrincipalContext, event_id: str) -> dict[str, Any]:

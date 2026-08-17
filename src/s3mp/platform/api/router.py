@@ -39,6 +39,25 @@ class TenantSessionRequest(_Strict):
     tenant_id: UUID
 
 
+class Account(_Strict):
+    id: str
+    email: str
+    employee_number: str | None = None
+    display_name: str
+
+
+class AccountTenantSummary(_Strict):
+    id: str
+    name: str
+    slug: str
+
+
+class AccountContext(_Strict):
+    account: Account
+    tenants: list[AccountTenantSummary]
+    platform_permissions: list[str] = Field(default_factory=list)
+
+
 def account_context(request: Request) -> PlatformContext:
     context = getattr(request.state, "platform_context", None)
     if not isinstance(context, PlatformContext):
@@ -71,13 +90,13 @@ def _set_account_cookies(
     )
 
 
-@router.post("/login", operation_id="account_login")
+@router.post("/login", response_model=AccountContext, operation_id="account_login")
 async def login(
     body: LoginRequest,
     request: Request,
     response: Response,
     service: Annotated[AccountAuthenticationService, account_service],
-) -> object:
+) -> AccountContext:
     client = request.client.host if request.client else "unknown"
     identifier = body.identifier
     if body.email is not None:
@@ -92,7 +111,7 @@ async def login(
         rate_limit_key=f"account-login:{client}:{identifier.strip().casefold()}",
     )
     _set_account_cookies(response, request, session_token, csrf_token)
-    return result
+    return AccountContext.model_validate(result)
 
 
 @registration_router.post("/register", status_code=201, operation_id="register_account")
@@ -108,12 +127,12 @@ async def register(
     )
 
 
-@router.get("/me", operation_id="get_account_context")
+@router.get("/me", response_model=AccountContext, operation_id="get_account_context")
 async def me(
     context: Annotated[PlatformContext, Depends(account_context)],
     service: Annotated[AccountAuthenticationService, account_service],
-) -> object:
-    return await service.account_context(context)
+) -> AccountContext:
+    return AccountContext.model_validate(await service.account_context(context))
 
 
 @router.post("/logout", status_code=204, operation_id="account_logout")

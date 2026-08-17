@@ -1,9 +1,11 @@
 """Strict HTTP boundary for tenant authorization management."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
+import yaml
 from fastapi import APIRouter, Header, Query
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,6 +65,19 @@ class RoleResponse(_Strict):
 class RolePage(_Strict):
     items: list[RoleResponse]
     next_cursor: str | None
+
+
+class PermissionCatalogEntry(_Strict):
+    name: str
+    resource_type: str
+    delegable: bool
+    description: str
+
+
+class PermissionCatalogResponse(_Strict):
+    version: str
+    semantics: dict[str, object]
+    permissions: list[PermissionCatalogEntry]
 
 
 class ResourceScope(_Strict):
@@ -143,6 +158,22 @@ class AuthorizationDecisionResponse(_Strict):
     authorization_version: int
     evaluated_at: datetime
     sources: list[DecisionSource]
+
+
+@router.get(
+    "/permission_catalog",
+    response_model=PermissionCatalogResponse,
+    operation_id="get_permission_catalog",
+)
+def get_permission_catalog(
+    context: Annotated[PrincipalContext, management_permission("get_permission_catalog")],
+) -> PermissionCatalogResponse:
+    """Return the server-owned permission catalog used by role forms."""
+    del context
+    catalog_path = Path(__file__).resolve().parents[3] / "contracts" / "permission-catalog.yaml"
+    with catalog_path.open(encoding="utf-8") as stream:
+        catalog = yaml.safe_load(stream) or {}
+    return PermissionCatalogResponse.model_validate(catalog)
 
 
 def _cursor(value: str | None, context: PrincipalContext, *, query: str) -> UUID | None:

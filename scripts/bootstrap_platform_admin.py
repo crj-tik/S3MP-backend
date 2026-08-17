@@ -7,7 +7,7 @@ import getpass
 from s3mp.common.config import get_settings
 from s3mp.common.database import create_engine, create_session_factory
 from s3mp.identity.application.security import PasswordHasher
-from s3mp.platform.application.baseline import seed_platform_roles
+from s3mp.platform.application.baseline import reconcile_platform_roles
 from s3mp.platform.infrastructure.repository import SqlAlchemyPlatformStore
 
 
@@ -24,7 +24,7 @@ async def bootstrap(email: str, employee_number: str, display_name: str) -> None
     try:
         sessions = create_session_factory(engine)
         async with sessions.begin() as session:
-            await seed_platform_roles(session)
+            await reconcile_platform_roles(session)
         store = SqlAlchemyPlatformStore(sessions)
         await store.create_initial_platform_admin(
             email=email,

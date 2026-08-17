@@ -174,6 +174,34 @@ class SqlAlchemyApplicationStore:
                 ).all()
             )
 
+    async def list_owner_summaries(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> list[dict[str, str]]:
+        async with self._sessions() as session:
+            rows = (
+                await session.execute(
+                    select(ApplicationOwnerModel.owner_principal_id, PrincipalModel.type)
+                    .join(
+                        PrincipalModel,
+                        and_(
+                            PrincipalModel.tenant_id == ApplicationOwnerModel.tenant_id,
+                            PrincipalModel.id == ApplicationOwnerModel.owner_principal_id,
+                        ),
+                    )
+                    .where(
+                        ApplicationOwnerModel.tenant_id == tenant_id,
+                        ApplicationOwnerModel.application_id == app_id,
+                    )
+                )
+            ).all()
+        return [
+            {
+                "principal_id": str(principal_id),
+                "principal_type": getattr(principal_type, "value", str(principal_type)),
+            }
+            for principal_id, principal_type in rows
+        ]
+
     async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]:
         """Owners count only when their human membership is currently active."""
         async with self._sessions() as session:

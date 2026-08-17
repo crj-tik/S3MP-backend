@@ -1,6 +1,6 @@
 """Files, uploads, presigned downloads, and multipart HTTP endpoints."""
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Body, Header, Path, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -61,6 +61,69 @@ class MultipartPartConfirm(BaseModel):
     content_length: int = Field(ge=0)
 
 
+class MultipartPartRuntime(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    part_number: int
+    etag: str
+    content_length: int
+
+
+class FileObjectRuntime(BaseModel):
+    """已提交文件的公开元数据；不包含对象存储物理路径或鉴权证据。"""
+
+    id: str
+    storage_space_id: str | None = None
+    object_key: str
+    content_length: int | None = None
+    content_type: str | None = None
+    status: str | None = None
+    etag: str | None = None
+    checksum: str | None = None
+    created_at: str | None = None
+
+
+class UploadSessionRuntime(BaseModel):
+    """上传会话响应，`id` 用于后续内容上传和完成确认。"""
+
+    id: str
+    storage_space_id: str | None = None
+    object_key: str | None = None
+    content_length: int | None = None
+    content_type: str | None = None
+    status: str | None = None
+    expires_at: str | None = None
+    ingestion_id: str | None = None
+
+
+class MultipartUploadRuntime(UploadSessionRuntime):
+    pass
+
+
+class FileOperationRuntime(BaseModel):
+    id: str
+    operation_type: str | None = None
+    status: str | None = None
+    source_key: str | None = None
+    destination_key: str | None = None
+    keys: list[str] = Field(default_factory=list)
+    failure_reason: str | None = None
+    attempt_count: int = 0
+    next_retry_at: str | None = None
+    completed_at: str | None = None
+    created_at: str | None = None
+
+
+class IngestionCommitResult(BaseModel):
+    """上传提交结果；`file_object` 存在时表示文件元数据已写入系统。"""
+
+    id: str
+    status: str | None = None
+    storage_space_id: str | None = None
+    file_object: FileObjectRuntime | None = None
+    etag: str | None = None
+
+
 class MultipartCompletePart(BaseModel):
     model_config = ConfigDict(extra="forbid")
     part_number: int = Field(ge=1, le=10000)
@@ -100,22 +163,35 @@ def _idempotency_key(value: str | None) -> str:
 # ── Files ─────────────────────────────────────────────────────────────────────
 
 
-@router.get("/storage_spaces/{space_id}/files", operation_id="list_files")
+@router.get(
+    "/storage_spaces/{space_id}/files",
+    response_model=list[FileObjectRuntime],
+    operation_id="list_files",
+)
 async def list_files(
     request: Request,
     space_id: str = Path(min_length=1),
     prefix: str | None = None,
-) -> Any:
-    return await _file_svc(request).list_files(_context(request), space_id, prefix or "")
+) -> list[FileObjectRuntime]:
+    return [
+        FileObjectRuntime.model_validate(item)
+        for item in await _file_svc(request).list_files(_context(request), space_id, prefix or "")
+    ]
 
 
-@router.get("/storage_spaces/{space_id}/files/{file_id}", operation_id="get_file")
+@router.get(
+    "/storage_spaces/{space_id}/files/{file_id}",
+    response_model=FileObjectRuntime,
+    operation_id="get_file",
+)
 async def get_file(
     request: Request,
     space_id: str = Path(min_length=1),
     file_id: str = Path(min_length=1),
-) -> Any:
-    return await _file_svc(request).get_file(_context(request), space_id, file_id)
+) -> FileObjectRuntime:
+    return FileObjectRuntime.model_validate(
+        await _file_svc(request).get_file(_context(request), space_id, file_id)
+    )
 
 
 @router.delete(
@@ -140,6 +216,7 @@ async def delete_file(
 @router.post(
     "/storage_spaces/{space_id}/file_operations",
     status_code=202,
+    response_model=FileOperationRuntime,
     operation_id="create_file_operation",
 )
 async def create_file_operation(
@@ -147,41 +224,58 @@ async def create_file_operation(
     body: FileOperationCreate,
     space_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).create_file_operation(
-        _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
+) -> FileOperationRuntime:
+    return FileOperationRuntime.model_validate(
+        await _file_svc(request).create_file_operation(
+            _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
+        )
     )
 
 
-@router.get("/file_operations/{operation_id}", operation_id="get_file_operation")
+@router.get(
+    "/file_operations/{operation_id}",
+    response_model=FileOperationRuntime,
+    operation_id="get_file_operation",
+)
 async def get_file_operation(
     request: Request,
     operation_id: str = Path(min_length=1),
-) -> Any:
-    return await _file_svc(request).get_file_operation(_context(request), operation_id)
+) -> FileOperationRuntime:
+    return FileOperationRuntime.model_validate(
+        await _file_svc(request).get_file_operation(_context(request), operation_id)
+    )
 
 
 # ── Uploads ───────────────────────────────────────────────────────────────────
 
 
-@router.post("/storage_spaces/{space_id}/uploads", status_code=201, operation_id="create_upload")
+@router.post(
+    "/storage_spaces/{space_id}/uploads",
+    status_code=201,
+    response_model=UploadSessionRuntime,
+    operation_id="create_upload",
+)
 async def create_upload(
     request: Request,
     body: UploadCreate,
     space_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).create_upload(
-        _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
+) -> UploadSessionRuntime:
+    return UploadSessionRuntime.model_validate(
+        await _file_svc(request).create_upload(
+            _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
+        )
     )
 
 
-@router.get("/uploads/{upload_id}", operation_id="get_upload")
+@router.get("/uploads/{upload_id}", response_model=UploadSessionRuntime, operation_id="get_upload")
 async def get_upload(
     request: Request,
     upload_id: str = Path(min_length=1),
-) -> Any:
-    return await _file_svc(request).get_upload(_context(request), upload_id)
+) -> UploadSessionRuntime:
+    return UploadSessionRuntime.model_validate(
+        await _file_svc(request).get_upload(_context(request), upload_id)
+    )
 
 
 @router.put("/uploads/{upload_id}/content", status_code=204, operation_id="proxy_upload_content")
@@ -197,15 +291,21 @@ async def proxy_upload_content(
     )
 
 
-@router.post("/uploads/{upload_id}/completion", operation_id="complete_upload")
+@router.post(
+    "/uploads/{upload_id}/completion",
+    response_model=IngestionCommitResult,
+    operation_id="complete_upload",
+)
 async def complete_upload(
     request: Request,
     body: UploadComplete,
     upload_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).complete_upload(
-        _context(request), upload_id, body, idempotency_key=_idempotency_key(idempotency_key)
+) -> IngestionCommitResult:
+    return IngestionCommitResult.model_validate(
+        await _file_svc(request).complete_upload(
+            _context(request), upload_id, body, idempotency_key=_idempotency_key(idempotency_key)
+        )
     )
 
 
@@ -228,6 +328,7 @@ async def create_presigned_download(
 @router.post(
     "/storage_spaces/{space_id}/multipart_uploads",
     status_code=201,
+    response_model=MultipartUploadRuntime,
     operation_id="create_multipart_upload",
 )
 async def create_multipart_upload(
@@ -235,18 +336,26 @@ async def create_multipart_upload(
     body: MultipartCreate,
     space_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).create_multipart_upload(
-        _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
+) -> MultipartUploadRuntime:
+    return MultipartUploadRuntime.model_validate(
+        await _file_svc(request).create_multipart_upload(
+            _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
+        )
     )
 
 
-@router.get("/multipart_uploads/{multipart_id}", operation_id="get_multipart_upload")
+@router.get(
+    "/multipart_uploads/{multipart_id}",
+    response_model=MultipartUploadRuntime,
+    operation_id="get_multipart_upload",
+)
 async def get_multipart_upload(
     request: Request,
     multipart_id: str = Path(min_length=1),
-) -> Any:
-    return await _file_svc(request).get_multipart_upload(_context(request), multipart_id)
+) -> MultipartUploadRuntime:
+    return MultipartUploadRuntime.model_validate(
+        await _file_svc(request).get_multipart_upload(_context(request), multipart_id)
+    )
 
 
 @router.delete(
@@ -262,12 +371,19 @@ async def abort_multipart_upload(
     )
 
 
-@router.get("/multipart_uploads/{multipart_id}/parts", operation_id="list_multipart_parts")
+@router.get(
+    "/multipart_uploads/{multipart_id}/parts",
+    response_model=list[MultipartPartRuntime],
+    operation_id="list_multipart_parts",
+)
 async def list_multipart_parts(
     request: Request,
     multipart_id: str = Path(min_length=1),
-) -> Any:
-    return await _file_svc(request).list_multipart_parts(_context(request), multipart_id)
+) -> list[MultipartPartRuntime]:
+    return cast(
+        list[MultipartPartRuntime],
+        await _file_svc(request).list_multipart_parts(_context(request), multipart_id),
+    )
 
 
 @router.post(

@@ -6,8 +6,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import aliased
 
 from s3mp.authorization.infrastructure.models import BindingEffect, RoleBindingModel
 from s3mp.identity.application.security import PasswordCredential
@@ -273,15 +274,164 @@ class SqlAlchemyPlatformStore:
                 )
             )
 
-    async def list_platform_tenants(self) -> list[dict[str, object]]:
+    async def list_platform_tenants(
+        self, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
-            tenants = (await session.scalars(select(TenantModel).order_by(TenantModel.name))).all()
-            return [self._tenant_summary(tenant) for tenant in tenants]
+            statement = select(TenantModel).order_by(TenantModel.id).limit(limit + 1)
+            if cursor is not None:
+                statement = statement.where(TenantModel.id > cursor)
+            rows = list((await session.scalars(statement)).all())
+            page = rows[:limit]
+            return [self._tenant_summary(tenant) for tenant in page], (
+                page[-1].id if len(rows) > limit else None
+            )
 
     async def get_platform_tenant(self, tenant_id: UUID) -> dict[str, object] | None:
         async with self.session_factory() as session:
             tenant = await session.get(TenantModel, tenant_id)
             return self._tenant_summary(tenant) if tenant else None
+
+    async def list_platform_accounts(
+        self, *, limit: int, cursor: UUID | None, query: str | None, status: str | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
+        async with self.session_factory() as session:
+            statement = select(UserModel).order_by(UserModel.id).limit(limit + 1)
+            if cursor is not None:
+                statement = statement.where(UserModel.id > cursor)
+            if status is not None:
+                statement = statement.where(UserModel.status == UserStatus(status))
+            if query:
+                normalized_query = query.strip().casefold()
+                statement = statement.where(
+                    or_(
+                        UserModel.normalized_email == normalized_query,
+                        UserModel.normalized_employee_number == normalized_query,
+                        UserModel.display_name.ilike(f"%{query.strip()}%"),
+                    )
+                )
+            rows = list((await session.scalars(statement)).all())
+            page = rows[:limit]
+            return [self._account_summary(row) for row in page], (
+                page[-1].id if len(rows) > limit else None
+            )
+
+    async def get_platform_account(self, user_id: UUID) -> dict[str, object] | None:
+        async with self.session_factory() as session:
+            row = await session.get(UserModel, user_id)
+            return self._account_summary(row) if row else None
+
+    async def list_platform_roles(
+        self, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
+        async with self.session_factory() as session:
+            statement = select(PlatformRoleModel).order_by(PlatformRoleModel.id).limit(limit + 1)
+            if cursor is not None:
+                statement = statement.where(PlatformRoleModel.id > cursor)
+            rows = list((await session.scalars(statement)).all())
+            page = rows[:limit]
+            return [self._role_summary(row) for row in page], (
+                page[-1].id if len(rows) > limit else None
+            )
+
+    async def list_platform_role_bindings(
+        self, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
+        async with self.session_factory() as session:
+            statement = (
+                select(PlatformRoleBindingModel, PlatformRoleModel, UserModel)
+                .join(PlatformRoleModel, PlatformRoleModel.id == PlatformRoleBindingModel.role_id)
+                .join(UserModel, UserModel.id == PlatformRoleBindingModel.user_id)
+                .order_by(PlatformRoleBindingModel.id)
+                .limit(limit + 1)
+            )
+            if cursor is not None:
+                statement = statement.where(PlatformRoleBindingModel.id > cursor)
+            rows = list((await session.execute(statement)).all())
+            page = rows[:limit]
+            return [self._role_binding_summary(*row) for row in page], (
+                page[-1][0].id if len(rows) > limit else None
+            )
+
+    async def list_support_access(
+        self, *, limit: int, cursor: UUID | None, status: str | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
+        async with self.session_factory() as session:
+            now = datetime.now(UTC)
+            approver = aliased(UserModel)
+            statement = (
+                select(SupportAccessRequestModel, UserModel, TenantModel, approver)
+                .join(UserModel, UserModel.id == SupportAccessRequestModel.requester_user_id)
+                .join(TenantModel, TenantModel.id == SupportAccessRequestModel.tenant_id)
+                .outerjoin(approver, approver.id == SupportAccessRequestModel.approved_by_user_id)
+                .order_by(SupportAccessRequestModel.id)
+                .limit(limit + 1)
+            )
+            if cursor is not None:
+                statement = statement.where(SupportAccessRequestModel.id > cursor)
+            if status == "pending":
+                statement = statement.where(
+                    SupportAccessRequestModel.revoked_at.is_(None),
+                    SupportAccessRequestModel.approved_at.is_(None),
+                    SupportAccessRequestModel.expires_at > now,
+                )
+            elif status == "approved":
+                statement = statement.where(
+                    SupportAccessRequestModel.revoked_at.is_(None),
+                    SupportAccessRequestModel.approved_at.is_not(None),
+                    SupportAccessRequestModel.expires_at > now,
+                )
+            elif status == "revoked":
+                statement = statement.where(SupportAccessRequestModel.revoked_at.is_not(None))
+            elif status == "expired":
+                statement = statement.where(
+                    SupportAccessRequestModel.revoked_at.is_(None),
+                    SupportAccessRequestModel.expires_at <= now,
+                )
+            elif status is not None:
+                raise ValueError("unsupported support access status")
+            rows = list((await session.execute(statement)).all())
+            page = rows[:limit]
+            return [self._support_read_summary(*row, now=now) for row in page], (
+                page[-1][0].id if len(rows) > limit else None
+            )
+
+    async def get_support_access(self, request_id: UUID) -> dict[str, object] | None:
+        async with self.session_factory() as session:
+            approver = aliased(UserModel)
+            row = await session.execute(
+                select(SupportAccessRequestModel, UserModel, TenantModel, approver)
+                .join(UserModel, UserModel.id == SupportAccessRequestModel.requester_user_id)
+                .join(TenantModel, TenantModel.id == SupportAccessRequestModel.tenant_id)
+                .outerjoin(approver, approver.id == SupportAccessRequestModel.approved_by_user_id)
+                .where(SupportAccessRequestModel.id == request_id)
+            )
+            value = row.first()
+            return self._support_read_summary(*value) if value else None
+
+    async def list_platform_audit_events(
+        self, *, limit: int, cursor: UUID | None, action: str | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
+        async with self.session_factory() as session:
+            statement = (
+                select(PlatformAuditEventModel)
+                .order_by(PlatformAuditEventModel.id)
+                .limit(limit + 1)
+            )
+            if cursor is not None:
+                statement = statement.where(PlatformAuditEventModel.id > cursor)
+            if action:
+                statement = statement.where(PlatformAuditEventModel.action == action)
+            rows = list((await session.scalars(statement)).all())
+            page = rows[:limit]
+            return [self._audit_summary(row) for row in page], (
+                page[-1].id if len(rows) > limit else None
+            )
+
+    async def get_platform_audit_event(self, event_id: UUID) -> dict[str, object] | None:
+        async with self.session_factory() as session:
+            row = await session.get(PlatformAuditEventModel, event_id)
+            return self._audit_summary(row) if row else None
 
     async def create_platform_tenant(
         self, *, slug: str, name: str, initial_admin_user_id: UUID, actor_user_id: UUID
@@ -589,6 +739,88 @@ class SqlAlchemyPlatformStore:
         return len(request_ids)
 
     @staticmethod
+    def _account_summary(row: UserModel) -> dict[str, object]:
+        return {
+            "id": row.id,
+            "email": row.email,
+            "employee_number": row.employee_number,
+            "display_name": row.display_name,
+            "status": row.status.value,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+
+    @staticmethod
+    def _role_summary(row: PlatformRoleModel) -> dict[str, object]:
+        return {
+            "id": row.id,
+            "name": row.name,
+            "permissions": row.permissions,
+            "built_in": row.built_in,
+            "created_at": row.created_at,
+        }
+
+    @staticmethod
+    def _role_binding_summary(
+        binding: PlatformRoleBindingModel, role: PlatformRoleModel, user: UserModel
+    ) -> dict[str, object]:
+        return {
+            "id": binding.id,
+            "user": SqlAlchemyPlatformStore._account_summary(user),
+            "role": SqlAlchemyPlatformStore._role_summary(role),
+            "expires_at": binding.expires_at,
+            "revoked_at": binding.revoked_at,
+            "created_at": binding.created_at,
+        }
+
+    @staticmethod
+    def _support_read_summary(
+        row: SupportAccessRequestModel,
+        requester: UserModel,
+        tenant: TenantModel,
+        approver: UserModel | None,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, object]:
+        now = now or datetime.now(UTC)
+        status = (
+            "revoked"
+            if row.revoked_at
+            else "expired"
+            if row.expires_at <= now
+            else "approved"
+            if row.approved_at
+            else "pending"
+        )
+        return {
+            "id": row.id,
+            "requester": SqlAlchemyPlatformStore._account_summary(requester),
+            "approver": SqlAlchemyPlatformStore._account_summary(approver) if approver else None,
+            "tenant": SqlAlchemyPlatformStore._tenant_summary(tenant),
+            "reason": row.reason,
+            "status": status,
+            "expires_at": row.expires_at,
+            "approved_at": row.approved_at,
+            "approved_by_user_id": row.approved_by_user_id,
+            "membership_id": row.membership_id,
+            "role_binding_id": row.role_binding_id,
+            "revoked_at": row.revoked_at,
+            "created_at": row.created_at,
+        }
+
+    @staticmethod
+    def _audit_summary(row: PlatformAuditEventModel) -> dict[str, object]:
+        return {
+            "id": row.id,
+            "actor_user_id": row.actor_user_id,
+            "action": row.action,
+            "resource_type": row.resource_type,
+            "resource_id": row.resource_id,
+            "details": row.details,
+            "created_at": row.created_at,
+        }
+
+    @staticmethod
     def _support_summary(row: SupportAccessRequestModel) -> dict[str, object]:
         return {
             "id": str(row.id),
@@ -605,6 +837,7 @@ class SqlAlchemyPlatformStore:
             "slug": tenant.slug,
             "name": tenant.name,
             "status": tenant.status.value,
+            "created_at": tenant.created_at,
         }
 
     async def active_platform_admin_exists(self) -> bool:

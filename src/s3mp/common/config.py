@@ -61,8 +61,6 @@ class Settings(BaseSettings):
         if self.s3_endpoint is not None:
             if self.s3_bucket is None:
                 raise ValueError("s3_bucket is required when s3_endpoint is configured")
-            if self.environment.lower() != "development" and self.s3_endpoint.startswith("http://"):
-                raise ValueError("plain HTTP S3 endpoints are permitted only in development")
         if "*" in self.browser_origins:
             raise ValueError("browser_origins must not contain wildcard origins")
         if self.environment.lower() == "production" and self.browser_cookie_secure is False:

@@ -40,6 +40,14 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "request_support_access": "提交针对指定租户的限时支持访问申请；默认不包含文件内容权限。",
     "approve_support_access": "由不同的平台人员批准支持访问申请，并物化限时租户授权。",
     "revoke_support_access": "撤销已申请或已批准的支持访问，并回收其有效租户会话。",
+    "list_platform_accounts": "分页列出平台账户目录，可按邮箱、系统号、姓名和账户状态筛选。",
+    "get_platform_account": "获取平台账户的安全摘要；不返回密码、会话或密钥信息。",
+    "list_platform_roles": "列出平台角色及其平台权限目录。",
+    "list_platform_role_bindings": "分页列出平台角色绑定及其账户、有效期和撤销状态。",
+    "list_support_access": "分页列出支持访问申请及其待审批、已批准、已撤销或已过期状态。",
+    "get_support_access": "获取单条支持访问申请的安全详情和授权物化记录。",
+    "list_platform_audit_events": "分页检索平台控制面审计事件，可按动作筛选。",
+    "get_platform_audit_event": "获取单条平台审计事件的脱敏详情。",
     "list_groups": "列出当前租户的用户组。",
     "create_group": "创建当前租户的用户组。",
     "get_group": "获取指定用户组详情。",
@@ -208,6 +216,43 @@ def document_openapi(schema: dict[str, Any]) -> dict[str, Any]:
     """Add deterministic Chinese prose without changing protocol semantics."""
     from s3mp.common.api.dependencies import OPERATION_PERMISSION_CLASSIFICATIONS
 
+    components = schema.setdefault("components", {})
+    schemas = components.setdefault("schemas", {})
+    # Global exception handlers are not visible to FastAPI's route-level
+    # schema generation. Publish the real envelope explicitly so generated
+    # clients never have to model error responses as `unknown`.
+    schemas["ErrorEnvelope"] = {
+        "type": "object",
+        "title": "ErrorEnvelope",
+        "description": "统一错误响应；所有非成功 API 响应均使用此信封。",
+        "required": ["code", "message", "request_id"],
+        "properties": {
+            "code": {"type": "string", "description": "供程序判断的稳定错误代码。"},
+            "message": {"type": "string", "description": "面向调用方的可读错误说明。"},
+            "request_id": {"type": "string", "description": "本次请求的服务端追踪标识。"},
+            "details": {
+                "oneOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
+                    },
+                ],
+                "description": "可选的结构化错误上下文或字段校验明细。",
+            },
+        },
+    }
+    error_response = {
+        "description": "请求未成功；响应遵循统一错误信封。",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
+    }
+
     schema.setdefault("info", {})["description"] = (
         "S3MP 是面向多租户的受控文件存储服务。管理接口使用租户会话 Cookie "
         "`s3mp_session`；账户登录与平台控制接口使用账户会话 Cookie "
@@ -228,6 +273,9 @@ def document_openapi(schema: dict[str, Any]) -> dict[str, Any]:
                 operation_id, "执行该公开 API 操作；具体输入、输出和授权要求见下方说明。"
             )
             operation["description"] = description
+            responses = operation.setdefault("responses", {})
+            for status_code in ("400", "401", "403", "404", "409", "422", "500"):
+                responses[status_code] = error_response
             operation["summary"] = description.split("；", 1)[0]
             permission = OPERATION_PERMISSION_CLASSIFICATIONS.get(operation_id)
             if permission is not None:

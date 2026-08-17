@@ -1054,9 +1054,21 @@ class FileApplicationService:
             "idempotency_key": idempotency_key,
         }
         completed = await self.store.complete_upload(ctx.tenant_id, UUID(upload_id), file_data)
-        return self._public_upload(
-            await self._resolve_space(ctx.tenant_id, command.storage_space_id), completed
-        )
+        space = await self._resolve_space(ctx.tenant_id, command.storage_space_id)
+        file_object = completed.get("file_object")
+        # Keep the no-ingestion fallback contract-equivalent to the ingestion
+        # path: clients always receive a completion result, never an upload
+        # session DTO whose shape happens to depend on deployment wiring.
+        return {
+            "id": str(completed["id"]),
+            "status": str(completed.get("status", "completed")),
+            "storage_space_id": str(completed.get("storage_space_id")),
+            "etag": completed.get("etag")
+            or (file_object.get("etag") if isinstance(file_object, dict) else None),
+            "file_object": self._public_file(space, file_object)
+            if isinstance(file_object, dict)
+            else None,
+        }
 
     async def create_presigned_download(
         self, ctx: PrincipalContext, space_id: str, body: Any
