@@ -37,8 +37,8 @@ async def test_list_quotas_is_tenant_scoped(engine: AsyncEngine) -> None:
             )
             await session.commit()
 
-        quotas_a = await store.list_quotas(tenant_a, None)
-        quotas_b = await store.list_quotas(tenant_b, None)
+        quotas_a, _ = await store.list_quotas(tenant_a, None)
+        quotas_b, _ = await store.list_quotas(tenant_b, None)
         assert len(quotas_a) == 1
         assert quotas_a[0]["limit_bytes"] == 1073741824
         assert len(quotas_b) == 0
@@ -92,8 +92,8 @@ async def test_list_audit_events_is_tenant_scoped(engine: AsyncEngine) -> None:
             )
             await session.commit()
 
-        events_a = await store.list_events(tenant_a, {})
-        events_b = await store.list_events(tenant_b, {})
+        events_a, _ = await store.list_events(tenant_a, {})
+        events_b, _ = await store.list_events(tenant_b, {})
         assert len(events_a) == 1
         assert events_a[0]["action"] == "file.upload"
         assert len(events_b) == 0

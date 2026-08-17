@@ -58,8 +58,8 @@ async def test_list_connections_is_tenant_scoped(engine: AsyncEngine) -> None:
             await _seed_connection(session, tenant_a)
             await session.commit()
 
-        conns_a = await store.list_connections(tenant_a)
-        conns_b = await store.list_connections(tenant_b)
+        conns_a, _ = await store.list_connections(tenant_a)
+        conns_b, _ = await store.list_connections(tenant_b)
         assert len(conns_a) == 1
         assert conns_a[0]["name"] == "primary"
         assert len(conns_b) == 0
@@ -100,8 +100,8 @@ async def test_list_spaces_is_tenant_scoped(engine: AsyncEngine) -> None:
             await _seed_space(session, tenant_a, conn_id)
             await session.commit()
 
-        spaces_a = await store.list_spaces(tenant_a)
-        spaces_b = await store.list_spaces(tenant_b)
+        spaces_a, _ = await store.list_spaces(tenant_a)
+        spaces_b, _ = await store.list_spaces(tenant_b)
         assert len(spaces_a) == 1
         assert spaces_a[0]["bucket"] == "s3mp-dev"
         assert len(spaces_b) == 0

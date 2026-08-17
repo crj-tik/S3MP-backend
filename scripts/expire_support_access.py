@@ -1,4 +1,4 @@
-"""Expire approved support access; invoke periodically from the deployment scheduler."""
+"""Run one support-access expiry pass for manual operations or cron."""
 
 import asyncio
 from datetime import UTC, datetime

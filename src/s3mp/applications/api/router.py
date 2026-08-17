@@ -1,11 +1,13 @@
 """Applications and API Key HTTP endpoints."""
 
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Path, Request
+from fastapi import APIRouter, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
@@ -47,6 +49,84 @@ class ApiKeyRevoke(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ApplicationResponse(BaseModel):
+    """租户内应用的公开管理信息。"""
+
+    id: UUID
+    tenant_id: UUID | None = None
+    principal_id: UUID | None = None
+    name: str
+    status: str | None = None
+    authorization_version: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    owners: list[dict[str, str]] = Field(default_factory=list)
+    takeover_required: bool = False
+
+
+class ApiKeyResponse(BaseModel):
+    """API 密钥元数据；常规查询绝不返回明文 `secret`。"""
+
+    id: UUID
+    tenant_id: UUID | None = None
+    application_id: UUID | None = None
+    key_id: str | None = None
+    prefix: str | None = None
+    pepper_version: int | None = None
+    scopes: list[str] = Field(default_factory=list)
+    status: str | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class ApiKeyIssuedResponse(ApiKeyResponse):
+    """仅创建或轮换时返回一次的 API 密钥明文。"""
+
+    secret: str
+    credential: str
+
+
+class ApplicationPage(BaseModel):
+    items: list[ApplicationResponse]
+    next_cursor: str | None = None
+
+
+class ApiKeyPage(BaseModel):
+    items: list[ApiKeyResponse]
+    next_cursor: str | None = None
+
+
+def _page(
+    items: list[dict[str, Any]], position: str | None, context: PrincipalContext, *, query: str
+) -> dict[str, Any]:
+    return {
+        "items": items,
+        "next_cursor": CursorCodec(b"s3mp-management-cursor-key-v1").encode(
+            context.tenant_id,
+            context.principal_id,
+            context.authorization_version,
+            position,
+            query=query,
+        )
+        if position
+        else None,
+    }
+
+
+def _decode_cursor(value: str | None, context: PrincipalContext, *, query: str) -> str | None:
+    if value is None:
+        return None
+    return CursorCodec(b"s3mp-management-cursor-key-v1").decode(
+        value,
+        context.tenant_id,
+        context.principal_id,
+        context.authorization_version,
+        query=query,
+    )
+
+
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
 
@@ -74,83 +154,129 @@ def _key_service(request: Request) -> Any:
 # ── Applications ──────────────────────────────────────────────────────────────
 
 
-@router.get("/applications", operation_id="list_applications")
+@router.get("/applications", response_model=ApplicationPage, operation_id="list_applications")
 async def list_applications(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_applications")],
-) -> Any:
-    return await _app_service(request).list_apps(context)
+    cursor: str | None = Query(default=None),
+) -> ApplicationPage:
+    items, position = await _app_service(request).list_apps(
+        context, cursor=_decode_cursor(cursor, context, query="applications")
+    )
+    return ApplicationPage.model_validate(_page(items, position, context, query="applications"))
 
 
-@router.post("/applications", status_code=201, operation_id="create_application")
+@router.post(
+    "/applications",
+    status_code=201,
+    response_model=ApplicationResponse,
+    operation_id="create_application",
+)
 async def create_application(
     request: Request,
     body: ApplicationCreate,
     context: Annotated[PrincipalContext, management_permission("create_application")],
-) -> Any:
-    return await _app_service(request).create_app(context, body.name)
+) -> ApplicationResponse:
+    return ApplicationResponse.model_validate(
+        await _app_service(request).create_app(context, body.name)
+    )
 
 
-@router.get("/applications/{application_id}", operation_id="get_application")
+@router.get(
+    "/applications/{application_id}",
+    response_model=ApplicationResponse,
+    operation_id="get_application",
+)
 async def get_application(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("get_application")],
     application_id: UUID,
-) -> Any:
-    return await _app_service(request).get_app(context, application_id)
+) -> ApplicationResponse:
+    return ApplicationResponse.model_validate(
+        await _app_service(request).get_app(context, application_id)
+    )
 
 
-@router.patch("/applications/{application_id}", operation_id="update_application")
+@router.patch(
+    "/applications/{application_id}",
+    response_model=ApplicationResponse,
+    operation_id="update_application",
+)
 async def update_application(
     request: Request,
     body: ApplicationUpdate,
     context: Annotated[PrincipalContext, management_permission("update_application")],
-    application_id: str = Path(min_length=1),
-) -> Any:
-    return await _app_service(request).update_app(context, application_id, body.name)
+    application_id: UUID,
+) -> ApplicationResponse:
+    return ApplicationResponse.model_validate(
+        await _app_service(request).update_app(context, application_id, body.name)
+    )
 
 
-@router.post("/applications/{application_id}/takeover", operation_id="takeover_application")
+@router.post(
+    "/applications/{application_id}/takeover",
+    response_model=ApplicationResponse,
+    operation_id="takeover_application",
+)
 async def takeover_application(
     request: Request,
     body: ApplicationTakeover,
     context: Annotated[PrincipalContext, management_permission("takeover_application")],
     application_id: UUID,
-) -> Any:
-    return await _app_service(request).takeover_app(context, application_id, body.reason)
+) -> ApplicationResponse:
+    return ApplicationResponse.model_validate(
+        await _app_service(request).takeover_app(context, application_id, body.reason)
+    )
 
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
 
 
-@router.get("/applications/{application_id}/api_keys", operation_id="list_api_keys")
+@router.get(
+    "/applications/{application_id}/api_keys",
+    response_model=ApiKeyPage,
+    operation_id="list_api_keys",
+)
 async def list_api_keys(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_api_keys")],
-    application_id: str = Path(min_length=1),
-) -> Any:
-    return await _key_service(request).list_keys(context, application_id)
+    application_id: UUID,
+    cursor: str | None = Query(default=None),
+) -> ApiKeyPage:
+    items, position = await _key_service(request).list_keys(
+        context,
+        application_id,
+        cursor=_decode_cursor(cursor, context, query=f"api_keys:{application_id}"),
+    )
+    return ApiKeyPage.model_validate(
+        _page(items, position, context, query=f"api_keys:{application_id}")
+    )
 
 
 @router.post(
-    "/applications/{application_id}/api_keys", status_code=201, operation_id="create_api_key"
+    "/applications/{application_id}/api_keys",
+    status_code=201,
+    response_model=ApiKeyIssuedResponse,
+    operation_id="create_api_key",
 )
 async def create_api_key(
     request: Request,
     body: ApiKeyCreate,
     context: Annotated[PrincipalContext, management_permission("create_api_key")],
-    application_id: str = Path(min_length=1),
-) -> Any:
-    return await _key_service(request).issue(context, application_id, body.scopes, body.ttl_days)
+    application_id: UUID,
+) -> ApiKeyIssuedResponse:
+    return ApiKeyIssuedResponse.model_validate(
+        await _key_service(request).issue(context, application_id, body.scopes, body.ttl_days)
+    )
 
 
-@router.get("/api_keys/{api_key_id}", operation_id="get_api_key")
+@router.get("/api_keys/{api_key_id}", response_model=ApiKeyResponse, operation_id="get_api_key")
 async def get_api_key(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("get_api_key")],
     api_key_id: str = Path(min_length=1),
-) -> Any:
-    return await _key_service(request).get_key(context, api_key_id)
+) -> ApiKeyResponse:
+    return ApiKeyResponse.model_validate(await _key_service(request).get_key(context, api_key_id))
 
 
 @router.get("/api_keys/{api_key_id}/secret", status_code=410, operation_id="get_api_key_secret")
@@ -164,21 +290,34 @@ async def get_api_key_secret(
     )
 
 
-@router.post("/api_keys/{api_key_id}/rotations", status_code=201, operation_id="rotate_api_key")
+@router.post(
+    "/api_keys/{api_key_id}/rotations",
+    status_code=201,
+    response_model=ApiKeyIssuedResponse,
+    operation_id="rotate_api_key",
+)
 async def rotate_api_key(
     request: Request,
     body: ApiKeyRotate,
     context: Annotated[PrincipalContext, management_permission("rotate_api_key")],
     api_key_id: str = Path(min_length=1),
-) -> Any:
-    return await _key_service(request).rotate(context, api_key_id, body.overlap_seconds)
+) -> ApiKeyIssuedResponse:
+    return ApiKeyIssuedResponse.model_validate(
+        await _key_service(request).rotate(context, api_key_id, body.overlap_seconds)
+    )
 
 
-@router.post("/api_keys/{api_key_id}/revocations", operation_id="revoke_api_key")
+@router.post(
+    "/api_keys/{api_key_id}/revocations",
+    response_model=ApiKeyResponse,
+    operation_id="revoke_api_key",
+)
 async def revoke_api_key(
     request: Request,
     body: ApiKeyRevoke,
     context: Annotated[PrincipalContext, management_permission("revoke_api_key")],
     api_key_id: str = Path(min_length=1),
-) -> Any:
-    return await _key_service(request).revoke(context, api_key_id, body.reason)
+) -> ApiKeyResponse:
+    return ApiKeyResponse.model_validate(
+        await _key_service(request).revoke(context, api_key_id, body.reason)
+    )

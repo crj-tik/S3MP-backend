@@ -114,7 +114,7 @@ async def test_logout_with_csrf_revokes_account_session_and_clears_cookies() -> 
 async def test_tenant_security_domain_wins_for_business_mutation_with_both_sessions() -> None:
     app = app_with_account_context()
 
-    @app.post("/api/v1/test-tenant-mutation")
+    @app.post("/api/v1/test-tenant-mutation")  # type: ignore[untyped-decorator]
     async def tenant_mutation() -> dict[str, bool]:
         return {"ok": True}
 

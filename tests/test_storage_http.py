@@ -18,9 +18,11 @@ class FakeStorageService:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def list_connections(self, tenant_id: Any) -> list[dict[str, Any]]:
+    async def list_connections(
+        self, tenant_id: Any, cursor: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
         self.calls += 1
-        return [{"id": str(uuid4()), "name": "primary", "status": "active"}]
+        return ([{"id": str(uuid4()), "name": "primary", "status": "active"}], None)
 
     async def get_connection(self, tenant_id: Any, conn_id: str) -> dict[str, Any]:
         return {"id": conn_id, "name": "primary", "status": "active"}
@@ -38,9 +40,11 @@ class FakeStorageService:
     ) -> dict[str, Any]:
         return {"connection_id": conn_id, "reachable": True, "writable": True}
 
-    async def list_spaces(self, context: Any) -> dict[str, Any]:
-        return {
-            "items": [
+    async def list_spaces(
+        self, context: Any, cursor: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        return (
+            [
                 {
                     "id": str(uuid4()),
                     "tenant_id": str(context.tenant_id),
@@ -53,14 +57,34 @@ class FakeStorageService:
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             ],
-            "next_cursor": None,
-        }
+            None,
+        )
 
     async def get_space(self, tenant_id: Any, space_id: str) -> dict[str, Any]:
-        return {"id": space_id, "name": "default", "bucket": "s3mp-dev"}
+        return {
+            "id": space_id,
+            "tenant_id": str(tenant_id.tenant_id),
+            "connection_id": str(uuid4()),
+            "name": "default",
+            "bucket": "s3mp-dev",
+            "root_prefix": "",
+            "provider_target_version": 1,
+            "status": "active",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
 
     async def create_space(self, tenant_id: Any, body: Any) -> dict[str, Any]:
-        return {"id": str(uuid4()), "name": body.name, "bucket": body.bucket}
+        return {
+            "id": str(uuid4()),
+            "tenant_id": str(tenant_id.tenant_id),
+            "connection_id": body.connection_id,
+            "name": body.name,
+            "bucket": body.bucket,
+            "root_prefix": body.root_prefix,
+            "provider_target_version": 1,
+            "status": "active",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
 
 
 class DenyingAuthorizationManagement:
@@ -80,7 +104,7 @@ async def test_list_storage_connections_returns_200() -> None:
         response = await client.get("/api/v1/storage_connections")
 
     assert response.status_code == 200
-    assert response.json()[0]["name"] == "primary"
+    assert response.json()["items"][0]["name"] == "primary"
 
 
 async def test_create_storage_connection_returns_201() -> None:

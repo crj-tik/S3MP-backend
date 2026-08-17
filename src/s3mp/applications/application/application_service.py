@@ -17,7 +17,24 @@ from s3mp.identity.domain.context import PrincipalContext
 
 def _public_api_key(record: dict[str, Any]) -> dict[str, Any]:
     """Remove verification material before returning an API-key record publicly."""
-    return {key: value for key, value in record.items() if key != "secret_digest"}
+    public = {key: value for key, value in record.items() if key != "secret_digest"}
+    public.setdefault("prefix", public.get("key_id"))
+    return public
+
+
+async def _application_view(store: Any, tenant_id: UUID, record: dict[str, Any]) -> dict[str, Any]:
+    public = dict(record)
+    app_id = UUID(str(public["id"]))
+    if hasattr(store, "list_owner_summaries"):
+        public["owners"] = await store.list_owner_summaries(tenant_id, app_id)
+    else:
+        owner_ids = await store.list_owners(tenant_id, app_id)
+        public["owners"] = [
+            {"principal_id": str(owner_id), "principal_type": "unknown"}
+            for owner_id in owner_ids
+        ]
+    public["takeover_required"] = public.get("status") == "pending_takeover"
+    return public
 
 
 class ApplicationStore(Protocol):
@@ -40,6 +57,9 @@ class ApplicationStore(Protocol):
     ) -> dict[str, Any] | None: ...
 
     async def list_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
+    async def list_owner_summaries(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> list[dict[str, str]]: ...
     async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
     async def recompute_owner_state_for_principal(
         self, tenant_id: UUID, owner_principal_id: UUID
@@ -94,18 +114,23 @@ class ApplicationService:
         self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "applications.read")
-        return await self.store.list_apps(context.tenant_id, min(limit, 200), cursor)
+        items, next_cursor = await self.store.list_apps(context.tenant_id, min(limit, 200), cursor)
+        views = [await _application_view(self.store, context.tenant_id, item) for item in items]
+        return views, next_cursor
 
     async def get_app(self, context: PrincipalContext, app_id: UUID) -> dict[str, Any]:
         result = await self.store.get_app(context.tenant_id, app_id)
         if result is None:
             raise ApiError("resource_not_found", "Application not found", status_code=404)
         await self._require_owner_or_permission(context, app_id, "applications.read")
-        return result
+        return await _application_view(self.store, context.tenant_id, result)
 
     async def create_app(self, context: PrincipalContext, name: str) -> dict[str, Any]:
         await self._require(context, "applications.manage")
-        return await self.store.create_app(context.tenant_id, name, context.principal_id)
+        return await _application_view(
+            self.store, context.tenant_id,
+            await self.store.create_app(context.tenant_id, name, context.principal_id),
+        )
 
     async def update_app(
         self, context: PrincipalContext, app_id: UUID, name: str | None
@@ -114,7 +139,7 @@ class ApplicationService:
         result = await self.store.update_app(context.tenant_id, app_id, name)
         if result is None:
             raise ApiError("resource_not_found", "Application not found", status_code=404)
-        return result
+        return await _application_view(self.store, context.tenant_id, result)
 
     async def takeover_app(
         self, context: PrincipalContext, app_id: UUID, reason: str
@@ -140,7 +165,7 @@ class ApplicationService:
         )
         if result is None:
             raise ApiError("resource_not_found", "Application not found", status_code=404)
-        return result
+        return await _application_view(self.store, context.tenant_id, result)
 
     async def check_orphan(self, tenant_id: UUID, app_id: UUID) -> bool:
         owners = await self.store.list_owners(tenant_id, app_id)

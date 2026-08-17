@@ -8,7 +8,9 @@ from s3mp.platform.domain.context import PlatformContext
 
 
 class PlatformTenantStore(Protocol):
-    async def list_platform_tenants(self) -> list[dict[str, object]]: ...
+    async def list_platform_tenants(
+        self, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[dict[str, object]], UUID | None]: ...
 
     async def get_platform_tenant(self, tenant_id: UUID) -> dict[str, object] | None: ...
 
@@ -25,8 +27,10 @@ class PlatformTenantLifecycleService:
     def __init__(self, store: PlatformTenantStore) -> None:
         self._store = store
 
-    async def list_tenants(self, _actor: PlatformContext) -> list[dict[str, object]]:
-        return await self._store.list_platform_tenants()
+    async def list_tenants(
+        self, _actor: PlatformContext, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[dict[str, object]], UUID | None]:
+        return await self._store.list_platform_tenants(limit=limit, cursor=cursor)
 
     async def get_tenant(self, _actor: PlatformContext, tenant_id: UUID) -> dict[str, object]:
         tenant = await self._store.get_platform_tenant(tenant_id)

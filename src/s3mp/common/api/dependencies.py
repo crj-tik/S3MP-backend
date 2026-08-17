@@ -25,6 +25,7 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "list_roles": "roles.read",
     "create_role": "roles.manage",
     "get_role": "roles.read",
+    "get_permission_catalog": "roles.read",
     "update_role": "roles.manage",
     "list_role_bindings": "role_bindings.read",
     "create_role_binding": "role_bindings.manage",
@@ -55,6 +56,14 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "update_quota": "quotas.manage",
     "list_audit_events": "audit.read",
     "get_audit_event": "audit.read",
+    "list_platform_accounts": "platform.accounts.read",
+    "get_platform_account": "platform.accounts.read",
+    "list_platform_roles": "platform.roles.read",
+    "list_platform_role_bindings": "platform.roles.read",
+    "list_support_access": "platform.support.read",
+    "get_support_access": "platform.support.read",
+    "list_platform_audit_events": "platform.audit.read",
+    "get_platform_audit_event": "platform.audit.read",
 }
 
 # These routes remain available to an API-key application principal.  Their

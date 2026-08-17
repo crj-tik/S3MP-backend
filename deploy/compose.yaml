@@ -45,3 +45,17 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+
+  platform-scheduler:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "s3mp.platform.scheduler"]
+    environment:
+      <<: *s3mp-runtime-environment
+      S3MP_SUPPORT_EXPIRY_INTERVAL_SECONDS: "60"
+    healthcheck:
+      test: ["CMD", "python", "-m", "s3mp.platform.scheduler", "--once"]
+      interval: 30s
+      timeout: 20s
+      retries: 3

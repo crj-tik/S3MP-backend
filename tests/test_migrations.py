@@ -12,7 +12,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
 
-from _infrastructure import real_engine
+from _infrastructure import TEST_DATABASE_URL, real_engine
 
 EXPECTED_TABLES = {
     "alembic_version",
@@ -59,7 +59,9 @@ EXPECTED_TABLES = {
 
 def migration_config() -> Config:
     config = Config("alembic.ini")
-    # alembic.ini already points to the real pg database; no override needed.
+    # pytest runs on the host; use the same host-local endpoint as other
+    # integration tests instead of the Docker-only host.docker.internal name.
+    config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
     return config
 
 

@@ -111,6 +111,26 @@ def test_management_route_enforcement_check_accepts_current_routes() -> None:
     assert validate_management_route_enforcement() == []
 
 
+def test_platform_control_plane_operations_have_explicit_success_schemas() -> None:
+    document = _runtime_openapi()
+    operations = {
+        operation.get("operationId"): operation
+        for path in document["paths"].values()
+        for operation in path.values()
+        if isinstance(operation, dict) and operation.get("operationId")
+    }
+    for operation_id in (
+        "list_platform_accounts",
+        "list_platform_roles",
+        "list_platform_role_bindings",
+        "list_support_access",
+        "list_platform_audit_events",
+    ):
+        response = operations[operation_id]["responses"]["200"]
+        schema = response["content"]["application/json"]["schema"]
+        assert schema["$ref"].startswith("#/components/schemas/")
+
+
 @pytest.mark.parametrize(
     "path",
     [

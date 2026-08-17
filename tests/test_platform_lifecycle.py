@@ -1,19 +1,26 @@
 """Platform lifecycle services retain the global/tenant authority boundary."""
 
+import asyncio
+import sys
 from datetime import datetime, timedelta
+from types import CoroutineType
 from uuid import UUID, uuid4
 
 import pytest
 
 from s3mp.common.errors import ApiError
+from s3mp.platform import scheduler
+from s3mp.platform.application.baseline import SUPPORT_ROLE_PERMISSIONS
 from s3mp.platform.application.support_access import SupportAccessService
 from s3mp.platform.application.tenant_lifecycle import PlatformTenantLifecycleService
 from s3mp.platform.domain.context import PlatformContext
 
 
 class TenantStore:
-    async def list_platform_tenants(self) -> list[dict[str, object]]:
-        return []
+    async def list_platform_tenants(
+        self, **_kwargs: object
+    ) -> tuple[list[dict[str, object]], None]:
+        return [], None
 
     async def get_platform_tenant(self, _tenant_id: UUID) -> dict[str, object] | None:
         return None
@@ -91,3 +98,34 @@ async def test_support_access_requires_an_independent_approver() -> None:
         await service.approve(PlatformContext(requester, uuid4(), frozenset()), uuid4())
 
     assert raised.value.code == "conflict"
+
+
+def test_support_role_is_read_only_and_excludes_file_and_credential_permissions() -> None:
+    assert all(
+        permission.endswith(".read") or permission == "audit.read"
+        for permission in SUPPORT_ROLE_PERMISSIONS
+    )
+    assert not any(permission.startswith("files.") for permission in SUPPORT_ROLE_PERMISSIONS)
+    assert "api_keys.manage" not in SUPPORT_ROLE_PERMISSIONS
+    assert not any(
+        permission.startswith("storage_connections.manage")
+        for permission in SUPPORT_ROLE_PERMISSIONS
+    )
+
+
+def test_scheduler_healthcheck_entrypoint_runs_one_expiry_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invoked: list[str] = []
+
+    def run(coroutine: object) -> None:
+        assert isinstance(coroutine, CoroutineType)
+        invoked.append(coroutine.cr_code.co_name)
+        coroutine.close()
+
+    monkeypatch.setattr(sys, "argv", ["scheduler", "--once"])
+    monkeypatch.setattr(asyncio, "run", run)
+
+    scheduler.main()
+
+    assert invoked == ["run_once"]

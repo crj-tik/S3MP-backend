@@ -41,11 +41,11 @@ def _ensure_models_loaded() -> None:
 
 _ensure_models_loaded()
 
-# pg: same credentials as alembic.ini (s3mp_app); the ``s3mp`` role does
-# not exist in the deployed instance.
+# pg: pytest runs on the Windows host, so it must use the published localhost
+# port. Dockerized API/worker processes use host.docker.internal instead.
 TEST_DATABASE_URL = os.environ.get(
     "S3MP_TEST_DATABASE_URL",
-    "postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp",
+    "postgresql+asyncpg://s3mp_app:bk-s3mp-backend@localhost:18110/s3mp",
 )
 
 # redis: dedicated DB 15 to avoid colliding with application data on DB 0.

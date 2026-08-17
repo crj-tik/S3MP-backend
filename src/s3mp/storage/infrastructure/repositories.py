@@ -42,16 +42,22 @@ class SqlAlchemyStorageStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
 
-    async def list_connections(self, tenant_id: UUID) -> list[dict[str, object]]:
+    async def list_connections(
+        self, tenant_id: UUID, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
+            statement = select(StorageConnectionModel).where(
+                StorageConnectionModel.tenant_id == tenant_id
+            )
+            if cursor:
+                statement = statement.where(StorageConnectionModel.id > UUID(cursor))
             models = (
                 await session.scalars(
-                    select(StorageConnectionModel)
-                    .where(StorageConnectionModel.tenant_id == tenant_id)
-                    .order_by(StorageConnectionModel.name)
+                    statement.order_by(StorageConnectionModel.id).limit(limit + 1)
                 )
             ).all()
-        return [_connection(item) for item in models]
+        page, extra = models[:limit], len(models) > limit
+        return [_connection(item) for item in page], str(page[-1].id) if extra and page else None
 
     async def get_connection(self, tenant_id: UUID, conn_id: UUID) -> dict[str, object] | None:
         async with self._sessions() as session:
@@ -72,16 +78,18 @@ class SqlAlchemyStorageStore:
             await session.flush()
             return _connection(model)
 
-    async def list_spaces(self, tenant_id: UUID) -> list[dict[str, object]]:
+    async def list_spaces(
+        self, tenant_id: UUID, limit: int = 50, cursor: str | None = None
+    ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
+            statement = select(StorageSpaceModel).where(StorageSpaceModel.tenant_id == tenant_id)
+            if cursor:
+                statement = statement.where(StorageSpaceModel.id > UUID(cursor))
             models = (
-                await session.scalars(
-                    select(StorageSpaceModel)
-                    .where(StorageSpaceModel.tenant_id == tenant_id)
-                    .order_by(StorageSpaceModel.name)
-                )
+                await session.scalars(statement.order_by(StorageSpaceModel.id).limit(limit + 1))
             ).all()
-        return [_space(item) for item in models]
+        page, extra = models[:limit], len(models) > limit
+        return [_space(item) for item in page], str(page[-1].id) if extra and page else None
 
     async def get_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, object] | None:
         async with self._sessions() as session:

@@ -98,9 +98,8 @@ async def test_list_applications_returns_200() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    # list_apps returns ([apps], cursor) → serialized as [apps_list, cursor]
-    assert isinstance(body, list)
-    assert body[0][0]["name"] == "app-1"
+    assert body["items"][0]["name"] == "app-1"
+    assert body["next_cursor"] is None
 
 
 async def test_create_application_returns_201() -> None:
@@ -122,6 +121,18 @@ async def test_takeover_application_returns_200() -> None:
 
     assert response.status_code == 200
     assert response.json()["status"] == "active"
+
+
+async def test_application_id_must_be_uuid_before_authorization_query() -> None:
+    app = _app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.patch(
+            "/api/v1/applications/app_demo",
+            json={"name": "renamed"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_failed"
 
 
 async def test_create_api_key_returns_201_with_one_time_secret() -> None:

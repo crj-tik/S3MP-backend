@@ -19,9 +19,12 @@ from s3mp.identity.infrastructure.models import (
 from s3mp.platform.infrastructure.models import (
     PlatformAuditEventModel,
     PlatformBootstrapStateModel,
+    PlatformRoleModel,
     SupportAccessRequestModel,
+    TenantLifecycleStatus,
 )
 from s3mp.platform.infrastructure.repository import SqlAlchemyPlatformStore
+from s3mp.platform.scheduler import expire_once
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
@@ -119,6 +122,194 @@ async def test_tenant_creation_rejects_invalid_initial_admin_without_partial_ten
         await _delete_users(store, user_id, actor_id)
 
 
+async def test_platform_management_workflow_discovers_and_closes_control_plane_records(
+    engine: AsyncEngine,
+) -> None:
+    store = SqlAlchemyPlatformStore(real_session_factory(engine))
+    actor_id, initial_admin_id, target_id, approver_id = (uuid4() for _ in range(4))
+    suffix = uuid4().hex
+    tenant_id: UUID | None = None
+    async with store.session_factory.begin() as session:
+        for current_id, label in (
+            (actor_id, "Actor"),
+            (initial_admin_id, "Initial admin"),
+            (target_id, "Target"),
+            (approver_id, "Approver"),
+        ):
+            email = f"{current_id}@example.test"
+            session.add(
+                UserModel(
+                    id=current_id,
+                    email=email,
+                    normalized_email=email,
+                    display_name=label,
+                    status=UserStatus.ACTIVE,
+                )
+            )
+    try:
+        accounts, _ = await store.list_platform_accounts(
+            limit=10,
+            cursor=None,
+            query=f"{initial_admin_id}@example.test",
+            status="active",
+        )
+        assert len(accounts) == 1 and accounts[0]["id"] == initial_admin_id
+
+        tenant = await store.create_platform_tenant(
+            slug=f"workflow-{suffix}",
+            name="Workflow tenant",
+            initial_admin_user_id=initial_admin_id,
+            actor_user_id=actor_id,
+        )
+        tenant_id = UUID(str(tenant["id"]))
+
+        binding = await store.grant_platform_role(
+            actor_user_id=actor_id,
+            user_id=target_id,
+            role_name="platform_operator",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+        bindings, _ = await store.list_platform_role_bindings(limit=10, cursor=None)
+        assert any(item["id"] == UUID(str(binding["id"])) for item in bindings)
+        assert await store.revoke_platform_role(
+            actor_user_id=actor_id, binding_id=UUID(str(binding["id"]))
+        )
+
+        requested = await store.request_support_access(
+            requester_user_id=target_id,
+            tenant_id=tenant_id,
+            reason="workflow verification",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+        request_id = UUID(str(requested["id"]))
+        approved = await store.approve_support_access(
+            approver_user_id=approver_id, request_id=request_id
+        )
+        assert approved is not None
+        support = await store.get_support_access(request_id)
+        assert support is not None and support["status"] == "approved"
+        approver_summary = support["approver"]
+        assert isinstance(approver_summary, dict)
+        assert approver_summary["id"] == approver_id
+        tenant_summary = support["tenant"]
+        assert isinstance(tenant_summary, dict)
+        assert tenant_summary["id"] == str(tenant_id)
+        assert await store.revoke_support_access(actor_user_id=approver_id, request_id=request_id)
+        support = await store.get_support_access(request_id)
+        assert support is not None and support["status"] == "revoked"
+    finally:
+        if tenant_id is not None:
+            await delete_tenant(engine, tenant_id)
+        async with store.session_factory.begin() as session:
+            await session.execute(
+                delete(SupportAccessRequestModel).where(
+                    SupportAccessRequestModel.requester_user_id == target_id
+                )
+            )
+        await _delete_users(store, actor_id, initial_admin_id, target_id, approver_id)
+
+
+async def test_platform_inventory_and_support_pages_filter_before_limiting(
+    engine: AsyncEngine,
+) -> None:
+    store = SqlAlchemyPlatformStore(real_session_factory(engine))
+    tenant_ids = [UUID(int=value) for value in (1001, 1002, 1003)]
+    role_ids = [UUID(int=value) for value in (1011, 1012, 1013)]
+    requester_id, approver_id = UUID(int=1021), UUID(int=1022)
+    request_ids = [UUID(int=value) for value in (1031, 1032, 1033)]
+    suffix = uuid4().hex
+    now = datetime.now(UTC)
+    async with store.session_factory.begin() as session:
+        for index, tenant_id in enumerate(tenant_ids):
+            session.add(
+                TenantModel(
+                    id=tenant_id,
+                    slug=f"page-{suffix[:12]}-{index}",
+                    name=f"Page tenant {index}",
+                    status=TenantLifecycleStatus.ACTIVE,
+                )
+            )
+        for index, role_id in enumerate(role_ids):
+            session.add(
+                PlatformRoleModel(
+                    id=role_id,
+                    name=f"page-role-{suffix}-{index}",
+                    permissions=[],
+                    built_in=False,
+                )
+            )
+        for user_id, label in ((requester_id, "Requester"), (approver_id, "Approver")):
+            email = f"{user_id}@example.test"
+            session.add(
+                UserModel(
+                    id=user_id,
+                    email=email,
+                    normalized_email=email,
+                    display_name=label,
+                    status=UserStatus.ACTIVE,
+                )
+            )
+        await session.flush()
+        session.add_all(
+            [
+                SupportAccessRequestModel(
+                    id=request_ids[0],
+                    requester_user_id=requester_id,
+                    tenant_id=tenant_ids[0],
+                    reason="revoked first",
+                    expires_at=now + timedelta(minutes=5),
+                    revoked_at=now,
+                ),
+                SupportAccessRequestModel(
+                    id=request_ids[1],
+                    requester_user_id=requester_id,
+                    tenant_id=tenant_ids[1],
+                    reason="first pending",
+                    expires_at=now + timedelta(minutes=5),
+                ),
+                SupportAccessRequestModel(
+                    id=request_ids[2],
+                    requester_user_id=requester_id,
+                    tenant_id=tenant_ids[2],
+                    reason="second pending",
+                    expires_at=now + timedelta(minutes=5),
+                ),
+            ]
+        )
+    try:
+        tenants, tenant_cursor = await store.list_platform_tenants(limit=2, cursor=None)
+        assert [item["id"] for item in tenants] == [str(value) for value in tenant_ids[:2]]
+        assert tenant_cursor == tenant_ids[1]
+        tenants, tenant_cursor = await store.list_platform_tenants(limit=2, cursor=tenant_cursor)
+        assert tenants[0]["id"] == str(tenant_ids[2])
+
+        roles, role_cursor = await store.list_platform_roles(limit=2, cursor=None)
+        assert [item["id"] for item in roles] == role_ids[:2]
+        assert role_cursor == role_ids[1]
+        roles, role_cursor = await store.list_platform_roles(limit=2, cursor=role_cursor)
+        assert roles[0]["id"] == role_ids[2]
+
+        pending, next_cursor = await store.list_support_access(
+            limit=1, cursor=None, status="pending"
+        )
+        assert [item["id"] for item in pending] == [request_ids[1]]
+        assert next_cursor == request_ids[1]
+        pending, next_cursor = await store.list_support_access(
+            limit=1, cursor=next_cursor, status="pending"
+        )
+        assert [item["id"] for item in pending] == [request_ids[2]]
+    finally:
+        async with store.session_factory.begin() as session:
+            await session.execute(
+                delete(SupportAccessRequestModel).where(SupportAccessRequestModel.id.in_(request_ids))
+            )
+            await session.execute(
+                delete(PlatformRoleModel).where(PlatformRoleModel.id.in_(role_ids))
+            )
+            await session.execute(delete(TenantModel).where(TenantModel.id.in_(tenant_ids)))
+        await _delete_users(store, requester_id, approver_id)
+
+
 async def test_expired_platform_role_is_ineffective_and_can_be_regranted(
     engine: AsyncEngine,
 ) -> None:
@@ -187,8 +378,8 @@ async def test_support_access_expiry_revokes_materialized_tenant_access(
         )
         assert approved is not None
         assert (
-            await store.expire_support_access(
-                now=expires_at + timedelta(seconds=1), request_ids=(request_id,)
+            await expire_once(
+                store, now=expires_at + timedelta(seconds=1), request_ids=(request_id,)
             )
             == 1
         )

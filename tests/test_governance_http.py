@@ -18,10 +18,10 @@ class FakeQuotaService:
         self.calls = 0
 
     async def list_quotas(
-        self, tenant_id: Any, storage_space_id: str | None = None
-    ) -> list[dict[str, Any]]:
+        self, tenant_id: Any, storage_space_id: str | None = None, cursor: str | None = None
+    ) -> tuple[list[dict[str, Any]], str | None]:
         self.calls += 1
-        return [{"id": str(uuid4()), "limit_bytes": 1073741824, "used_bytes": 0}]
+        return ([{"id": str(uuid4()), "limit_bytes": 1073741824, "used_bytes": 0}], None)
 
     async def get_quota(self, tenant_id: Any, quota_id: Any) -> dict[str, Any]:
         return {"id": str(quota_id), "limit_bytes": 1073741824, "used_bytes": 0}
@@ -39,8 +39,12 @@ class FakeAuditService:
         occurred_to: str | None = None,
         action: str | None = None,
         actor_principal_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        return [{"id": str(uuid4()), "action": "file.upload", "resource_type": "file_object"}]
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        return (
+            [{"id": str(uuid4()), "action": "file.upload", "resource_type": "file_object"}],
+            None,
+        )
 
     async def get_audit_event(self, tenant_id: Any, audit_event_id: Any) -> dict[str, Any]:
         return {"id": str(audit_event_id), "action": "file.upload"}
@@ -66,7 +70,7 @@ async def test_list_quotas_returns_200() -> None:
         response = await client.get("/api/v1/quotas")
 
     assert response.status_code == 200
-    assert response.json()[0]["limit_bytes"] == 1073741824
+    assert response.json()["items"][0]["limit_bytes"] == 1073741824
 
 
 async def test_update_quota_returns_200() -> None:
@@ -84,7 +88,7 @@ async def test_list_audit_events_returns_200() -> None:
         response = await client.get("/api/v1/audit_events")
 
     assert response.status_code == 200
-    assert response.json()[0]["action"] == "file.upload"
+    assert response.json()["items"][0]["action"] == "file.upload"
 
 
 async def test_unauthenticated_request_returns_401() -> None:

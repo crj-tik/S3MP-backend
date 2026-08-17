@@ -30,6 +30,7 @@ class IdempotentApplicationService:
     def __init__(self) -> None:
         self.successful_creates = 0
         self._first_name: str | None = None
+        self._first_result: dict[str, Any] | None = None
 
     async def list_apps(
         self, tenant_id: Any, limit: int = 50, cursor: str | None = None
@@ -43,7 +44,8 @@ class IdempotentApplicationService:
         if self._first_name is None:
             self._first_name = name
             self.successful_creates += 1
-            return {"id": str(uuid4()), "name": name, "status": "active"}
+            self._first_result = {"id": str(uuid4()), "name": name, "status": "active"}
+            return self._first_result
         # Second call with a different name → simulate reuse detection.
         if name != self._first_name:
             raise ApiError(
@@ -52,7 +54,8 @@ class IdempotentApplicationService:
                 status_code=409,
             )
         # Same name → idempotent replay (return the original result).
-        return {"id": "replayed", "name": name, "status": "active"}
+        assert self._first_result is not None
+        return self._first_result
 
     async def update_app(self, tenant_id: Any, app_id: Any, name: str | None) -> dict[str, Any]:
         return {"id": str(app_id), "name": name or "x", "status": "active"}

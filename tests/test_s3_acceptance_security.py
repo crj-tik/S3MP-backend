@@ -85,10 +85,17 @@ def _adapter() -> S3Adapter:
 class TestS3Connection:
     """Region, TLS, gateway, presigned TTL, and network conditions."""
 
-    def test_requires_https(self) -> None:
+    def test_allows_http_when_tls_is_not_required(self) -> None:
+        config = S3ConnectionConfig(
+            endpoint="http://s3.example.com", region="us-east-1", path_style=True
+        )
+        assert config.endpoint.startswith("http://")
         with pytest.raises(ValueError, match="TLS"):
             S3ConnectionConfig(
-                endpoint="http://s3.example.com", region="us-east-1", path_style=True
+                endpoint="http://s3.example.com",
+                region="us-east-1",
+                path_style=True,
+                tls_required=True,
             )
 
     def test_requires_endpoint_and_region(self) -> None:

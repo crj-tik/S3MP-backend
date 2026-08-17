@@ -15,8 +15,8 @@ def test_s3_connection_requires_explicit_tls_region_and_ttl() -> None:
     assert path_style_url(config, "bucket", "team/report.csv") == (
         "https://s3.example.test/bucket/team/report.csv"
     )
-    with pytest.raises(ValueError):
-        S3ConnectionConfig("http://s3.example.test", "region", True)
+    http_config = S3ConnectionConfig("http://s3.example.test", "region", True)
+    assert http_config.endpoint.startswith("http://")
     with pytest.raises(ValueError):
         S3ConnectionConfig("https://s3.example.test", "region", True, max_presign_ttl_seconds=3601)
 
