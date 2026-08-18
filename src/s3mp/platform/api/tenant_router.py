@@ -35,12 +35,19 @@ class TenantUpdate(_Strict):
     status: Literal["active", "suspended"] | None = None
 
 
+class TenantLifecycleRequest(_Strict):
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class PlatformTenantResponse(_Strict):
     id: UUID
     slug: str
     name: str
-    status: Literal["active", "suspended"]
+    status: Literal["active", "suspended", "deleted"]
     created_at: datetime | None = None
+    deleted_at: datetime | None = None
+    deleted_by: UUID | None = None
+    deletion_reason: str | None = None
 
 
 class PlatformTenantPage(_Strict):
@@ -80,9 +87,10 @@ async def list_tenants(
     service: Annotated[PlatformTenantLifecycleService, tenant_service],
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
+    include_deleted: bool = Query(default=False),
 ) -> PlatformTenantPage:
     items, position = await service.list_tenants(
-        context, limit=limit, cursor=_cursor(cursor, context)
+        context, limit=limit, cursor=_cursor(cursor, context), include_deleted=include_deleted
     )
     return PlatformTenantPage(
         items=[PlatformTenantResponse.model_validate(item) for item in items],
@@ -114,9 +122,14 @@ async def create_tenant(
     context: ManageContext,
     service: Annotated[PlatformTenantLifecycleService, tenant_service],
 ) -> PlatformTenantResponse:
-    return PlatformTenantResponse.model_validate(await service.create_tenant(
-        context, slug=body.slug, name=body.name, initial_admin_user_id=body.initial_admin_user_id
-    ))
+    return PlatformTenantResponse.model_validate(
+        await service.create_tenant(
+            context,
+            slug=body.slug,
+            name=body.name,
+            initial_admin_user_id=body.initial_admin_user_id,
+        )
+    )
 
 
 @router.patch(
@@ -130,7 +143,37 @@ async def update_tenant(
     context: ManageContext,
     service: Annotated[PlatformTenantLifecycleService, tenant_service],
 ) -> PlatformTenantResponse:
-    result = await service.update_tenant(
-        context, tenant_id, name=body.name, status=body.status
-    )
+    result = await service.update_tenant(context, tenant_id, name=body.name, status=body.status)
     return PlatformTenantResponse.model_validate(result)
+
+
+@router.delete(
+    "/tenants/{tenant_id}",
+    response_model=PlatformTenantResponse,
+    operation_id="delete_platform_tenant",
+)
+async def delete_tenant(
+    tenant_id: UUID,
+    body: TenantLifecycleRequest,
+    context: ManageContext,
+    service: Annotated[PlatformTenantLifecycleService, tenant_service],
+) -> PlatformTenantResponse:
+    return PlatformTenantResponse.model_validate(
+        await service.delete_tenant(context, tenant_id, body.reason)
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/restore",
+    response_model=PlatformTenantResponse,
+    operation_id="restore_platform_tenant",
+)
+async def restore_tenant(
+    tenant_id: UUID,
+    body: TenantLifecycleRequest,
+    context: ManageContext,
+    service: Annotated[PlatformTenantLifecycleService, tenant_service],
+) -> PlatformTenantResponse:
+    return PlatformTenantResponse.model_validate(
+        await service.restore_tenant(context, tenant_id, body.reason)
+    )

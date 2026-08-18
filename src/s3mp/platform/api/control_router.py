@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import application_service
@@ -34,11 +34,18 @@ class AccountSummary(_Strict):
     status: str
     created_at: datetime | None
     updated_at: datetime | None
+    deleted_at: datetime | None = None
+    deleted_by: UUID | None = None
+    deletion_reason: str | None = None
 
 
 class AccountPage(_Strict):
     items: list[AccountSummary]
     next_cursor: str | None = None
+
+
+class LifecycleRequest(_Strict):
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class PlatformRoleResponse(_Strict):
@@ -134,6 +141,9 @@ AccountsContext = Annotated[
 AccountDetailContext = Annotated[
     PlatformContext, platform_permission("platform.accounts.read", "get_platform_account")
 ]
+AccountManageContext = Annotated[
+    PlatformContext, platform_permission("platform.accounts.manage", "manage_platform_accounts")
+]
 RolesContext = Annotated[
     PlatformContext, platform_permission("platform.roles.read", "list_platform_roles")
 ]
@@ -162,6 +172,7 @@ async def list_accounts(
     limit: int = Query(default=50, ge=1, le=200),
     query: str | None = Query(default=None, min_length=1, max_length=320),
     status: Literal["active", "disabled"] | None = Query(default=None),
+    include_deleted: bool = Query(default=False),
 ) -> AccountPage:
     scope = _query_scope("platform_accounts", query=query, status=status)
     items, position = await service.list_accounts(
@@ -170,6 +181,7 @@ async def list_accounts(
         cursor=_cursor(cursor, context, query=scope),
         query=query,
         status=status,
+        include_deleted=include_deleted,
     )
     return AccountPage(
         items=[AccountSummary.model_validate(item) for item in items],
@@ -189,6 +201,36 @@ async def get_account(
     if item is None:
         raise ApiError("resource_not_found", "Platform account not found", 404)
     return AccountSummary.model_validate(item)
+
+
+@router.delete(
+    "/accounts/{user_id}", response_model=AccountSummary, operation_id="delete_platform_account"
+)
+async def delete_account(
+    user_id: UUID,
+    body: LifecycleRequest,
+    context: AccountManageContext,
+    service: Annotated[PlatformControlPlaneService, control_service],
+) -> AccountSummary:
+    return AccountSummary.model_validate(
+        await service.delete_account(context, user_id, body.reason)
+    )
+
+
+@router.post(
+    "/accounts/{user_id}/restore",
+    response_model=AccountSummary,
+    operation_id="restore_platform_account",
+)
+async def restore_account(
+    user_id: UUID,
+    body: LifecycleRequest,
+    context: AccountManageContext,
+    service: Annotated[PlatformControlPlaneService, control_service],
+) -> AccountSummary:
+    return AccountSummary.model_validate(
+        await service.restore_account(context, user_id, body.reason)
+    )
 
 
 @router.get("/roles", response_model=PlatformRolePage, operation_id="list_platform_roles")

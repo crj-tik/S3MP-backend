@@ -34,6 +34,8 @@ class AccountAuthStore(Protocol):
 
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None: ...
 
+    async def effective_permissions(self, user_id: UUID) -> frozenset[str]: ...
+
     async def create_tenant_session(
         self,
         user_id: UUID,
@@ -125,7 +127,12 @@ class AccountAuthenticationService:
         summary = await self._store.account_summary(user_id)
         if summary is None:
             raise ApiError("authentication_failed", "Invalid email or password", status_code=401)
-        return summary, issued.session_token, issued.csrf_token
+        permissions = await self._store.effective_permissions(user_id)
+        return (
+            {**summary, "platform_permissions": sorted(permissions)},
+            issued.session_token,
+            issued.csrf_token,
+        )
 
     async def account_context(self, context: PlatformContext) -> dict[str, object]:
         summary = await self._store.account_summary(context.user_id)

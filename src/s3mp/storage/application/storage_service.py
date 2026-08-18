@@ -8,7 +8,7 @@ from uuid import UUID
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.connection import S3ConnectionConfig
-from s3mp.storage.domain.policy import StorageCapabilities, canonical_operator_prefix
+from s3mp.storage.domain.policy import StorageCapabilities
 
 
 class StorageStore(Protocol):
@@ -17,6 +17,9 @@ class StorageStore(Protocol):
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_connection(self, tenant_id: UUID, conn_id: UUID) -> dict[str, Any] | None: ...
     async def create_connection(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
+    async def ensure_managed_connection(
+        self, tenant_id: UUID, profile: dict[str, Any]
+    ) -> dict[str, Any]: ...
     async def list_spaces(
         self, tenant_id: UUID, limit: int, cursor: str | None
     ) -> tuple[list[dict[str, Any]], str | None]: ...
@@ -32,6 +35,7 @@ class PermissionAuthorizer(Protocol):
 class StorageService:
     store: StorageStore
     authorizer: PermissionAuthorizer | None = None
+    shared_profile: dict[str, Any] | None = None
 
     async def list_connections(
         self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
@@ -51,6 +55,12 @@ class StorageService:
 
     async def create_connection(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
         await self._require(context, "storage_connections.manage")
+        if self.shared_profile is not None:
+            raise ApiError(
+                "shared_storage_profile_managed",
+                "Storage endpoint, region and bucket are managed by the platform",
+                status_code=409,
+            )
         # Validate config before persisting
         S3ConnectionConfig(
             endpoint=body.endpoint,
@@ -98,17 +108,37 @@ class StorageService:
 
     async def create_space(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
         await self._require(context, "storage_spaces.manage")
+        if self.shared_profile is None:
+            raise ApiError(
+                "shared_storage_profile_unavailable",
+                "The platform shared storage profile is not configured",
+                status_code=503,
+            )
+        if body.application_id is None:
+            raise ApiError(
+                "application_binding_required",
+                "A storage space must be bound to one active application",
+                status_code=422,
+            )
         try:
-            root_prefix = canonical_operator_prefix(body.root_prefix)
+            connection = await self.store.ensure_managed_connection(
+                context.tenant_id, self.shared_profile
+            )
         except ValueError as exc:
             raise ApiError(
-                "validation_failed", "Storage root prefix is not canonical", status_code=422
+                "shared_storage_profile_invalid",
+                "The managed storage connection does not match the active platform profile",
+                status_code=503,
             ) from exc
         data = {
             "name": body.name,
-            "connection_id": body.connection_id,
-            "bucket": body.bucket,
-            "root_prefix": root_prefix,
+            # The relational connection is a platform-created compatibility
+            # record.  It never selects the physical S3 target.
+            "connection_id": connection["id"],
+            "application_id": body.application_id,
+            "bucket": str(self.shared_profile["bucket"]),
+            "root_prefix": "",
+            "profile_version": int(self.shared_profile.get("profile_version", 1)),
             "provider_target_version": 1,
             "status": "active",
         }

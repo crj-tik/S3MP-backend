@@ -81,9 +81,19 @@ class PermissionCatalogResponse(_Strict):
 
 
 class ResourceScope(_Strict):
-    type: Literal["tenant", "storage_space", "directory"]
-    storage_space_id: UUID | None = None
-    canonical_prefix: str | None = None
+    type: Literal["tenant", "storage_space", "directory"] = Field(
+        description=(
+            "授权范围类型：tenant 为租户管理范围；storage_space 或 directory 用于应用文件路径范围。"
+        )
+    )
+    storage_space_id: UUID | None = Field(
+        default=None,
+        description="应用文件授权关联的逻辑存储空间标识；文件权限不得使用未绑定应用的空间。",
+    )
+    canonical_prefix: str | None = Field(
+        default=None,
+        description="directory 类型授权覆盖的规范相对路径前缀；不得越过应用命名空间边界。",
+    )
 
 
 class RoleBindingWrite(_Strict):

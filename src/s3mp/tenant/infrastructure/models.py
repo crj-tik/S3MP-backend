@@ -33,3 +33,6 @@ class TenantModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[UUID | None] = mapped_column()
+    deletion_reason: Mapped[str | None] = mapped_column(String(500))

@@ -13,6 +13,7 @@ from s3mp.common.database import Base
 class TenantLifecycleStatus(StrEnum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
+    DELETED = "deleted"
 
 
 class PlatformRoleModel(Base):

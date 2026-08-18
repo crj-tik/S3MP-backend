@@ -122,6 +122,11 @@ def classify_legacy_target(
             bucket=str(storage_space["bucket"]),
             relative_key=relative_key,
             operator_prefix=str(storage_space.get("root_prefix") or ""),
+            storage_namespace=(
+                str(storage_space["storage_namespace"])
+                if storage_space.get("storage_namespace")
+                else None
+            ),
             version=1,
         )
     except (KeyError, TypeError, ValueError, StoragePolicyError):

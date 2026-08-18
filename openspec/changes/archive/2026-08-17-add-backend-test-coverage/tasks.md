@@ -1,9 +1,9 @@
 ## 0. 配置前置
 
-- [x] 0.1 修正 `deploy/secrets/database_url` 为 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp`（当前 `s3mp` 用户不存在，与 `alembic.ini` 一致）。验证：`cat deploy/secrets/database_url`
+- [x] 0.1 修正 `deploy/secrets/database_url` 为 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@localhost:18110/s3mp`（当前 `s3mp` 用户不存在，与 `alembic.ini` 一致）。验证：`cat deploy/secrets/database_url`
 - [x] 0.2 修正 `deploy/.env` 的 `S3MP_REDIS_URL` 为 `redis://:Bk-Skill@localhost:18113/0`（当前端口 6379 错且缺密码）。验证：`grep S3MP_REDIS_URL deploy/.env`
 - [x] 0.3 从 `pyproject.toml` 的 `[dependency-groups] dev` 移除 `aiosqlite`。验证：`uv sync && uv run python -c "import s3mp"`
-- [x] 0.4 新建 `tests/_infrastructure.py`：暴露 `TEST_DATABASE_URL`（默认 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp`）、`TEST_REDIS_URL`（默认 `redis://:Bk-Skill@localhost:18113/0`）、`TEST_S3_*`（默认 minio@9000/s3mp-dev/s3mp-app/bk-s3mp-backend）、`real_settings()`/`real_engine()`/`real_session()` 工厂，env 可覆盖。验证：`uv run python -c "from tests._infrastructure import TEST_DATABASE_URL; print(TEST_DATABASE_URL)"`
+- [x] 0.4 新建 `tests/_infrastructure.py`：暴露 `TEST_DATABASE_URL`（默认 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@localhost:18110/s3mp`）、`TEST_REDIS_URL`（默认 `redis://:Bk-Skill@localhost:18113/0`）、`TEST_S3_*`（默认 minio@9000/s3mp-dev/s3mp-app/bk-s3mp-backend）、`real_settings()`/`real_engine()`/`real_session()` 工厂，env 可覆盖。验证：`uv run python -c "from tests._infrastructure import TEST_DATABASE_URL; print(TEST_DATABASE_URL)"`
 
 ## 1. P0 回归与契约基线（fake HTTP 层）
 

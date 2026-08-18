@@ -205,6 +205,9 @@ class FileApplicationService:
             bucket=str(space["bucket"]),
             relative_key=relative_key,
             operator_prefix=str(space.get("root_prefix") or ""),
+            storage_namespace=(
+                str(space["storage_namespace"]) if space.get("storage_namespace") else None
+            ),
             version=int(space.get("provider_target_version", 1)),
         ).key
 
@@ -564,9 +567,20 @@ class FileApplicationService:
         return reconciled
 
     async def _revalidate_ingestion(self, record: dict[str, Any]) -> bool:
-        if self.authorization_store is None:
+        if self.authorization_store is None or self.storage_store is None:
             return False
         tenant_id = UUID(record["tenant_id"])
+        space = await self.storage_store.get_space(tenant_id, UUID(record["storage_space_id"]))
+        if space is None:
+            return False
+        if (
+            record.get("application_id")
+            and str(record["application_id"]) != str(space.get("application_id"))
+        ) or (
+            record.get("storage_namespace")
+            and record["storage_namespace"] != space.get("storage_namespace")
+        ) or int(record.get("profile_version", 1)) != int(space.get("profile_version", 1)):
+            return False
         principal_id = UUID(record["acting_principal_id"])
         evidence = record.get("authorization_evidence") or {}
         subject = await validate_delayed_subject(
@@ -619,6 +633,21 @@ class FileApplicationService:
                 )
                 if int(record.get("provider_target_version", 0)) != int(
                     space.get("provider_target_version", 1)
+                ):
+                    await self.store.record_delete_failure(
+                        UUID(record["tenant_id"]),
+                        UUID(record["id"]),
+                        self.reconciliation_max_attempts,
+                    )
+                    continue
+                if (
+                    record.get("application_id")
+                    and str(record["application_id"]) != str(space.get("application_id"))
+                ) or (
+                    record.get("storage_namespace")
+                    and record["storage_namespace"] != space.get("storage_namespace")
+                ) or int(record.get("profile_version", 1)) != int(
+                    space.get("profile_version", 1)
                 ):
                     await self.store.record_delete_failure(
                         UUID(record["tenant_id"]),
@@ -806,6 +835,14 @@ class FileApplicationService:
                 "commands": [command.authorization_evidence for command in commands],
             },
         }
+        space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
+        data.update(
+            {
+                "application_id": space.get("application_id"),
+                "storage_namespace": space.get("storage_namespace"),
+                "profile_version": space.get("profile_version", 1),
+            }
+        )
         result = await self.store.create_operation(ctx.tenant_id, UUID(space_id), data)
         if self.work_notifier is not None:
             await self.work_notifier.notify()
@@ -880,6 +917,14 @@ class FileApplicationService:
             "direct_requested": body.direct_requested,
             "idempotency_key": idempotency_key,
         }
+        space = await self._resolve_space(ctx.tenant_id, command.storage_space_id)
+        data.update(
+            {
+                "application_id": space.get("application_id"),
+                "storage_namespace": space.get("storage_namespace"),
+                "profile_version": space.get("profile_version", 1),
+            }
+        )
         if self.ingestion_store is None:
             return await self.store.create_upload(ctx.tenant_id, command.storage_space_id, data)
         record = await self.ingestion_store.create_upload_intent(
@@ -1117,6 +1162,14 @@ class FileApplicationService:
             "content_type": body.content_type,
             "idempotency_key": idempotency_key,
         }
+        space = await self._resolve_space(ctx.tenant_id, command.storage_space_id)
+        data.update(
+            {
+                "application_id": space.get("application_id"),
+                "storage_namespace": space.get("storage_namespace"),
+                "profile_version": space.get("profile_version", 1),
+            }
+        )
         if self.ingestion_store is None:
             record = await self.store.create_multipart(
                 ctx.tenant_id, command.storage_space_id, data

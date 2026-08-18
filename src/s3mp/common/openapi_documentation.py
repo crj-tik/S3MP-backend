@@ -7,6 +7,7 @@ from typing import Any
 OPERATION_DESCRIPTIONS: dict[str, str] = {
     "live_health_live_get": "检查 API 进程是否存活；不检查数据库、Redis 或对象存储。",
     "ready_health_ready_get": "检查 API 是否已就绪，并验证已启用的外部依赖。",
+    "get_metadata_catalog": "获取前端使用的状态、枚举、授权范围和状态流转目录。",
     "get_me": "获取当前已选租户中的身份、成员关系与有效权限上下文。",
     "list_users": "列出当前租户可见的用户账户。",
     "get_user": "获取当前租户中指定用户的公开身份信息。",
@@ -19,9 +20,13 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "remove_group_member": "将成员从指定用户组移除。",
     "account_login": (
         "校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie "
-        "和可读的账户 CSRF Cookie，但不会自动选择租户。"
+        "和可读的账户 CSRF Cookie，并返回当前账户真实的 platform_permissions；"
+        "但不会自动选择租户。"
     ),
-    "register_account": "注册全局平台账户；仅创建账户身份，不创建租户成员关系或平台角色。",
+    "register_account": (
+        "注册全局平台账户；仅创建账户身份，不创建租户成员关系或平台角色；"
+        "该公开接口不要求已有会话或 X-S3MP-CSRF 请求头。"
+    ),
     "get_account_context": "获取当前账户及其可选择的活跃租户摘要。",
     "account_logout": (
         "撤销当前账户会话并清除账户 Cookie；客户端必须把 s3mp_account_csrf Cookie "
@@ -75,11 +80,12 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "rotate_api_key": "轮换 API Key，并按请求指定的重叠期保留旧 Key。",
     "revoke_api_key": "撤销 API Key 并返回剩余的已签发 URL 风险信息。",
     "list_storage_connections": "列出当前租户的对象存储连接摘要，不暴露连接凭据。",
-    "create_storage_connection": "创建对象存储连接配置；凭据仅用于服务端访问。",
     "get_storage_connection": "获取对象存储连接的脱敏配置和连通性状态。",
     "probe_storage_connection": "探测对象存储连接与其声明能力。",
     "list_storage_spaces": "列出当前租户的逻辑存储空间。",
-    "create_storage_space": "创建逻辑存储空间并映射到受控的对象存储根路径。",
+    "create_storage_space": (
+        "为指定应用创建逻辑存储空间；物理 S3 连接、Bucket 与对象命名空间均由平台派生。"
+    ),
     "get_storage_space": "获取逻辑存储空间详情。",
     "list_files": "在授权的逻辑存储空间和目录范围内列出文件对象。",
     "get_file": "获取指定文件对象的元数据；不直接返回对象存储凭据。",
@@ -248,6 +254,201 @@ def document_openapi(schema: dict[str, Any]) -> dict[str, Any]:
             },
         },
     }
+    from s3mp.metadata.catalog import (
+        EFFECTS,
+        OPERATIONS,
+        QUOTA_SCOPES,
+        SCOPES,
+        STATUS_CATALOG,
+        STORAGE_ADDRESSING,
+    )
+
+    def _enum_schema(title: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "type": "string",
+            "title": title,
+            "enum": [item["value"] for item in items],
+            "description": "由 /api/v1/metadata/catalog 同步发布的稳定枚举值。",
+        }
+
+    for resource, items in STATUS_CATALOG.items():
+        schemas[f"Metadata{resource.title().replace('_', '')}Status"] = _enum_schema(
+            f"Metadata{resource.title().replace('_', '')}Status", items
+        )
+    schemas["MetadataAuthorizationScope"] = _enum_schema("MetadataAuthorizationScope", SCOPES)
+    schemas["MetadataAuthorizationEffect"] = _enum_schema("MetadataAuthorizationEffect", EFFECTS)
+    schemas["MetadataStorageOperation"] = _enum_schema("MetadataStorageOperation", OPERATIONS)
+    schemas["MetadataQuotaScope"] = _enum_schema("MetadataQuotaScope", QUOTA_SCOPES)
+    schemas["MetadataStorageAddressing"] = _enum_schema(
+        "MetadataStorageAddressing", STORAGE_ADDRESSING
+    )
+    # These are shared, read-only contract building blocks.  They describe
+    # server-derived state reused by storage, authorization and governance
+    # responses; none contain an endpoint credential or secret-store locator.
+    schemas["SharedStorageProfile"] = {
+        "type": "object",
+        "title": "SharedStorageProfile",
+        "description": "平台唯一共享 S3 目标的脱敏运行摘要；物理连接参数仅由部署配置维护。",
+        "required": ["bucket", "region", "path_style", "signature_version", "profile_version"],
+        "properties": {
+            "bucket": {"type": "string", "description": "所有租户与应用共同使用的服务端 Bucket。"},
+            "region": {"type": "string", "description": "共享 S3 目标使用的区域标识。"},
+            "path_style": {
+                "type": "boolean",
+                "description": "是否按 path-style 生成 S3 请求；生产和 MinIO 均可由部署配置启用。",
+            },
+            "signature_version": {
+                "type": "string",
+                "enum": ["s3v4"],
+                "description": "S3 请求签名协议版本。",
+            },
+            "profile_version": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "共享目标配置版本；排队任务据此拒绝陈旧目标。",
+            },
+        },
+    }
+    schemas["ApplicationStorageNamespace"] = {
+        "type": "object",
+        "title": "ApplicationStorageNamespace",
+        "description": (
+            "由服务端固定的应用存储命名空间；调用方只能提供相对对象路径，不能提供物理 Key。"
+        ),
+        "required": ["application_id", "storage_space_id", "storage_namespace", "profile_version"],
+        "properties": {
+            "application_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "命名空间所属应用标识。",
+            },
+            "storage_space_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "该应用唯一逻辑存储空间标识。",
+            },
+            "storage_namespace": {"type": "string", "description": "不可变的服务端对象 Key 前缀。"},
+            "profile_version": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "创建该命名空间时的共享 profile 版本。",
+            },
+        },
+    }
+    schemas["ApplicationPathGrant"] = {
+        "type": "object",
+        "title": "ApplicationPathGrant",
+        "description": (
+            "角色绑定中的应用文件路径授权范围；用户组只能通过活跃成员关系取得该授权，不能登录。"
+        ),
+        "required": ["type", "storage_space_id"],
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["storage_space", "directory"],
+                "description": (
+                    "storage_space 覆盖应用全部路径；directory 仅覆盖 canonical_prefix。"
+                ),
+            },
+            "storage_space_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "已绑定应用的逻辑存储空间标识。",
+            },
+            "canonical_prefix": {
+                "type": "string",
+                "description": "directory 范围使用的规范相对前缀；storage_space 范围不需要该字段。",
+            },
+        },
+    }
+    schemas["QuotaStatus"] = {
+        "type": "object",
+        "title": "QuotaStatus",
+        "description": "租户或应用配额状态；可用容量为上限减去已用量与上传保留量。",
+        "required": ["scope_type", "used_bytes", "reserved_bytes", "available_bytes"],
+        "properties": {
+            "scope_type": {
+                "type": "string",
+                "enum": ["tenant", "application"],
+                "description": "配额统计范围。",
+            },
+            "limit_bytes": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "description": "允许使用和预留的容量上限。",
+            },
+            "used_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "已被对象存储验证并提交的容量。",
+            },
+            "reserved_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "进行中上传暂时保留的容量。",
+            },
+            "available_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "当前还能预留的容量。",
+            },
+            "measured_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "本次用量读取或校准时间。",
+            },
+        },
+    }
+    schemas["QuotaReconciliationItem"] = {
+        "type": "object",
+        "title": "QuotaReconciliationItem",
+        "description": "一次配额校准中某个租户或应用范围的结果；不包含对象内容或凭据。",
+        "required": ["scope_type", "status"],
+        "properties": {
+            "scope_type": {
+                "type": "string",
+                "enum": ["tenant", "application"],
+                "description": "被校准的配额范围。",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["unchanged", "corrected", "quarantined", "failed"],
+                "description": "该范围的校准结论。",
+            },
+            "actual_used_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "按已验证对象统计的实际已用容量。",
+            },
+            "reason_code": {
+                "type": "string",
+                "description": "冲突、隔离或失败时供程序处理的稳定原因代码。",
+            },
+        },
+    }
+    schemas["QuotaReconciliationResult"] = {
+        "type": "object",
+        "title": "QuotaReconciliationResult",
+        "description": "配额校准任务汇总；用于运维任务输出，不代表对外文件内容接口。",
+        "required": ["started_at", "completed_at", "items"],
+        "properties": {
+            "started_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "校准任务开始时间。",
+            },
+            "completed_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "校准任务结束时间。",
+            },
+            "items": {
+                "type": "array",
+                "items": {"$ref": "#/components/schemas/QuotaReconciliationItem"},
+                "description": "逐范围的校准结果。",
+            },
+        },
+    }
     error_response = {
         "description": "请求未成功；响应遵循统一错误信封。",
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
@@ -293,7 +494,10 @@ def _document_node(value: Any) -> None:
         if isinstance(properties, dict):
             for name, property_schema in properties.items():
                 if isinstance(property_schema, dict):
-                    property_schema["description"] = _field_description(name)
+                    # Field() descriptions express resource-specific semantics
+                    # (for example, shared-bucket namespaces). Do not replace
+                    # them with a generic name-based sentence.
+                    property_schema.setdefault("description", _field_description(name))
         for nested in value.values():
             _document_node(nested)
     elif isinstance(value, list):

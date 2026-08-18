@@ -45,6 +45,7 @@ from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, Sq
 from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.identity.application.security import InMemoryLoginRateLimiter, LocalPasswordAuthenticator
+from s3mp.metadata.api import router as metadata_router
 from s3mp.platform.api.control_router import router as platform_control_router
 from s3mp.platform.api.role_router import router as platform_role_router
 from s3mp.platform.api.router import registration_router
@@ -204,6 +205,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             SqlAlchemyApplicationStore(session_factory) if session_factory else _store
         )
         storage_store: Any = SqlAlchemyStorageStore(session_factory) if session_factory else _store
+        shared_profile: dict[str, Any] | None = None
+        if session_factory is not None and configured.s3_endpoint and configured.s3_bucket:
+            shared_profile = await storage_store.ensure_platform_profile(
+                endpoint=configured.s3_endpoint,
+                region=configured.s3_region,
+                bucket=configured.s3_bucket,
+                path_style=configured.s3_path_style,
+            )
+        elif configured.s3_endpoint and configured.s3_bucket:
+            shared_profile = {
+                "endpoint": configured.s3_endpoint,
+                "region": configured.s3_region,
+                "bucket": configured.s3_bucket,
+                "path_style": configured.s3_path_style,
+                "profile_version": 1,
+            }
         app.state.application_service = ApplicationService(
             application_store, getattr(app.state, "authorization_management", None)
         )
@@ -216,7 +233,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             getattr(app.state, "authorization_management", None),
         )
         app.state.storage_service = StorageService(
-            storage_store, getattr(app.state, "authorization_management", None)
+            storage_store,
+            getattr(app.state, "authorization_management", None),
+            shared_profile,
         )
         file_store: Any = SqlAlchemyFileStore(session_factory) if session_factory else _store
         file_authorization_store = (
@@ -276,6 +295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(platform_control_router)
     app.include_router(platform_role_router)
     app.include_router(platform_support_router)
+    app.include_router(metadata_router)
     app.include_router(authorization_router)
     app.include_router(applications_router)
     app.include_router(storage_router)

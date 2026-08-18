@@ -30,6 +30,7 @@ from s3mp.files.infrastructure.models import (
 )
 from s3mp.files.infrastructure.repositories import _mp_dict, _upload_dict
 from s3mp.governance.infrastructure.models import QuotaModel, QuotaReservationModel
+from s3mp.storage.infrastructure.models import StorageSpaceModel
 
 
 class SqlAlchemyIngestionStore:
@@ -70,6 +71,13 @@ class SqlAlchemyIngestionStore:
                 tenant_id=tenant_id,
                 principal_id=UUID(session_data["principal_id"]),
                 storage_space_id=UUID(session_data["storage_space_id"]),
+                application_id=(
+                    UUID(session_data["application_id"])
+                    if session_data.get("application_id")
+                    else None
+                ),
+                storage_namespace=session_data.get("storage_namespace"),
+                profile_version=int(session_data.get("profile_version", 1)),
                 object_key=session_data["object_key"],
                 declared_length=session_data["content_length"],
                 content_type=session_data["content_type"],
@@ -121,6 +129,13 @@ class SqlAlchemyIngestionStore:
                 tenant_id=tenant_id,
                 principal_id=UUID(session_data["principal_id"]),
                 storage_space_id=UUID(session_data["storage_space_id"]),
+                application_id=(
+                    UUID(session_data["application_id"])
+                    if session_data.get("application_id")
+                    else None
+                ),
+                storage_namespace=session_data.get("storage_namespace"),
+                profile_version=int(session_data.get("profile_version", 1)),
                 object_key=session_data["object_key"],
                 declared_length=session_data["content_length"],
                 content_type=session_data["content_type"],
@@ -308,6 +323,9 @@ class SqlAlchemyIngestionStore:
             file_obj = FileObjectModel(
                 tenant_id=tenant_id,
                 storage_space_id=row.storage_space_id,
+                application_id=row.application_id,
+                storage_namespace=row.storage_namespace,
+                profile_version=row.profile_version,
                 object_key=row.physical_key,
                 provider_target_version=row.provider_target_version,
                 content_length=row.actual_size or 0,
@@ -322,7 +340,42 @@ class SqlAlchemyIngestionStore:
             row.status = IngestionStatus.COMMITTED.value
             row.file_object_id = file_obj.id
             row.committed_at = datetime.now(UTC)
-            await _settle_quota_reservation(session, tenant_id, row)
+            quota_settled = await _settle_quota_reservation(session, tenant_id, row)
+            if not quota_settled:
+                # The provider object exists, but its verified size cannot be
+                # admitted into either quota ledger. Keep a durable quarantine
+                # record and release the reservation; file projections exclude
+                # non-available objects from normal reads and usage.
+                file_obj.status = "quarantined"
+                row.status = IngestionStatus.RECONCILIATION_REQUIRED.value
+                await _release_quota_reservation(session, tenant_id, row)
+                session.add(
+                    FileIngestionEventModel(
+                        ingestion_record_id=ingestion_id,
+                        tenant_id=tenant_id,
+                        event_type=IngestionEventType.RECONCILIATION_STARTED.value,
+                        details={
+                            "reason": "verified_size_exceeds_quota",
+                            "actual_size": row.actual_size,
+                        },
+                    )
+                )
+                session.add(
+                    AuditEventModel(
+                        tenant_id=tenant_id,
+                        actor_principal_id=row.acting_principal_id,
+                        action="file.ingestion.quarantined",
+                        resource_type="file_ingestion",
+                        resource_id=str(row.id),
+                        details={
+                            "reason": "verified_size_exceeds_quota",
+                            "actual_size": row.actual_size,
+                            "request_id": row.request_id,
+                        },
+                    )
+                )
+                await session.flush()
+                return _ingestion_dict(row)
 
             # Settle the linked upload session
             if row.upload_session_id is not None:
@@ -546,29 +599,56 @@ def _append_created_event(session: AsyncSession, record: FileIngestionRecordMode
 async def _reserve_quota(
     session: AsyncSession, tenant_id: UUID, storage_space_id: UUID, requested_bytes: int
 ) -> UUID | None:
-    """Reserve configured space quota under the caller's transaction lock."""
-    quota = await session.scalar(
+    """Atomically reserve application and tenant capacity under row locks."""
+    space = await session.scalar(
+        select(StorageSpaceModel)
+        .where(StorageSpaceModel.tenant_id == tenant_id, StorageSpaceModel.id == storage_space_id)
+        .with_for_update()
+    )
+    if space is None:
+        raise ApiError("resource_not_found", "Storage space not found", status_code=404)
+    tenant_quota = await session.scalar(
         select(QuotaModel)
         .where(
             QuotaModel.tenant_id == tenant_id,
-            QuotaModel.storage_space_id == storage_space_id,
+            QuotaModel.application_id.is_(None),
+            QuotaModel.storage_space_id.is_(None),
         )
         .with_for_update()
     )
-    if quota is None:
+    scoped_filter = (
+        QuotaModel.application_id == space.application_id
+        if space.application_id is not None
+        else QuotaModel.storage_space_id == storage_space_id
+    )
+    scoped_quota = await session.scalar(
+        select(QuotaModel)
+        .where(QuotaModel.tenant_id == tenant_id, scoped_filter)
+        .with_for_update()
+    )
+    if tenant_quota is None and scoped_quota is None:
         return None
-    if (
-        requested_bytes < 0
-        or quota.used_bytes + quota.reserved_bytes + requested_bytes > quota.limit_bytes
-    ):
+    if requested_bytes < 0:
         raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
+    for quota in (tenant_quota, scoped_quota):
+        if (
+            quota is not None
+            and quota.used_bytes + quota.reserved_bytes + requested_bytes > quota.limit_bytes
+        ):
+            raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
     reservation = QuotaReservationModel(
         tenant_id=tenant_id,
-        quota_id=quota.id,
+        quota_id=(scoped_quota or tenant_quota).id,
+        application_quota_id=(
+            scoped_quota.id if space.application_id is not None and scoped_quota else None
+        ),
+        tenant_quota_id=tenant_quota.id if tenant_quota else None,
         requested_bytes=requested_bytes,
         status="reserved",
     )
-    quota.reserved_bytes += requested_bytes
+    for quota in (tenant_quota, scoped_quota):
+        if quota is not None:
+            quota.reserved_bytes += requested_bytes
     session.add(reservation)
     await session.flush()
     return reservation.id
@@ -576,9 +656,9 @@ async def _reserve_quota(
 
 async def _settle_quota_reservation(
     session: AsyncSession, tenant_id: UUID, row: FileIngestionRecordModel
-) -> None:
+) -> bool:
     if row.quota_reservation_id is None:
-        return
+        return True
     reservation = await session.scalar(
         select(QuotaReservationModel)
         .where(
@@ -588,22 +668,35 @@ async def _settle_quota_reservation(
         .with_for_update()
     )
     if reservation is None or reservation.status != "reserved":
-        return
-    quota = await session.scalar(
-        select(QuotaModel)
-        .where(QuotaModel.tenant_id == tenant_id, QuotaModel.id == reservation.quota_id)
-        .with_for_update()
-    )
-    if quota is None:
-        raise ApiError("quota_exceeded", "Quota is unavailable", status_code=409)
+        return True
+    quota_ids = {
+        quota_id
+        for quota_id in (
+            reservation.quota_id,
+            reservation.application_quota_id,
+            reservation.tenant_quota_id,
+        )
+        if quota_id is not None
+    }
+    quotas = (
+        await session.scalars(
+            select(QuotaModel)
+            .where(QuotaModel.tenant_id == tenant_id, QuotaModel.id.in_(quota_ids))
+            .with_for_update()
+        )
+    ).all()
+    if len(quotas) != len(quota_ids):
+        return False
     actual_size = row.actual_size or 0
-    if quota.used_bytes + actual_size > quota.limit_bytes:
-        raise ApiError("quota_exceeded", "Verified object exceeds quota", status_code=409)
-    quota.reserved_bytes -= reservation.requested_bytes
-    quota.used_bytes += actual_size
+    if any(quota.used_bytes + actual_size > quota.limit_bytes for quota in quotas):
+        return False
+    for quota in quotas:
+        quota.reserved_bytes -= reservation.requested_bytes
+        quota.used_bytes += actual_size
     reservation.actual_bytes = actual_size
     reservation.status = "settled"
     reservation.settled_at = datetime.now(UTC)
+    return True
 
 
 async def _release_quota_reservation(
@@ -621,12 +714,23 @@ async def _release_quota_reservation(
     )
     if reservation is None or reservation.status != "reserved":
         return
-    quota = await session.scalar(
-        select(QuotaModel)
-        .where(QuotaModel.tenant_id == tenant_id, QuotaModel.id == reservation.quota_id)
-        .with_for_update()
-    )
-    if quota is not None:
+    quota_ids = {
+        quota_id
+        for quota_id in (
+            reservation.quota_id,
+            reservation.application_quota_id,
+            reservation.tenant_quota_id,
+        )
+        if quota_id is not None
+    }
+    quotas = (
+        await session.scalars(
+            select(QuotaModel)
+            .where(QuotaModel.tenant_id == tenant_id, QuotaModel.id.in_(quota_ids))
+            .with_for_update()
+        )
+    ).all()
+    for quota in quotas:
         quota.reserved_bytes -= reservation.requested_bytes
     reservation.status = "released"
     reservation.settled_at = datetime.now(UTC)
@@ -676,6 +780,9 @@ def _build_ingestion_model(tenant_id: UUID, data: dict[str, Any]) -> FileIngesti
         acting_principal_id=UUID(data["acting_principal_id"]),
         membership_id=UUID(data["membership_id"]) if data.get("membership_id") else None,
         storage_space_id=UUID(data["storage_space_id"]),
+        application_id=(UUID(data["application_id"]) if data.get("application_id") else None),
+        storage_namespace=data.get("storage_namespace"),
+        profile_version=int(data.get("profile_version", 1)),
         bucket=data["bucket"],
         relative_key=data["relative_key"],
         physical_key=data["physical_key"],
@@ -709,6 +816,9 @@ def _ingestion_dict(m: FileIngestionRecordModel) -> dict[str, Any]:
         "acting_principal_id": str(m.acting_principal_id),
         "membership_id": str(m.membership_id) if m.membership_id else None,
         "storage_space_id": str(m.storage_space_id),
+        "application_id": str(m.application_id) if m.application_id else None,
+        "storage_namespace": m.storage_namespace,
+        "profile_version": m.profile_version,
         "bucket": m.bucket,
         "relative_key": m.relative_key,
         "physical_key": m.physical_key,

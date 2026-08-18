@@ -30,8 +30,7 @@ async def _application_view(store: Any, tenant_id: UUID, record: dict[str, Any])
     else:
         owner_ids = await store.list_owners(tenant_id, app_id)
         public["owners"] = [
-            {"principal_id": str(owner_id), "principal_type": "unknown"}
-            for owner_id in owner_ids
+            {"principal_id": str(owner_id), "principal_type": "unknown"} for owner_id in owner_ids
         ]
     public["takeover_required"] = public.get("status") == "pending_takeover"
     return public
@@ -52,14 +51,20 @@ class ApplicationStore(Protocol):
         self, tenant_id: UUID, app_id: UUID, name: str | None
     ) -> dict[str, Any] | None: ...
 
+    async def delete_app(
+        self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID, reason: str
+    ) -> dict[str, Any] | None: ...
+
+    async def restore_app(
+        self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID, reason: str
+    ) -> dict[str, Any] | None: ...
+
     async def takeover_app(
         self, tenant_id: UUID, app_id: UUID, owner_principal_id: UUID, reason: str
     ) -> dict[str, Any] | None: ...
 
     async def list_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
-    async def list_owner_summaries(
-        self, tenant_id: UUID, app_id: UUID
-    ) -> list[dict[str, str]]: ...
+    async def list_owner_summaries(self, tenant_id: UUID, app_id: UUID) -> list[dict[str, str]]: ...
     async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
     async def recompute_owner_state_for_principal(
         self, tenant_id: UUID, owner_principal_id: UUID
@@ -128,7 +133,8 @@ class ApplicationService:
     async def create_app(self, context: PrincipalContext, name: str) -> dict[str, Any]:
         await self._require(context, "applications.manage")
         return await _application_view(
-            self.store, context.tenant_id,
+            self.store,
+            context.tenant_id,
             await self.store.create_app(context.tenant_id, name, context.principal_id),
         )
 
@@ -139,6 +145,31 @@ class ApplicationService:
         result = await self.store.update_app(context.tenant_id, app_id, name)
         if result is None:
             raise ApiError("resource_not_found", "Application not found", status_code=404)
+        return await _application_view(self.store, context.tenant_id, result)
+
+    async def delete_app(
+        self, context: PrincipalContext, app_id: UUID, reason: str
+    ) -> dict[str, Any]:
+        await self._require_owner_or_permission(context, app_id, "applications.manage")
+        result = await self.store.delete_app(
+            context.tenant_id, app_id, context.principal_id, reason
+        )
+        if result is None:
+            raise ApiError("resource_not_found", "Application not found", status_code=404)
+        return await _application_view(self.store, context.tenant_id, result)
+
+    async def restore_app(
+        self, context: PrincipalContext, app_id: UUID, reason: str
+    ) -> dict[str, Any]:
+        await self._require(context, "applications.manage")
+        try:
+            result = await self.store.restore_app(
+                context.tenant_id, app_id, context.principal_id, reason
+            )
+        except ValueError as exc:
+            raise ApiError("conflict", str(exc), status_code=409) from exc
+        if result is None:
+            raise ApiError("resource_not_found", "Deleted application not found", status_code=404)
         return await _application_view(self.store, context.tenant_id, result)
 
     async def takeover_app(

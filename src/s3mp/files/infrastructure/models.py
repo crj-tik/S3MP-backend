@@ -34,6 +34,9 @@ class FileObjectModel(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID | None] = mapped_column()
+    storage_namespace: Mapped[str | None] = mapped_column(String(512))
+    profile_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     # Version 0 is reserved for rows that predate tenant-scoped provider keys.
     # The application always supplies version 1 for newly created rows.
@@ -81,6 +84,9 @@ class UploadSessionModel(Base):
     principal_id: Mapped[UUID] = mapped_column(nullable=False)
     membership_id: Mapped[UUID | None] = mapped_column()
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID | None] = mapped_column()
+    storage_namespace: Mapped[str | None] = mapped_column(String(512))
+    profile_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     provider_target_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="0"
@@ -112,6 +118,9 @@ class MultipartSessionModel(Base):
     principal_id: Mapped[UUID] = mapped_column(nullable=False)
     membership_id: Mapped[UUID | None] = mapped_column()
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID | None] = mapped_column()
+    storage_namespace: Mapped[str | None] = mapped_column(String(512))
+    profile_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     provider_target_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="0"
@@ -166,6 +175,9 @@ class FileOperationModel(Base):
     failure_reason: Mapped[str | None] = mapped_column(String(500))
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     storage_space_id: Mapped[UUID | None] = mapped_column()
+    application_id: Mapped[UUID | None] = mapped_column()
+    storage_namespace: Mapped[str | None] = mapped_column(String(512))
+    profile_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     authorization_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="1"
     )

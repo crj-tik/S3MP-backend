@@ -3,7 +3,7 @@ name: S3MP-backend
 
 # Default local integration topology: API and worker reuse the PostgreSQL,
 # Redis and MinIO containers already running on the Windows host. Docker
-# Desktop resolves host.docker.internal from these application containers.
+# Desktop resolves localhost from these application containers.
 x-s3mp-runtime-environment: &s3mp-runtime-environment
   S3MP_ENVIRONMENT: development
   S3MP_DATABASE_URL: ${S3MP_DOCKER_DATABASE_URL:?set S3MP_DOCKER_DATABASE_URL in deploy/.env}

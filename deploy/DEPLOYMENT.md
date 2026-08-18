@@ -87,8 +87,10 @@ uv sync
 cp deploy/.env.example deploy/.env
 # 在 deploy/.env 中填入现有 PostgreSQL、Redis、MinIO 的连接信息与 API key pepper
 
-# 3. 启动基础设施
-docker compose -f deploy/compose.yaml up -d postgres redis
+# 3. 确认已运行的 PostgreSQL、Redis 与 S3 兼容对象存储
+# deploy/compose.yaml 默认复用宿主机上已经部署的基础设施，
+# 连接地址在 deploy/.env 的 S3MP_DOCKER_* 变量中配置。
+# 如需由本项目管理基础设施，使用 deploy/compose.managed-infra.yaml。
 
 # 4. 运行数据库迁移
 uv run alembic upgrade head
@@ -96,6 +98,16 @@ uv run alembic upgrade head
 # 5. 启动 API
 uv run uvicorn s3mp.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+### 3.2.1 共享 S3 profile
+
+所有租户共用一个平台级 S3 profile 和一个 Bucket。部署时必须显式提供：
+
+- `S3MP_S3_ENDPOINT`：对象存储 endpoint；容器访问宿主机服务时使用 `host.docker.internal`，不要使用容器内的 `localhost`。
+- `S3MP_S3_REGION`、`S3MP_S3_BUCKET`、`S3MP_S3_PATH_STYLE`：全平台统一值；生产 S3 兼容服务需要 path-style 时保持 `true`。
+- `S3MP_S3_ACCESS_KEY`、`S3MP_S3_SECRET_KEY`：仅由部署环境注入，不写入 API 响应或租户配置。
+
+API 启动和 `/health/ready` 会校验数据库、Redis 与共享对象存储。租户/应用只能提交应用内相对路径；完整 Bucket、物理 Key、Endpoint 和 Region 由服务端的共享 profile 与应用命名空间派生。
 
 ### 3.3 生产部署
 

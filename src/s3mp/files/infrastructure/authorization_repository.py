@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.authorization.domain.evaluator import Binding, Decision
@@ -14,6 +14,7 @@ from s3mp.authorization.infrastructure.models import (
     RoleBindingModel,
     RolePermissionModel,
 )
+from s3mp.identity.infrastructure.models import PrincipalModel
 
 
 class SqlAlchemyFileAuthorizationStore:
@@ -37,11 +38,17 @@ class SqlAlchemyFileAuthorizationStore:
                 group_principals = await session.scalars(
                     select(GroupModel.principal_id)
                     .join(GroupMemberModel, GroupMemberModel.group_id == GroupModel.id)
+                    .join(
+                        PrincipalModel,
+                        (PrincipalModel.tenant_id == GroupMemberModel.tenant_id)
+                        & (PrincipalModel.id == GroupMemberModel.principal_id),
+                    )
                     .where(
                         GroupModel.tenant_id == tenant_id,
                         GroupModel.enabled.is_(True),
                         GroupMemberModel.tenant_id == tenant_id,
                         GroupMemberModel.principal_id == principal_id,
+                        PrincipalModel.enabled.is_(True),
                     )
                 )
                 subject_principals.extend(group_principals.all())
@@ -55,10 +62,11 @@ class SqlAlchemyFileAuthorizationStore:
                     RoleBindingModel.revoked_at.is_(None),
                     RoleBindingModel.starts_at <= now,
                     RoleBindingModel.expires_at > now,
-                    or_(
-                        RoleBindingModel.storage_space_id.is_(None),
-                        RoleBindingModel.storage_space_id == storage_space_id,
-                    ),
+                    # File operations always require an application-bound
+                    # storage-space scope. Legacy tenant-wide bindings remain
+                    # in the database as audit evidence, but cannot authorize
+                    # an object in a shared bucket.
+                    RoleBindingModel.storage_space_id == storage_space_id,
                 )
             )
         return [

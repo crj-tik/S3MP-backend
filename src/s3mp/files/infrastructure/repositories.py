@@ -16,6 +16,8 @@ from s3mp.files.infrastructure.models import (
     MultipartSessionModel,
     UploadSessionModel,
 )
+from s3mp.storage.infrastructure.models import StorageSpaceModel
+from s3mp.tenant.infrastructure.models import TenantModel
 
 
 class SqlAlchemyFileStore:
@@ -28,10 +30,21 @@ class SqlAlchemyFileStore:
         self, tenant_id: UUID, space_id: UUID, prefix: str
     ) -> list[dict[str, Any]]:
         async with self._sf() as session:
-            stmt = select(FileObjectModel).where(
-                FileObjectModel.tenant_id == tenant_id,
-                FileObjectModel.storage_space_id == space_id,
-                FileObjectModel.status == "available",
+            stmt = (
+                select(FileObjectModel)
+                .join(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == FileObjectModel.tenant_id)
+                    & (StorageSpaceModel.id == FileObjectModel.storage_space_id),
+                )
+                .join(TenantModel, TenantModel.id == FileObjectModel.tenant_id)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.storage_space_id == space_id,
+                    FileObjectModel.status == "available",
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
+                )
             )
             if prefix:
                 # A directory prefix is a segment boundary, not a lexical
@@ -50,11 +63,20 @@ class SqlAlchemyFileStore:
     ) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(FileObjectModel).where(
+                select(FileObjectModel)
+                .join(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == FileObjectModel.tenant_id)
+                    & (StorageSpaceModel.id == FileObjectModel.storage_space_id),
+                )
+                .join(TenantModel, TenantModel.id == FileObjectModel.tenant_id)
+                .where(
                     FileObjectModel.tenant_id == tenant_id,
                     FileObjectModel.storage_space_id == space_id,
                     FileObjectModel.id == file_id,
                     FileObjectModel.status == "available",
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
                 )
             )
             return _file_dict(row) if row else None
@@ -157,6 +179,18 @@ class SqlAlchemyFileStore:
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
+            space = await session.scalar(
+                select(StorageSpaceModel)
+                .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.id == space_id,
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+            if space is None:
+                raise ValueError("storage space is not active")
             model = FileOperationModel(
                 tenant_id=tenant_id,
                 principal_id=UUID(data.get("principal_id", str(uuid4()))),
@@ -168,6 +202,11 @@ class SqlAlchemyFileStore:
                 idempotency_key=data.get("idempotency_key", str(uuid4())),
                 status="pending",
                 storage_space_id=space_id,
+                application_id=(
+                    UUID(data["application_id"]) if data.get("application_id") else None
+                ),
+                storage_namespace=data.get("storage_namespace"),
+                profile_version=int(data.get("profile_version", 1)),
                 authorization_version=int(data.get("authorization_version", 1)),
                 provider_target_version=int(data.get("provider_target_version", 1)),
                 authorization_evidence=data.get("authorization_evidence", {}),
@@ -259,9 +298,18 @@ class SqlAlchemyFileStore:
     async def get_operation(self, tenant_id: UUID, op_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(FileOperationModel).where(
+                select(FileOperationModel)
+                .join(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == FileOperationModel.tenant_id)
+                    & (StorageSpaceModel.id == FileOperationModel.storage_space_id),
+                )
+                .join(TenantModel, TenantModel.id == FileOperationModel.tenant_id)
+                .where(
                     FileOperationModel.tenant_id == tenant_id,
                     FileOperationModel.id == op_id,
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
                 )
             )
             return _op_dict(row) if row else None
@@ -296,6 +344,18 @@ class SqlAlchemyFileStore:
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
+            space = await session.scalar(
+                select(StorageSpaceModel)
+                .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.id == space_id,
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+            if space is None:
+                raise ValueError("storage space is not active")
             model = UploadSessionModel(
                 tenant_id=tenant_id,
                 principal_id=UUID(data["principal_id"]),
@@ -316,9 +376,18 @@ class SqlAlchemyFileStore:
     async def get_upload(self, tenant_id: UUID, upload_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(UploadSessionModel).where(
+                select(UploadSessionModel)
+                .join(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == UploadSessionModel.tenant_id)
+                    & (StorageSpaceModel.id == UploadSessionModel.storage_space_id),
+                )
+                .join(TenantModel, TenantModel.id == UploadSessionModel.tenant_id)
+                .where(
                     UploadSessionModel.tenant_id == tenant_id,
                     UploadSessionModel.id == upload_id,
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
                 )
             )
             return _upload_dict(row) if row else None
@@ -356,6 +425,9 @@ class SqlAlchemyFileStore:
             file_obj = FileObjectModel(
                 tenant_id=tenant_id,
                 storage_space_id=row.storage_space_id,
+                application_id=row.application_id,
+                storage_namespace=row.storage_namespace,
+                profile_version=row.profile_version,
                 object_key=row.object_key,
                 provider_target_version=row.provider_target_version,
                 content_length=row.declared_length,
@@ -375,6 +447,18 @@ class SqlAlchemyFileStore:
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
+            space = await session.scalar(
+                select(StorageSpaceModel)
+                .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.id == space_id,
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+            if space is None:
+                raise ValueError("storage space is not active")
             model = MultipartSessionModel(
                 tenant_id=tenant_id,
                 principal_id=UUID(data["principal_id"]),
@@ -413,9 +497,18 @@ class SqlAlchemyFileStore:
     async def get_multipart(self, tenant_id: UUID, mp_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(MultipartSessionModel).where(
+                select(MultipartSessionModel)
+                .join(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == MultipartSessionModel.tenant_id)
+                    & (StorageSpaceModel.id == MultipartSessionModel.storage_space_id),
+                )
+                .join(TenantModel, TenantModel.id == MultipartSessionModel.tenant_id)
+                .where(
                     MultipartSessionModel.tenant_id == tenant_id,
                     MultipartSessionModel.id == mp_id,
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
                 )
             )
             return _mp_dict(row) if row else None
@@ -520,6 +613,9 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "id": str(m.id),
         "tenant_id": str(m.tenant_id),
         "storage_space_id": str(m.storage_space_id),
+        "application_id": str(m.application_id) if m.application_id else None,
+        "storage_namespace": m.storage_namespace,
+        "profile_version": m.profile_version,
         "object_key": m.object_key,
         "provider_target_version": m.provider_target_version,
         "content_length": m.content_length,
@@ -544,6 +640,9 @@ def _upload_dict(m: UploadSessionModel) -> dict[str, Any]:
         "membership_id": str(m.membership_id) if m.membership_id else None,
         "provider_target_version": m.provider_target_version,
         "storage_space_id": str(m.storage_space_id),
+        "application_id": str(m.application_id) if m.application_id else None,
+        "storage_namespace": m.storage_namespace,
+        "profile_version": m.profile_version,
         "content_length": m.declared_length,
         "content_type": m.content_type,
         "status": m.status,
@@ -561,6 +660,9 @@ def _mp_dict(m: MultipartSessionModel) -> dict[str, Any]:
         "membership_id": str(m.membership_id) if m.membership_id else None,
         "provider_target_version": m.provider_target_version,
         "storage_space_id": str(m.storage_space_id),
+        "application_id": str(m.application_id) if m.application_id else None,
+        "storage_namespace": m.storage_namespace,
+        "profile_version": m.profile_version,
         "content_length": m.declared_length,
         "content_type": m.content_type,
         "status": m.status,
@@ -592,6 +694,9 @@ def _op_dict(m: FileOperationModel) -> dict[str, Any]:
         "idempotency_key": m.idempotency_key,
         "failure_reason": m.failure_reason,
         "storage_space_id": str(m.storage_space_id) if m.storage_space_id else None,
+        "application_id": str(m.application_id) if m.application_id else None,
+        "storage_namespace": m.storage_namespace,
+        "profile_version": m.profile_version,
         "authorization_version": m.authorization_version,
         "provider_target_version": m.provider_target_version,
         "authorization_evidence": m.authorization_evidence or {},

@@ -7,6 +7,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
+from s3mp.common.errors import ApiError
 from s3mp.governance.infrastructure.models import QuotaModel
 from s3mp.identity.infrastructure.models import PrincipalModel
 
@@ -21,11 +22,14 @@ class SqlAlchemyQuotaStore:
         storage_space_id: str | None,
         limit: int = 50,
         cursor: str | None = None,
+        application_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         async with self._sf() as session:
             stmt = select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
             if storage_space_id:
                 stmt = stmt.where(QuotaModel.storage_space_id == UUID(storage_space_id))
+            if application_id:
+                stmt = stmt.where(QuotaModel.application_id == UUID(application_id))
             if cursor:
                 stmt = stmt.where(QuotaModel.id > UUID(cursor))
             rows = (await session.scalars(stmt.order_by(QuotaModel.id).limit(limit + 1))).all()
@@ -52,6 +56,22 @@ class SqlAlchemyQuotaStore:
             )
             if row is None:
                 return None
+            if row.application_id is not None:
+                tenant_quota = await session.scalar(
+                    select(QuotaModel)
+                    .where(
+                        QuotaModel.tenant_id == tenant_id,
+                        QuotaModel.application_id.is_(None),
+                        QuotaModel.storage_space_id.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if tenant_quota is not None and limit_bytes > tenant_quota.limit_bytes:
+                    raise ApiError(
+                        "quota_allocation_exceeded",
+                        "Application quota cannot exceed tenant quota",
+                        status_code=422,
+                    )
             row.limit_bytes = limit_bytes
             await session.flush()
             return _quota_dict(row)
@@ -112,6 +132,7 @@ def _quota_dict(m: QuotaModel) -> dict[str, Any]:
         "id": str(m.id),
         "tenant_id": str(m.tenant_id),
         "storage_space_id": str(m.storage_space_id) if m.storage_space_id else None,
+        "application_id": str(m.application_id) if m.application_id else None,
         "limit_bytes": m.limit_bytes,
         "used_bytes": m.used_bytes,
         "reserved_bytes": m.reserved_bytes,
@@ -119,7 +140,11 @@ def _quota_dict(m: QuotaModel) -> dict[str, Any]:
             (m.limit_bytes or 0) - (m.used_bytes or 0) - (m.reserved_bytes or 0), 0
         ),
         "measured_at": m.updated_at.isoformat() if m.updated_at else None,
-        "scope_type": "storage_space" if m.storage_space_id else "tenant",
+        "scope_type": (
+            "application"
+            if m.application_id
+            else ("storage_space" if m.storage_space_id else "tenant")
+        ),
         "updated_at": m.updated_at.isoformat() if m.updated_at else None,
     }
 

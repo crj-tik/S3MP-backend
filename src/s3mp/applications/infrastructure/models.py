@@ -38,6 +38,7 @@ class ApplicationModel(Base):
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     principal_id: Mapped[UUID] = mapped_column(nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    storage_namespace: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     authorization_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="1"
@@ -46,6 +47,9 @@ class ApplicationModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[UUID | None] = mapped_column()
+    deletion_reason: Mapped[str | None] = mapped_column(String(500))
 
 
 class ApplicationOwnerModel(Base):
