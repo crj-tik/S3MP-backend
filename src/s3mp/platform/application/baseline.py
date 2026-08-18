@@ -12,6 +12,7 @@ from s3mp.platform.infrastructure.models import PlatformAuditEventModel, Platfor
 PLATFORM_ROLES: dict[str, tuple[str, ...]] = {
     "platform_admin": (
         "platform.accounts.read",
+        "platform.accounts.manage",
         "platform.tenants.read",
         "platform.tenants.manage",
         "platform.roles.read",
@@ -95,8 +96,7 @@ TENANT_PERMISSION_METADATA: dict[str, tuple[str, bool, str]] = {
 async def reconcile_platform_roles(session: AsyncSession) -> set[str]:
     """Add missing baseline permissions without modifying custom roles or removing grants."""
     existing = {
-        role.name: role
-        for role in (await session.scalars(select(PlatformRoleModel))).all()
+        role.name: role for role in (await session.scalars(select(PlatformRoleModel))).all()
     }
     changed: set[str] = set()
     for name, permissions in PLATFORM_ROLES.items():

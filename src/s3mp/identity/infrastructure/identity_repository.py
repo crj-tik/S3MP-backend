@@ -26,6 +26,7 @@ from s3mp.identity.infrastructure.models import (
     PrincipalType,
     SessionModel,
     UserModel,
+    UserStatus,
 )
 from s3mp.tenant.infrastructure.models import TenantModel
 
@@ -40,20 +41,31 @@ class SqlAlchemyIdentityAdminStore:
         async with self._sf() as session:
             row = await session.scalar(
                 select(MembershipModel)
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .join(PrincipalModel, PrincipalModel.id == MembershipModel.principal_id)
                 .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
-                .where(MembershipModel.tenant_id == tenant_id, MembershipModel.id == membership_id)
+                .where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.id == membership_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    UserModel.status == UserStatus.ACTIVE,
+                    PrincipalModel.enabled.is_(True),
+                    TenantModel.status == "active",
+                )
             )
             if row is None:
                 return None
             user = await session.get(UserModel, row.user_id)
-            result = _membership_dict(row, user)
-            tenant_status = await session.scalar(
-                select(TenantModel.status).where(TenantModel.id == tenant_id)
-            )
-            result["tenant_status"] = _enum_value(tenant_status)
-            return result
+            # ``get_member`` feeds the strict public MembershipResponse DTO.
+            # Tenant status is already enforced by the query above and belongs
+            # only to ``get_membership_state`` for session/worker validation.
+            return _membership_dict(row, user)
 
-    get_membership = get_member
+    async def get_membership(
+        self, tenant_id: UUID, membership_id: UUID
+    ) -> dict[str, Any] | None:
+        """Return internal session-validation state, never the public DTO."""
+        return await self.get_membership_state(tenant_id, membership_id)
 
     async def get_membership_state(
         self, tenant_id: UUID, membership_id: UUID
@@ -97,7 +109,19 @@ class SqlAlchemyIdentityAdminStore:
             statement = (
                 select(UserModel)
                 .join(MembershipModel)
-                .where(MembershipModel.tenant_id == tenant_id)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                    & (PrincipalModel.id == MembershipModel.principal_id),
+                )
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    UserModel.status == UserStatus.ACTIVE,
+                    PrincipalModel.enabled.is_(True),
+                    TenantModel.status == "active",
+                )
                 .order_by(UserModel.id)
                 .limit(limit + 1)
             )
@@ -113,7 +137,20 @@ class SqlAlchemyIdentityAdminStore:
             row = await session.scalar(
                 select(UserModel)
                 .join(MembershipModel)
-                .where(MembershipModel.tenant_id == tenant_id, UserModel.id == user_id)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                    & (PrincipalModel.id == MembershipModel.principal_id),
+                )
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(
+                    MembershipModel.tenant_id == tenant_id,
+                    UserModel.id == user_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    UserModel.status == UserStatus.ACTIVE,
+                    PrincipalModel.enabled.is_(True),
+                    TenantModel.status == "active",
+                )
             )
             return _user_dict(row) if row else None
 
@@ -163,7 +200,20 @@ class SqlAlchemyIdentityAdminStore:
         async with self._sf() as session:
             statement = (
                 select(MembershipModel)
-                .where(MembershipModel.tenant_id == tenant_id)
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                    & (PrincipalModel.id == MembershipModel.principal_id),
+                )
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    UserModel.status == UserStatus.ACTIVE,
+                    PrincipalModel.enabled.is_(True),
+                    TenantModel.status == "active",
+                )
                 .order_by(MembershipModel.id)
                 .limit(limit + 1)
             )
@@ -712,7 +762,15 @@ class SqlAlchemyIdentityAdminStore:
                 select(PrincipalModel, MembershipModel, TenantModel)
                 .join(MembershipModel, MembershipModel.principal_id == PrincipalModel.id)
                 .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
-                .where(MembershipModel.tenant_id == tenant_id, PrincipalModel.id == principal_id)
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .where(
+                    MembershipModel.tenant_id == tenant_id,
+                    PrincipalModel.id == principal_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    UserModel.status == UserStatus.ACTIVE,
+                    PrincipalModel.enabled.is_(True),
+                    TenantModel.status == "active",
+                )
             )
             result = row.first()
             if result is None:
@@ -737,6 +795,7 @@ class SqlAlchemyIdentityAdminStore:
                     select(StorageSpaceModel.id).where(
                         StorageSpaceModel.tenant_id == tenant_id,
                         StorageSpaceModel.id == storage_space_id,
+                        StorageSpaceModel.status == "active",
                     )
                 )
                 is not None
@@ -747,7 +806,13 @@ class SqlAlchemyIdentityAdminStore:
             rows = await session.execute(
                 select(MembershipModel, TenantModel)
                 .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
-                .where(MembershipModel.principal_id == principal_id)
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .where(
+                    MembershipModel.principal_id == principal_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    UserModel.status == UserStatus.ACTIVE,
+                    TenantModel.status == "active",
+                )
             )
             return [
                 {

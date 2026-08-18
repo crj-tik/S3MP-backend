@@ -7,7 +7,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-CSRF_EXEMPT_PATHS = frozenset({"/api/v1/auth/login"})
+CSRF_EXEMPT_PATHS = frozenset(
+    {
+        "/api/v1/auth/login",
+        "/api/v1/account/register",
+    }
+)
 ACCOUNT_CSRF_PREFIXES = ("/api/v1/auth/", "/api/v1/platform/", "/api/v1/account/")
 
 

@@ -21,16 +21,24 @@ class QuotaModel(Base):
     __tablename__ = "quota"
     __table_args__ = (
         UniqueConstraint("tenant_id", "storage_space_id"),
+        UniqueConstraint("tenant_id", "application_id"),
         ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(
             ["tenant_id", "storage_space_id"],
             ["storage_space.tenant_id", "storage_space.id"],
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["tenant_id", "application_id"],
+            ["application.tenant_id", "application.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_quota_tenant_application", "tenant_id", "application_id"),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     storage_space_id: Mapped[UUID | None] = mapped_column()
+    application_id: Mapped[UUID | None] = mapped_column()
     limit_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     used_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reserved_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -51,6 +59,8 @@ class QuotaReservationModel(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     quota_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_quota_id: Mapped[UUID | None] = mapped_column()
+    tenant_quota_id: Mapped[UUID | None] = mapped_column()
     requested_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     actual_bytes: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="reserved")

@@ -123,6 +123,18 @@ class FileOperationWorker:
             space.get("provider_target_version", 1)
         ):
             return "cancelled", "legacy_provider_target"
+        if (
+            operation.get("application_id")
+            and str(operation["application_id"]) != str(space.get("application_id"))
+        ):
+            return "cancelled", "application_namespace_mismatch"
+        if (
+            operation.get("storage_namespace")
+            and operation["storage_namespace"] != space.get("storage_namespace")
+        ):
+            return "cancelled", "application_namespace_changed"
+        if int(operation.get("profile_version", 1)) != int(space.get("profile_version", 1)):
+            return "cancelled", "storage_profile_changed"
 
         def target(key: str) -> ProviderTarget | None:
             try:
@@ -132,6 +144,11 @@ class FileOperationWorker:
                     bucket=str(space["bucket"]),
                     relative_key=key,
                     operator_prefix=str(space.get("root_prefix") or ""),
+                    storage_namespace=(
+                        str(space["storage_namespace"])
+                        if space.get("storage_namespace")
+                        else None
+                    ),
                     version=int(space.get("provider_target_version", 1)),
                 )
             except (KeyError, ValueError):

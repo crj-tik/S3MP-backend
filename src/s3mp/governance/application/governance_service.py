@@ -10,7 +10,12 @@ from s3mp.identity.domain.context import PrincipalContext
 
 class QuotaStore(Protocol):
     async def list_quotas(
-        self, tenant_id: UUID, storage_space_id: str | None, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        storage_space_id: str | None,
+        limit: int,
+        cursor: str | None,
+        application_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_quota(self, tenant_id: UUID, quota_id: UUID) -> dict[str, Any] | None: ...
     async def update_quota(
@@ -40,10 +45,15 @@ class QuotaService:
         storage_space_id: str | None,
         limit: int = 50,
         cursor: str | None = None,
+        application_id: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "quotas.read")
         return await self.store.list_quotas(
-            context.tenant_id, storage_space_id, min(limit, 200), cursor
+            context.tenant_id,
+            storage_space_id,
+            min(limit, 200),
+            cursor,
+            application_id=application_id,
         )
 
     async def get_quota(self, context: PrincipalContext, quota_id: str) -> dict[str, Any]:

@@ -31,6 +31,16 @@ class TenantStore:
     async def update_platform_tenant(self, **kwargs: object) -> dict[str, object] | None:
         return kwargs
 
+    async def list_platform_accounts(
+        self, **_kwargs: object
+    ) -> tuple[list[dict[str, object]], None]:
+        return [], None
+
+
+class HistoricalTenantStore(TenantStore):
+    async def list_platform_tenants(self, **kwargs: object) -> tuple[list[dict[str, object]], None]:
+        return [{"id": str(uuid4()), "status": "deleted"}], None
+
 
 class SupportStore:
     def __init__(self) -> None:
@@ -66,6 +76,29 @@ async def test_platform_tenant_creation_delegates_only_the_initial_admin_identit
 
     assert created["actor_user_id"] == context.user_id
     assert created["initial_admin_user_id"] == initial_admin
+
+
+@pytest.mark.asyncio
+async def test_historical_tenant_listing_requires_platform_audit_permission() -> None:
+    service = PlatformTenantLifecycleService(HistoricalTenantStore())
+    with pytest.raises(ApiError) as raised:
+        await service.list_tenants(
+            PlatformContext(uuid4(), uuid4(), frozenset({"platform.tenants.read"})),
+            limit=20,
+            cursor=None,
+            include_deleted=True,
+        )
+    assert raised.value.code == "permission_denied"
+
+    result, _ = await service.list_tenants(
+        PlatformContext(
+            uuid4(), uuid4(), frozenset({"platform.tenants.read", "platform.audit.read"})
+        ),
+        limit=20,
+        cursor=None,
+        include_deleted=True,
+    )
+    assert result[0]["status"] == "deleted"
 
 
 @pytest.mark.asyncio

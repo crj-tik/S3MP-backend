@@ -23,18 +23,38 @@ class QuotaUpdate(BaseModel):
 
 
 class QuotaResponse(BaseModel):
-    """存储空间配额及当前用量。"""
+    """租户或应用范围的存储配额及当前用量。"""
 
-    id: str
-    tenant_id: str | None = None
-    storage_space_id: str | None = None
-    limit_bytes: int | None = None
-    used_bytes: int | None = None
-    reserved_bytes: int | None = None
-    available_bytes: int | None = None
-    measured_at: datetime | None = None
-    scope_type: str | None = None
-    updated_at: datetime | None = None
+    id: str = Field(description="配额记录的稳定标识。")
+    tenant_id: str | None = Field(default=None, description="该配额所属租户的稳定标识。")
+    storage_space_id: str | None = Field(
+        default=None,
+        description="兼容迁移期间关联的逻辑存储空间标识；应用配额以 application_id 为准。",
+    )
+    application_id: str | None = Field(
+        default=None,
+        description="应用的稳定标识。一个逻辑存储空间只绑定一个应用。",
+    )
+    limit_bytes: int | None = Field(
+        default=None, description="允许使用和预留的容量上限，单位为字节。"
+    )
+    used_bytes: int | None = Field(default=None, description="已验证并确认入库的容量，单位为字节。")
+    reserved_bytes: int | None = Field(
+        default=None, description="进行中上传暂时占用的容量，单位为字节。"
+    )
+    available_bytes: int | None = Field(
+        default=None,
+        description="当前可继续预留的容量，等于上限减去已用量和预留量，单位为字节。",
+    )
+    measured_at: datetime | None = Field(
+        default=None,
+        description="本次用量计算或读取的时间。",
+    )
+    scope_type: str | None = Field(
+        default=None,
+        description="配额范围：tenant 表示租户总量，application 表示单个应用。",
+    )
+    updated_at: datetime | None = Field(default=None, description="配额记录最后更新的时间。")
 
 
 class AuditActor(BaseModel):
@@ -129,11 +149,17 @@ async def list_quotas(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_quotas")],
     storage_space_id: str | None = None,
+    application_id: str | None = None,
     cursor: str | None = Query(default=None),
 ) -> QuotaPage:
-    query = f"quotas:{storage_space_id or 'all'}"
+    query = f"quotas:{storage_space_id or 'all'}:{application_id or 'all'}"
+    quota_kwargs: dict[str, Any] = {
+        "cursor": _cursor(cursor, context, query=query),
+    }
+    if application_id is not None:
+        quota_kwargs["application_id"] = application_id
     items, position = await _quota_svc(request).list_quotas(
-        context, storage_space_id, cursor=_cursor(cursor, context, query=query)
+        context, storage_space_id, **quota_kwargs
     )
     return QuotaPage.model_validate(_page(items, position, context, query=query))
 

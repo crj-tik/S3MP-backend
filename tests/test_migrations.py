@@ -39,6 +39,7 @@ EXPECTED_TABLES = {
     "platform_bootstrap_state",
     "platform_role",
     "platform_role_binding",
+    "platform_storage_profile",
     "principal",
     "provider_migration_manifest",
     "quota",
@@ -60,7 +61,7 @@ EXPECTED_TABLES = {
 def migration_config() -> Config:
     config = Config("alembic.ini")
     # pytest runs on the host; use the same host-local endpoint as other
-    # integration tests instead of the Docker-only host.docker.internal name.
+    # integration tests instead of the Docker-only localhost name.
     config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
     return config
 
@@ -95,7 +96,39 @@ def test_migration_history_has_single_head() -> None:
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(migration_config())
-    assert scripts.get_heads() == ["0021_platform_account_identity"]
+    assert scripts.get_heads() == ["0029_backfill_space_bindings"]
+
+
+def test_lifecycle_migration_exposes_soft_delete_metadata_and_partial_indexes() -> None:
+    async def _run() -> tuple[set[str], set[str]]:
+        engine = real_engine()
+        try:
+            async with engine.connect() as conn:
+                columns = await conn.run_sync(
+                    lambda c: {
+                        f"{table}.{column['name']}"
+                        for table in ("user_account", "tenant", "application")
+                        for column in inspect(c).get_columns(table)
+                        if column["name"] in {"deleted_at", "deleted_by", "deletion_reason"}
+                    }
+                )
+                indexes = await conn.run_sync(
+                    lambda c: {
+                        index["name"]
+                        for index in inspect(c).get_indexes("user_account")
+                    }
+                )
+            return columns, indexes
+        finally:
+            await engine.dispose()
+
+    columns, indexes = asyncio.run(_run())
+    assert columns == {
+        f"{table}.{field}"
+        for table in ("user_account", "tenant", "application")
+        for field in ("deleted_at", "deleted_by", "deletion_reason")
+    }
+    assert {"uq_user_active_email", "uq_user_active_employee_number"} <= indexes
 
 
 def test_upgrade_downgrade_upgrade_cycle() -> None:
@@ -111,4 +144,4 @@ def test_upgrade_downgrade_upgrade_cycle() -> None:
     assert _get_version() is None
 
     command.upgrade(config, "head")
-    assert _get_version() == "0021_platform_account_identity"
+    assert _get_version() == "0029_backfill_space_bindings"

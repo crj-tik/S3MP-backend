@@ -77,10 +77,13 @@ class FakeStorageService:
         return {
             "id": str(uuid4()),
             "tenant_id": str(tenant_id.tenant_id),
-            "connection_id": body.connection_id,
+            "connection_id": str(uuid4()),
+            "application_id": str(body.application_id),
             "name": body.name,
-            "bucket": body.bucket,
-            "root_prefix": body.root_prefix,
+            "bucket": "s3mp-dev",
+            "root_prefix": "",
+            "storage_namespace": f"tenant/{body.application_id}",
+            "profile_version": 1,
             "provider_target_version": 1,
             "status": "active",
             "created_at": datetime.now(UTC).isoformat(),
@@ -107,7 +110,7 @@ async def test_list_storage_connections_returns_200() -> None:
     assert response.json()["items"][0]["name"] == "primary"
 
 
-async def test_create_storage_connection_returns_201() -> None:
+async def test_create_storage_connection_is_removed_after_shared_profile_cutover() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -121,8 +124,7 @@ async def test_create_storage_connection_returns_201() -> None:
             },
         )
 
-    assert response.status_code == 201
-    assert response.json()["endpoint"] == "https://s3.example.com"
+    assert response.status_code == 405
 
 
 async def test_get_storage_space_returns_200() -> None:
@@ -142,6 +144,35 @@ async def test_list_storage_spaces_returns_page() -> None:
     assert response.status_code == 200
     assert response.json()["items"][0]["bucket"] == "s3mp-dev"
     assert response.json()["next_cursor"] is None
+
+
+async def test_create_storage_space_accepts_only_application_binding() -> None:
+    app = _app()
+    application_id = uuid4()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/storage_spaces",
+            json={"name": "应用存储", "application_id": str(application_id)},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["application_id"] == str(application_id)
+    assert response.json()["bucket"] == "s3mp-dev"
+
+
+async def test_create_storage_space_rejects_legacy_physical_target_fields() -> None:
+    app = _app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/storage_spaces",
+            json={
+                "name": "应用存储",
+                "application_id": str(uuid4()),
+                "bucket": "tenant-controlled-bucket",
+            },
+        )
+
+    assert response.status_code == 422
 
 
 async def test_unauthenticated_request_returns_401() -> None:

@@ -275,10 +275,12 @@ class SqlAlchemyPlatformStore:
             )
 
     async def list_platform_tenants(
-        self, *, limit: int, cursor: UUID | None
+        self, *, limit: int, cursor: UUID | None, include_deleted: bool = False
     ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
             statement = select(TenantModel).order_by(TenantModel.id).limit(limit + 1)
+            if not include_deleted:
+                statement = statement.where(TenantModel.status != TenantLifecycleStatus.DELETED)
             if cursor is not None:
                 statement = statement.where(TenantModel.id > cursor)
             rows = list((await session.scalars(statement)).all())
@@ -289,14 +291,27 @@ class SqlAlchemyPlatformStore:
 
     async def get_platform_tenant(self, tenant_id: UUID) -> dict[str, object] | None:
         async with self.session_factory() as session:
-            tenant = await session.get(TenantModel, tenant_id)
+            tenant = await session.scalar(
+                select(TenantModel).where(
+                    TenantModel.id == tenant_id,
+                    TenantModel.status != TenantLifecycleStatus.DELETED,
+                )
+            )
             return self._tenant_summary(tenant) if tenant else None
 
     async def list_platform_accounts(
-        self, *, limit: int, cursor: UUID | None, query: str | None, status: str | None
+        self,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        query: str | None,
+        status: str | None,
+        include_deleted: bool = False,
     ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
             statement = select(UserModel).order_by(UserModel.id).limit(limit + 1)
+            if not include_deleted:
+                statement = statement.where(UserModel.status != UserStatus.DELETED)
             if cursor is not None:
                 statement = statement.where(UserModel.id > cursor)
             if status is not None:
@@ -318,8 +333,126 @@ class SqlAlchemyPlatformStore:
 
     async def get_platform_account(self, user_id: UUID) -> dict[str, object] | None:
         async with self.session_factory() as session:
-            row = await session.get(UserModel, user_id)
+            row = await session.scalar(
+                select(UserModel).where(
+                    UserModel.id == user_id, UserModel.status != UserStatus.DELETED
+                )
+            )
             return self._account_summary(row) if row else None
+
+    async def delete_platform_account(
+        self, *, user_id: UUID, actor_user_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        from s3mp.platform.infrastructure.models import AccountSessionModel
+
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            user = await session.scalar(
+                select(UserModel).where(UserModel.id == user_id).with_for_update()
+            )
+            if user is None or user.status == UserStatus.DELETED:
+                return None
+            previous_status = str(user.status)
+            user.status = UserStatus.DELETED
+            user.deleted_at = now
+            user.deleted_by = actor_user_id
+            user.deletion_reason = reason
+            await session.execute(
+                update(AccountSessionModel)
+                .where(
+                    AccountSessionModel.user_id == user_id, AccountSessionModel.revoked_at.is_(None)
+                )
+                .values(revoked_at=now)
+            )
+            await session.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.membership_id.in_(
+                        select(MembershipModel.id).where(MembershipModel.user_id == user_id)
+                    ),
+                    SessionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            await session.execute(
+                update(MembershipModel)
+                .where(MembershipModel.user_id == user_id)
+                .values(
+                    status=MembershipStatus.REMOVED,
+                    authorization_version=MembershipModel.authorization_version + 1,
+                )
+            )
+            await session.execute(
+                update(PlatformRoleBindingModel)
+                .where(
+                    PlatformRoleBindingModel.user_id == user_id,
+                    PlatformRoleBindingModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            await session.execute(
+                update(PrincipalModel)
+                .where(
+                    PrincipalModel.id.in_(
+                        select(MembershipModel.principal_id).where(
+                            MembershipModel.user_id == user_id
+                        )
+                    )
+                )
+                .values(enabled=False)
+            )
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.account_deleted",
+                    resource_type="user_account",
+                    resource_id=str(user_id),
+                    details={"reason": reason, "previous_status": previous_status},
+                )
+            )
+            await session.flush()
+            return self._account_summary(user)
+
+    async def restore_platform_account(
+        self, *, user_id: UUID, actor_user_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        async with self.session_factory.begin() as session:
+            user = await session.scalar(
+                select(UserModel)
+                .where(UserModel.id == user_id, UserModel.status == UserStatus.DELETED)
+                .with_for_update()
+            )
+            if user is None:
+                return None
+            conflict = await session.scalar(
+                select(UserModel.id).where(
+                    UserModel.id != user_id,
+                    UserModel.status != UserStatus.DELETED,
+                    or_(
+                        UserModel.normalized_email == user.normalized_email,
+                        (UserModel.normalized_employee_number == user.normalized_employee_number)
+                        if user.normalized_employee_number is not None
+                        else False,
+                    ),
+                )
+            )
+            if conflict is not None:
+                raise ValueError("account identity is already used by an active account")
+            user.status = UserStatus.ACTIVE
+            user.deleted_at = None
+            user.deleted_by = None
+            user.deletion_reason = None
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.account_restored",
+                    resource_type="user_account",
+                    resource_id=str(user_id),
+                    details={"reason": reason},
+                )
+            )
+            await session.flush()
+            return self._account_summary(user)
 
     async def list_platform_roles(
         self, *, limit: int, cursor: UUID | None
@@ -342,6 +475,7 @@ class SqlAlchemyPlatformStore:
                 select(PlatformRoleBindingModel, PlatformRoleModel, UserModel)
                 .join(PlatformRoleModel, PlatformRoleModel.id == PlatformRoleBindingModel.role_id)
                 .join(UserModel, UserModel.id == PlatformRoleBindingModel.user_id)
+                .where(UserModel.status != UserStatus.DELETED)
                 .order_by(PlatformRoleBindingModel.id)
                 .limit(limit + 1)
             )
@@ -364,6 +498,7 @@ class SqlAlchemyPlatformStore:
                 .join(UserModel, UserModel.id == SupportAccessRequestModel.requester_user_id)
                 .join(TenantModel, TenantModel.id == SupportAccessRequestModel.tenant_id)
                 .outerjoin(approver, approver.id == SupportAccessRequestModel.approved_by_user_id)
+                .where(TenantModel.status == TenantLifecycleStatus.ACTIVE)
                 .order_by(SupportAccessRequestModel.id)
                 .limit(limit + 1)
             )
@@ -404,7 +539,10 @@ class SqlAlchemyPlatformStore:
                 .join(UserModel, UserModel.id == SupportAccessRequestModel.requester_user_id)
                 .join(TenantModel, TenantModel.id == SupportAccessRequestModel.tenant_id)
                 .outerjoin(approver, approver.id == SupportAccessRequestModel.approved_by_user_id)
-                .where(SupportAccessRequestModel.id == request_id)
+                .where(
+                    SupportAccessRequestModel.id == request_id,
+                    TenantModel.status == TenantLifecycleStatus.ACTIVE,
+                )
             )
             value = row.first()
             return self._support_read_summary(*value) if value else None
@@ -491,6 +629,8 @@ class SqlAlchemyPlatformStore:
             tenant = await session.get(TenantModel, tenant_id, with_for_update=True)
             if tenant is None:
                 return None
+            if tenant.status == TenantLifecycleStatus.DELETED:
+                return None
             if name is not None:
                 tenant.name = name
             if status is not None:
@@ -502,6 +642,154 @@ class SqlAlchemyPlatformStore:
                     resource_type="tenant",
                     resource_id=str(tenant.id),
                     details={"name_changed": name is not None, "status": status},
+                )
+            )
+            await session.flush()
+            return self._tenant_summary(tenant)
+
+    async def delete_platform_tenant(
+        self, *, tenant_id: UUID, actor_user_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        from s3mp.applications.infrastructure.models import ApiKeyModel, ApplicationModel
+        from s3mp.files.infrastructure.models import (
+            FileOperationModel,
+            MultipartSessionModel,
+            UploadSessionModel,
+        )
+        from s3mp.storage.infrastructure.models import StorageConnectionModel, StorageSpaceModel
+
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            tenant = await session.scalar(
+                select(TenantModel).where(TenantModel.id == tenant_id).with_for_update()
+            )
+            if tenant is None or tenant.status == TenantLifecycleStatus.DELETED:
+                return None
+            tenant.status = TenantLifecycleStatus.DELETED
+            tenant.deleted_at = now
+            tenant.deleted_by = actor_user_id
+            tenant.deletion_reason = reason
+            await session.execute(
+                update(SessionModel)
+                .where(SessionModel.tenant_id == tenant_id, SessionModel.revoked_at.is_(None))
+                .values(revoked_at=now)
+            )
+            await session.execute(
+                update(MembershipModel)
+                .where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                )
+                .values(
+                    status=MembershipStatus.REMOVED,
+                    authorization_version=MembershipModel.authorization_version + 1,
+                )
+            )
+            await session.execute(
+                update(PrincipalModel)
+                .where(PrincipalModel.tenant_id == tenant_id)
+                .values(enabled=False)
+            )
+            await session.execute(
+                update(RoleBindingModel)
+                .where(
+                    RoleBindingModel.tenant_id == tenant_id, RoleBindingModel.revoked_at.is_(None)
+                )
+                .values(revoked_at=now)
+            )
+            await session.execute(
+                update(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id, ApplicationModel.status != "deleted"
+                )
+                .values(
+                    status="deleted",
+                    deleted_at=now,
+                    deleted_by=actor_user_id,
+                    deletion_reason=reason,
+                    authorization_version=ApplicationModel.authorization_version + 1,
+                )
+            )
+            await session.execute(
+                update(ApiKeyModel)
+                .where(ApiKeyModel.tenant_id == tenant_id, ApiKeyModel.status == "active")
+                .values(status="revoked", revoked_at=now)
+            )
+            await session.execute(
+                update(StorageConnectionModel)
+                .where(
+                    StorageConnectionModel.tenant_id == tenant_id,
+                    StorageConnectionModel.status == "active",
+                )
+                .values(status="disabled")
+            )
+            await session.execute(
+                update(StorageSpaceModel)
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id, StorageSpaceModel.status == "active"
+                )
+                .values(status="deleting")
+            )
+            await session.execute(
+                update(UploadSessionModel)
+                .where(
+                    UploadSessionModel.tenant_id == tenant_id,
+                    UploadSessionModel.status == "pending",
+                )
+                .values(status="cancelled")
+            )
+            await session.execute(
+                update(MultipartSessionModel)
+                .where(
+                    MultipartSessionModel.tenant_id == tenant_id,
+                    MultipartSessionModel.status == "pending",
+                )
+                .values(status="cancelled")
+            )
+            await session.execute(
+                update(FileOperationModel)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id,
+                    FileOperationModel.status == "pending",
+                )
+                .values(status="cancelled", failure_reason="tenant_deleted")
+            )
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.tenant_deleted",
+                    resource_type="tenant",
+                    resource_id=str(tenant_id),
+                    details={"reason": reason},
+                )
+            )
+            await session.flush()
+            return self._tenant_summary(tenant)
+
+    async def restore_platform_tenant(
+        self, *, tenant_id: UUID, actor_user_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        async with self.session_factory.begin() as session:
+            tenant = await session.scalar(
+                select(TenantModel)
+                .where(
+                    TenantModel.id == tenant_id, TenantModel.status == TenantLifecycleStatus.DELETED
+                )
+                .with_for_update()
+            )
+            if tenant is None:
+                return None
+            tenant.status = TenantLifecycleStatus.SUSPENDED
+            tenant.deleted_at = None
+            tenant.deleted_by = None
+            tenant.deletion_reason = None
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.tenant_restored",
+                    resource_type="tenant",
+                    resource_id=str(tenant_id),
+                    details={"reason": reason, "restored_status": "suspended"},
                 )
             )
             await session.flush()
@@ -748,6 +1036,9 @@ class SqlAlchemyPlatformStore:
             "status": row.status.value,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
+            "deleted_at": row.deleted_at,
+            "deleted_by": row.deleted_by,
+            "deletion_reason": row.deletion_reason,
         }
 
     @staticmethod
@@ -838,6 +1129,9 @@ class SqlAlchemyPlatformStore:
             "name": tenant.name,
             "status": tenant.status.value,
             "created_at": tenant.created_at,
+            "deleted_at": tenant.deleted_at,
+            "deleted_by": tenant.deleted_by,
+            "deletion_reason": tenant.deletion_reason,
         }
 
     async def active_platform_admin_exists(self) -> bool:

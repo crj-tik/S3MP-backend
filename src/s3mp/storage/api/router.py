@@ -18,21 +18,12 @@ router = APIRouter(prefix="/api/v1", tags=["Storage"])
 # ── DTOs ──────────────────────────────────────────────────────────────────────
 
 
-class StorageConnectionCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=200)
-    endpoint: str = Field(min_length=1, max_length=500)
-    region: str = Field(min_length=1, max_length=100)
-    path_style: bool = True
-    credential_reference: str = Field(min_length=1, max_length=500)
-
-
 class StorageSpaceCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
-    connection_id: str
-    bucket: str = Field(min_length=1, max_length=255)
-    root_prefix: str = Field(default="", max_length=1024)
+    application_id: UUID = Field(
+        description="应用的稳定标识。一个逻辑存储空间只绑定一个应用。",
+    )
 
 
 class ProbeRequest(BaseModel):
@@ -54,9 +45,24 @@ class StorageSpaceResponse(BaseModel):
     id: UUID
     tenant_id: UUID
     connection_id: UUID
+    application_id: UUID | None = Field(
+        default=None,
+        description="应用的稳定标识。一个逻辑存储空间只绑定一个应用。",
+    )
     name: str
-    bucket: str
-    root_prefix: str
+    bucket: str = Field(description="平台共享 S3 profile 派生的 Bucket；调用方不可覆盖。")
+    root_prefix: str = Field(
+        description="仅供迁移审计的旧根路径字段；新文件操作不以该字段选择对象存储目标。",
+        deprecated=True,
+    )
+    storage_namespace: str | None = Field(
+        default=None,
+        description="应用不可变的共享 Bucket 命名空间；与相对对象路径共同派生物理对象 Key。",
+    )
+    profile_version: int = Field(
+        default=1,
+        description="生成该存储目标时使用的平台共享 S3 profile 版本。",
+    )
     provider_target_version: int
     status: str
     created_at: datetime
@@ -157,22 +163,6 @@ async def list_storage_connections(
     )
 
 
-@router.post(
-    "/storage_connections",
-    status_code=201,
-    response_model=StorageConnectionResponse,
-    operation_id="create_storage_connection",
-)
-async def create_storage_connection(
-    request: Request,
-    body: StorageConnectionCreate,
-    context: Annotated[PrincipalContext, management_permission("create_storage_connection")],
-) -> StorageConnectionResponse:
-    return StorageConnectionResponse.model_validate(
-        await _svc(request).create_connection(context, body)
-    )
-
-
 @router.get(
     "/storage_connections/{connection_id}",
     response_model=StorageConnectionResponse,
@@ -199,9 +189,7 @@ async def probe_storage_connection(
     context: Annotated[PrincipalContext, management_permission("probe_storage_connection")],
     connection_id: str = Path(min_length=1),
 ) -> ProbeResult:
-    result = await _svc(request).probe_connection(
-        context, connection_id, body.write_test_prefix
-    )
+    result = await _svc(request).probe_connection(context, connection_id, body.write_test_prefix)
     return ProbeResult.model_validate(result)
 
 

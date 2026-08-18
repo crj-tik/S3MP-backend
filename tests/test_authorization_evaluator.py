@@ -147,3 +147,95 @@ def test_authorized_command_evidence_is_json_serializable() -> None:
     import json
 
     assert json.loads(json.dumps(command.authorization_evidence))["decision"] == "allow"
+
+
+def test_group_derived_allow_is_scoped_to_the_bound_application_space() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    application_space, other_application_space = uuid4(), uuid4()
+    group_allow = Binding(
+        uuid4(),
+        "files.read",
+        Decision.ALLOW,
+        "reports",
+        now - timedelta(minutes=1),
+        now + timedelta(hours=1),
+        "group grant",
+        application_space,
+    )
+
+    assert evaluate(
+        "files.read",
+        [group_allow],
+        storage_space_id=application_space,
+        object_key="reports/a.csv",
+        now=now,
+    ).decision == Decision.ALLOW
+    assert evaluate(
+        "files.read",
+        [group_allow],
+        storage_space_id=other_application_space,
+        object_key="reports/a.csv",
+        now=now,
+    ).decision == Decision.DENY
+
+
+def test_application_grant_cannot_cross_a_namespace_prefix_boundary() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    app_space = uuid4()
+    grant = binding("files.write", Decision.ALLOW, "reports")
+    scoped = Binding(
+        grant.id,
+        grant.permission,
+        grant.effect,
+        grant.canonical_prefix,
+        grant.starts_at,
+        grant.expires_at,
+        "application grant",
+        app_space,
+    )
+
+    assert evaluate(
+        "files.write", [scoped], storage_space_id=app_space, object_key="reports/a.txt", now=now
+    ).decision == Decision.ALLOW
+    assert evaluate(
+        "files.write",
+        [scoped],
+        storage_space_id=app_space,
+        object_key="reports-private/a.txt",
+        now=now,
+    ).decision == Decision.DENY
+
+
+def test_deny_from_application_path_binding_overrides_direct_allow() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    space_id = uuid4()
+    allow = Binding(
+        uuid4(),
+        "files.delete",
+        Decision.ALLOW,
+        "reports",
+        now - timedelta(minutes=1),
+        now + timedelta(hours=1),
+        "direct user grant",
+        space_id,
+    )
+    deny = Binding(
+        uuid4(),
+        "files.delete",
+        Decision.DENY,
+        "reports/locked",
+        now - timedelta(minutes=1),
+        now + timedelta(hours=1),
+        "application deny",
+        space_id,
+    )
+
+    result = evaluate(
+        "files.delete",
+        [allow, deny],
+        storage_space_id=space_id,
+        object_key="reports/locked/a.txt",
+        now=now,
+    )
+    assert result.decision == Decision.DENY
+    assert result.reason_code == "explicit_deny"

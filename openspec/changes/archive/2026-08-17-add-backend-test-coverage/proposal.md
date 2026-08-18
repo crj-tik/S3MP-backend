@@ -29,6 +29,6 @@
 - 新增 `tests/**` 下的 HTTP 契约测试、真实端到端测试、repository 测试、回归测试与契约脚本单测；迁移 3 个现有 aiosqlite 测试到真实 postgresql；不修改 `src/**` 生产代码、不修改 `contracts/**`、不修改 `migrations/**`。
 - 移除 `aiosqlite` dev 依赖；复用 pytest 8.3 + pytest-asyncio 0.25（auto 模式）+ httpx AsyncClient + ASGITransport + 真实 docker 服务。
 - 持久化与集成测试连真实 docker 服务（pg@18110 / redis@18113 / minio@9000），docker 必须运行；HTTP 契约层 fake 保留、真实端到端并存。
-- 需修正 `deploy/secrets/database_url`（当前 `s3mp` 用户不存在，改用 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@host.docker.internal:18110/s3mp`，与 `alembic.ini` 一致）与 `deploy/.env` 的 `S3MP_REDIS_URL`（当前端口 6379 错且缺密码，改 `redis://:Bk-Skill@localhost:18113/0`）；`S3MP_S3_*` 已正确。
+- 需修正 `deploy/secrets/database_url`（当前 `s3mp` 用户不存在，改用 `postgresql+asyncpg://s3mp_app:bk-s3mp-backend@localhost:18110/s3mp`，与 `alembic.ini` 一致）与 `deploy/.env` 的 `S3MP_REDIS_URL`（当前端口 6379 错且缺密码，改 `redis://:Bk-Skill@localhost:18113/0`）；`S3MP_S3_*` 已正确。
 - 迁移往返测试直接在 `s3mp` 库跑，`downgrade base` 会清空表后 `upgrade head` 重建（测试环境可接受）。
 - 预期测试用例数从 176 增长到约 280+，因含真实 IO 运行时长会增长，但单机可接受。

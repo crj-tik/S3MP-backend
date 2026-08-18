@@ -36,6 +36,18 @@ class AccountService:
             "tenants": [],
         }
 
+    async def register(
+        self, *, email: str, employee_number: str, display_name: str, password: str
+    ) -> dict[str, object]:
+        del password
+        return {
+            "account": {
+                "email": email,
+                "employee_number": employee_number,
+                "display_name": display_name,
+            }
+        }
+
     async def logout(self, _context: PlatformContext) -> None:
         return None
 
@@ -84,6 +96,60 @@ async def test_login_failure_is_uniform_and_success_sets_opaque_cookie_attribute
     assert "HttpOnly" in success.headers["set-cookie"]
     assert "s3mp_account_session=" in success.headers["set-cookie"]
     assert "Secure" not in success.headers["set-cookie"]
+
+
+@pytest.mark.asyncio
+async def test_registration_is_public_without_csrf_or_session_cookie() -> None:
+    app = app_with_account_context()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/account/register",
+            json={
+                "email": "new@example.test",
+                "employee_number": "EMP-REG-001",
+                "display_name": "New User",
+                "password": "strong-password",
+            },
+        )
+
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_cookie", ["s3mp_account_session", "s3mp_session"])
+async def test_registration_ignores_stale_session_cookie_for_csrf(
+    session_cookie: str,
+) -> None:
+    app = app_with_account_context()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set(session_cookie, "stale-session")
+        response = await client.post(
+            "/api/v1/account/register",
+            json={
+                "email": f"{session_cookie.replace('s3mp_', '')}@example.test",
+                "employee_number": f"EMP-{uuid4().hex[:8]}",
+                "display_name": "New User",
+                "password": "strong-password",
+            },
+        )
+
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_other_account_mutation_remains_csrf_protected() -> None:
+    app = app_with_account_context()
+
+    @app.post("/api/v1/account/other-mutation")  # type: ignore[untyped-decorator]
+    async def other_mutation() -> dict[str, bool]:
+        return {"ok": True}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set("s3mp_account_session", "stale-session")
+        response = await client.post("/api/v1/account/other-mutation")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "csrf_validation_failed"
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,11 @@ class AuthorizedFileCommand:
             bucket=str(storage_space["bucket"]),
             relative_key=rel,
             operator_prefix=str(storage_space.get("root_prefix") or ""),
+            storage_namespace=(
+                str(storage_space["storage_namespace"])
+                if storage_space.get("storage_namespace")
+                else None
+            ),
             version=int(storage_space.get("provider_target_version", 1)),
         )
 

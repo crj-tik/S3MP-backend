@@ -86,16 +86,26 @@ def derive_provider_target(
     bucket: str,
     relative_key: str,
     operator_prefix: str = "",
+    storage_namespace: str | None = None,
     version: int = 1,
 ) -> ProviderTarget:
-    """Derive the immutable tenant/storage-space key namespace for provider I/O."""
+    """Derive an immutable application namespace for provider I/O.
+
+    ``storage_namespace`` is the new server-owned tenant/application namespace.
+    The UUID namespace fallback remains for legacy rows until migration has
+    assigned every active storage space to an application.
+    """
     if version != 1:
         raise StoragePolicyError("unsupported provider target version")
     if not bucket or "/" in bucket or "\\" in bucket:
         raise StoragePolicyError("bucket must be a single provider bucket name")
     relative = canonical_object_key(relative_key, allow_empty=True)
     prefix = canonical_operator_prefix(operator_prefix)
-    namespace = f"v{version}/tenants/{tenant_id}/spaces/{storage_space_id}"
+    namespace = storage_namespace or f"v{version}/tenants/{tenant_id}/spaces/{storage_space_id}"
+    try:
+        validate_canonical_prefix(namespace)
+    except ValueError as exc:
+        raise StoragePolicyError("storage namespace is not canonical") from exc
     parts = [namespace]
     if prefix:
         parts.append(prefix)

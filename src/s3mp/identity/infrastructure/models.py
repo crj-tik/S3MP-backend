@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,6 +34,7 @@ class PrincipalType(StrEnum):
 class UserStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
+    DELETED = "deleted"
 
 
 class MembershipStatus(StrEnum):
@@ -67,15 +69,25 @@ class PrincipalModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
-
-
 class UserModel(Base):
     """A human account shared across its tenant memberships."""
 
     __tablename__ = "user_account"
     __table_args__ = (
-        UniqueConstraint("normalized_email"),
-        UniqueConstraint("normalized_employee_number"),
+        Index(
+            "uq_user_active_email",
+            "normalized_email",
+            unique=True,
+            postgresql_where=text("status <> 'deleted'"),
+        ),
+        Index(
+            "uq_user_active_employee_number",
+            "normalized_employee_number",
+            unique=True,
+            postgresql_where=text(
+                "status <> 'deleted' AND normalized_employee_number IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -99,6 +111,9 @@ class UserModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by: Mapped[UUID | None] = mapped_column()
+    deletion_reason: Mapped[str | None] = mapped_column(String(500))
 
 
 class ExternalIdentityModel(Base):

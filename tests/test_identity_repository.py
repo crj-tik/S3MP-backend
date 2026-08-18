@@ -9,10 +9,11 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from s3mp.common.database import create_engine
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.identity.infrastructure.identity_repository import SqlAlchemyIdentityAdminStore
 from s3mp.identity.infrastructure.models import (
     MembershipModel,
     MembershipStatus,
@@ -136,3 +137,21 @@ async def test_repository_revokes_one_session_and_all_principal_sessions(
         assert (
             await repository.revoke_principal_sessions(context.tenant_id, context.principal_id) == 0
         )
+
+
+async def test_admin_member_projection_excludes_internal_tenant_state(engine: AsyncEngine) -> None:
+    """The public member projection must remain compatible with MembershipResponse."""
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        context, _ = await seed_identity(session, uuid4())
+
+    store = SqlAlchemyIdentityAdminStore(async_sessionmaker(engine, expire_on_commit=False))
+    result = await store.get_member(context.tenant_id, context.membership_id)
+
+    assert result is not None
+    assert "tenant_status" not in result
+    assert result["id"] == str(context.membership_id)
+
+    session_state = await store.get_membership(context.tenant_id, context.membership_id)
+    assert session_state is not None
+    assert session_state["tenant_status"] == "active"
+    assert session_state["principal_id"] == str(context.principal_id)

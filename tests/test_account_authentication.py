@@ -43,6 +43,9 @@ class AccountStore:
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None:
         return {"account": {"id": str(user_id)}, "tenants": []}
 
+    async def effective_permissions(self, _user_id: UUID) -> frozenset[str]:
+        return frozenset({"platform.tenants.read"})
+
     async def create_tenant_session(
         self,
         _user_id: UUID,
@@ -74,7 +77,11 @@ async def test_login_returns_context_but_not_raw_session_token() -> None:
         "account@example.test", "correct-password", rate_limit_key="test"
     )
 
-    assert result == {"account": {"id": str(store.user_id)}, "tenants": []}
+    assert result == {
+        "account": {"id": str(store.user_id)},
+        "tenants": [],
+        "platform_permissions": ["platform.tenants.read"],
+    }
     assert session_token not in str(result)
     assert csrf_token not in str(result)
     assert store.sessions[0][0] == store.user_id

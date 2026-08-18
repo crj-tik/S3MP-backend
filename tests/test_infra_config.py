@@ -3,6 +3,7 @@
 import pytest
 
 from s3mp.common.config import Settings
+from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
 
 
 class TestS3ProfileValidation:
@@ -52,6 +53,22 @@ class TestS3ProfileValidation:
         s = Settings()
         assert s.s3_endpoint is None
         assert s.s3_bucket is None
+
+    def test_adapter_preserves_region_and_path_style_for_s3_compatible_targets(self) -> None:
+        adapter = MinioObjectStorageAdapter(
+            Settings(
+                s3_endpoint="http://localhost:9000",
+                s3_region="ap-southeast-1",
+                s3_path_style=True,
+                s3_bucket="shared-bucket",
+                s3_access_key="key",
+                s3_secret_key="secret",
+                environment="development",
+            )
+        )
+
+        assert adapter._client.meta.region_name == "ap-southeast-1"  # noqa: SLF001
+        assert adapter._client.meta.config.s3["addressing_style"] == "path"  # noqa: SLF001
 
 
 class TestSecretSafety:

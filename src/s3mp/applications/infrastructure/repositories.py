@@ -13,6 +13,7 @@ from s3mp.applications.infrastructure.models import (
 )
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.identity.infrastructure.models import MembershipModel, PrincipalModel, PrincipalType
+from s3mp.tenant.infrastructure.models import TenantModel
 
 
 def _application(model: ApplicationModel) -> dict[str, object]:
@@ -21,10 +22,14 @@ def _application(model: ApplicationModel) -> dict[str, object]:
         "tenant_id": model.tenant_id,
         "principal_id": model.principal_id,
         "name": model.name,
+        "storage_namespace": model.storage_namespace,
         "status": model.status,
         "authorization_version": model.authorization_version,
         "created_at": model.created_at,
         "updated_at": model.updated_at,
+        "deleted_at": model.deleted_at,
+        "deleted_by": model.deleted_by,
+        "deletion_reason": model.deletion_reason,
     }
 
 
@@ -55,7 +60,15 @@ class SqlAlchemyApplicationStore:
         self, tenant_id: UUID, limit: int, cursor: str | None
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
-            statement = select(ApplicationModel).where(ApplicationModel.tenant_id == tenant_id)
+            statement = (
+                select(ApplicationModel)
+                .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.status != "deleted",
+                    TenantModel.status == "active",
+                )
+            )
             if cursor:
                 statement = statement.where(ApplicationModel.id > UUID(cursor))
             models = (
@@ -67,8 +80,13 @@ class SqlAlchemyApplicationStore:
     async def get_app(self, tenant_id: UUID, app_id: UUID) -> dict[str, object] | None:
         async with self._sessions() as session:
             model = await session.scalar(
-                select(ApplicationModel).where(
-                    ApplicationModel.tenant_id == tenant_id, ApplicationModel.id == app_id
+                select(ApplicationModel)
+                .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id == app_id,
+                    ApplicationModel.status != "deleted",
+                    TenantModel.status == "active",
                 )
             )
         return _application(model) if model else None
@@ -91,6 +109,12 @@ class SqlAlchemyApplicationStore:
             )
             session.add(model)
             await session.flush()
+            tenant = await session.get(TenantModel, tenant_id)
+            if tenant is not None:
+                # The namespace is immutable even if the display name changes.
+                model.storage_namespace = f"{tenant.slug}/{model.id}"
+            await session.flush()
+            await session.refresh(model)
             session.add(
                 ApplicationOwnerModel(
                     tenant_id=tenant_id, application_id=model.id, owner_principal_id=principal_id
@@ -105,13 +129,160 @@ class SqlAlchemyApplicationStore:
         async with self._sessions.begin() as session:
             model = await session.scalar(
                 select(ApplicationModel)
+                .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
                 .where(ApplicationModel.tenant_id == tenant_id, ApplicationModel.id == app_id)
+                .where(ApplicationModel.status != "deleted", TenantModel.status == "active")
                 .with_for_update()
             )
             if model is None:
                 return None
             if name is not None:
                 model.name = name
+            await session.flush()
+            return _application(model)
+
+    async def delete_app(
+        self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        from datetime import UTC
+
+        from s3mp.audit.infrastructure.models import AuditEventModel
+        from s3mp.files.infrastructure.models import (
+            FileOperationModel,
+            MultipartSessionModel,
+            UploadSessionModel,
+        )
+
+        now = datetime.now(UTC)
+        async with self._sessions.begin() as session:
+            model = await session.scalar(
+                select(ApplicationModel)
+                .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id == app_id,
+                    ApplicationModel.status != "deleted",
+                    TenantModel.status == "active",
+                )
+                .with_for_update()
+            )
+            if model is None:
+                return None
+            model.status = "deleted"
+            model.deleted_at = now
+            model.deleted_by = actor_principal_id
+            model.deletion_reason = reason
+            model.authorization_version += 1
+            await session.execute(
+                update(PrincipalModel)
+                .where(
+                    PrincipalModel.tenant_id == tenant_id, PrincipalModel.id == model.principal_id
+                )
+                .values(enabled=False)
+            )
+            await session.execute(
+                update(ApiKeyModel)
+                .where(
+                    ApiKeyModel.tenant_id == tenant_id,
+                    ApiKeyModel.application_id == app_id,
+                    ApiKeyModel.status == "active",
+                )
+                .values(status="revoked", revoked_at=now)
+            )
+            await session.execute(
+                update(UploadSessionModel)
+                .where(
+                    UploadSessionModel.tenant_id == tenant_id,
+                    UploadSessionModel.principal_id == model.principal_id,
+                    UploadSessionModel.status == "pending",
+                )
+                .values(status="cancelled")
+            )
+            await session.execute(
+                update(MultipartSessionModel)
+                .where(
+                    MultipartSessionModel.tenant_id == tenant_id,
+                    MultipartSessionModel.principal_id == model.principal_id,
+                    MultipartSessionModel.status == "pending",
+                )
+                .values(status="cancelled")
+            )
+            await session.execute(
+                update(FileOperationModel)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id,
+                    FileOperationModel.principal_id == model.principal_id,
+                    FileOperationModel.status == "pending",
+                )
+                .values(status="cancelled", failure_reason="application_deleted")
+            )
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action="application.deleted",
+                    resource_type="application",
+                    resource_id=str(app_id),
+                    details={"reason": reason},
+                )
+            )
+            await session.flush()
+            return _application(model)
+
+    async def restore_app(
+        self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        from s3mp.audit.infrastructure.models import AuditEventModel
+
+        async with self._sessions.begin() as session:
+            model = await session.scalar(
+                select(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id == app_id,
+                    ApplicationModel.status == "deleted",
+                )
+                .with_for_update()
+            )
+            if model is None:
+                return None
+            tenant = await session.scalar(select(TenantModel).where(TenantModel.id == tenant_id))
+            owner = await session.scalar(
+                select(ApplicationOwnerModel)
+                .join(
+                    MembershipModel,
+                    MembershipModel.principal_id == ApplicationOwnerModel.owner_principal_id,
+                )
+                .join(PrincipalModel, PrincipalModel.id == ApplicationOwnerModel.owner_principal_id)
+                .where(
+                    ApplicationOwnerModel.tenant_id == tenant_id,
+                    ApplicationOwnerModel.application_id == app_id,
+                    MembershipModel.status == "active",
+                    PrincipalModel.enabled.is_(True),
+                )
+            )
+            if tenant is None or tenant.status != "active" or owner is None:
+                raise ValueError("application restore requires an active tenant and active Owner")
+            model.status = "active"
+            model.deleted_at = None
+            model.deleted_by = None
+            model.deletion_reason = None
+            model.authorization_version += 1
+            await session.execute(
+                update(PrincipalModel)
+                .where(PrincipalModel.id == model.principal_id)
+                .values(enabled=True)
+            )
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action="application.restored",
+                    resource_type="application",
+                    resource_id=str(app_id),
+                    details={"reason": reason},
+                )
+            )
             await session.flush()
             return _application(model)
 
@@ -169,14 +340,18 @@ class SqlAlchemyApplicationStore:
                         select(ApplicationOwnerModel.owner_principal_id).where(
                             ApplicationOwnerModel.tenant_id == tenant_id,
                             ApplicationOwnerModel.application_id == app_id,
+                            ApplicationOwnerModel.application_id.in_(
+                                select(ApplicationModel.id).where(
+                                    ApplicationModel.tenant_id == tenant_id,
+                                    ApplicationModel.status != "deleted",
+                                )
+                            ),
                         )
                     )
                 ).all()
             )
 
-    async def list_owner_summaries(
-        self, tenant_id: UUID, app_id: UUID
-    ) -> list[dict[str, str]]:
+    async def list_owner_summaries(self, tenant_id: UUID, app_id: UUID) -> list[dict[str, str]]:
         async with self._sessions() as session:
             rows = (
                 await session.execute(
@@ -389,7 +564,17 @@ class SqlAlchemyApplicationStore:
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = select(ApiKeyModel).where(
-                ApiKeyModel.tenant_id == tenant_id, ApiKeyModel.application_id == app_id
+                ApiKeyModel.tenant_id == tenant_id,
+                ApiKeyModel.application_id == app_id,
+                ApiKeyModel.application_id.in_(
+                    select(ApplicationModel.id)
+                    .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                    .where(
+                        ApplicationModel.tenant_id == tenant_id,
+                        ApplicationModel.status == "active",
+                        TenantModel.status == "active",
+                    )
+                ),
             )
             if cursor:
                 statement = statement.where(ApiKeyModel.id > UUID(cursor))
@@ -403,7 +588,17 @@ class SqlAlchemyApplicationStore:
         async with self._sessions() as session:
             model = await session.scalar(
                 select(ApiKeyModel).where(
-                    ApiKeyModel.tenant_id == tenant_id, ApiKeyModel.id == key_id
+                    ApiKeyModel.tenant_id == tenant_id,
+                    ApiKeyModel.id == key_id,
+                    ApiKeyModel.application_id.in_(
+                        select(ApplicationModel.id)
+                        .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                        .where(
+                            ApplicationModel.tenant_id == tenant_id,
+                            ApplicationModel.status == "active",
+                            TenantModel.status == "active",
+                        )
+                    ),
                 )
             )
         return _api_key(model) if model else None

@@ -179,6 +179,24 @@ async def test_worker_cancels_when_membership_authorization_version_changes() ->
 
 
 @pytest.mark.asyncio
+async def test_worker_cancels_deleted_principal_before_provider_call() -> None:
+    class DeletedPrincipal(Principals):
+        async def get_principal(
+            self, tenant_id: UUID, principal_id: UUID
+        ) -> dict[str, Any]:
+            self.principal_id = str(principal_id)
+            return {"enabled": False, "status": "deleted"}
+
+    record, objects = operation(), Objects()
+    store = Store(record)
+    await FileOperationWorker(
+        store, Spaces(), Auth(), DeletedPrincipal(), objects
+    ).run_once("worker")
+    assert objects.copies == []
+    assert store.finished == [("cancelled", "subject_inactive_or_stale")]
+
+
+@pytest.mark.asyncio
 async def test_worker_executes_authorized_copy() -> None:
     record, store, objects = operation(), None, Objects()
     objects.objects = {

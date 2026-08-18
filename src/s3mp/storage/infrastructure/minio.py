@@ -61,7 +61,13 @@ class MinioObjectStorageAdapter:
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("configured S3 bucket is unavailable") from exc
 
+    def _assert_shared_bucket(self, target: ProviderTarget) -> None:
+        """Reject stale or forged targets that point outside the platform bucket."""
+        if target.bucket != self._bucket:
+            raise ObjectStorageUnavailable("provider target does not use the shared S3 bucket")
+
     async def head(self, target: ProviderTarget) -> ObjectMetadata | None:
+        self._assert_shared_bucket(target)
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.head_object, Bucket=target.bucket, Key=target.key
@@ -80,6 +86,7 @@ class MinioObjectStorageAdapter:
         )
 
     async def put(self, target: ProviderTarget, body: bytes, content_type: str) -> ObjectMetadata:
+        self._assert_shared_bucket(target)
         try:
             await asyncio.to_thread(
                 self._client.put_object,
@@ -96,6 +103,7 @@ class MinioObjectStorageAdapter:
         return result
 
     async def delete(self, target: ProviderTarget) -> None:
+        self._assert_shared_bucket(target)
         try:
             await asyncio.to_thread(
                 self._client.delete_object, Bucket=target.bucket, Key=target.key
@@ -104,6 +112,8 @@ class MinioObjectStorageAdapter:
             raise ObjectStorageUnavailable("S3 object delete failed") from exc
 
     async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> ObjectMetadata:
+        self._assert_shared_bucket(source)
+        self._assert_shared_bucket(destination)
         try:
             await asyncio.to_thread(
                 self._client.copy_object,
@@ -119,6 +129,7 @@ class MinioObjectStorageAdapter:
         return result
 
     async def presign_get(self, target: ProviderTarget, expires_in: int) -> str:
+        self._assert_shared_bucket(target)
         try:
             signed_url = await asyncio.to_thread(
                 self._client.generate_presigned_url,
@@ -134,6 +145,7 @@ class MinioObjectStorageAdapter:
 
     async def create_multipart_upload(self, target: ProviderTarget, content_type: str) -> str:
         """Initiate a provider-side multipart upload; returns the provider upload ID."""
+        self._assert_shared_bucket(target)
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.create_multipart_upload,
@@ -152,6 +164,7 @@ class MinioObjectStorageAdapter:
         self, target: ProviderTarget, upload_id: str, part_number: int, body: bytes
     ) -> dict[str, object]:
         """Upload a single part; returns {'etag': str, 'part_number': int}."""
+        self._assert_shared_bucket(target)
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.upload_part,
@@ -170,6 +183,7 @@ class MinioObjectStorageAdapter:
         self, target: ProviderTarget, upload_id: str, parts: list[dict[str, object]]
     ) -> ObjectMetadata:
         """Complete the multipart upload with the provider; returns final ObjectMetadata."""
+        self._assert_shared_bucket(target)
         try:
             multipart_upload: dict[str, Any] = {
                 "Parts": [
@@ -196,6 +210,7 @@ class MinioObjectStorageAdapter:
 
     async def abort_multipart_upload(self, target: ProviderTarget, upload_id: str) -> None:
         """Abort a provider-side multipart upload best-effort."""
+        self._assert_shared_bucket(target)
         try:
             await asyncio.to_thread(
                 self._client.abort_multipart_upload,
@@ -210,6 +225,7 @@ class MinioObjectStorageAdapter:
 
     async def list_parts(self, target: ProviderTarget, upload_id: str) -> list[dict[str, object]]:
         """List uploaded parts for a provider-side multipart session."""
+        self._assert_shared_bucket(target)
         try:
             response: dict[str, Any] = await asyncio.to_thread(
                 self._client.list_parts,

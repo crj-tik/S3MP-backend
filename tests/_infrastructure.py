@@ -42,7 +42,7 @@ def _ensure_models_loaded() -> None:
 _ensure_models_loaded()
 
 # pg: pytest runs on the Windows host, so it must use the published localhost
-# port. Dockerized API/worker processes use host.docker.internal instead.
+# port. Dockerized API/worker processes use localhost instead.
 TEST_DATABASE_URL = os.environ.get(
     "S3MP_TEST_DATABASE_URL",
     "postgresql+asyncpg://s3mp_app:bk-s3mp-backend@localhost:18110/s3mp",

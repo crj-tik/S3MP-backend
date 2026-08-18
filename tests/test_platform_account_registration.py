@@ -62,6 +62,9 @@ class RegistrationStore:
             "tenants": [],
         }
 
+    async def effective_permissions(self, _user_id: UUID) -> frozenset[str]:
+        return frozenset({"platform.tenants.read"})
+
     async def resolve_account_session(self, _digest: bytes) -> PlatformContext | None:
         return None
 

@@ -4,6 +4,7 @@ Verifies the full HTTP → FileApplicationService → SqlAlchemyFileStore → re
 chain: create an upload via HTTP, read it back, confirm cross-tenant isolation.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -19,6 +20,7 @@ from _infrastructure import (
     real_settings,
     seed_tenant,
 )
+from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.authorization.infrastructure.models import (
     BindingEffect,
@@ -29,6 +31,7 @@ from s3mp.authorization.infrastructure.models import (
     RoleModel,
     RolePermissionModel,
 )
+from s3mp.common.errors import ApiError
 from s3mp.files.infrastructure.authorization_repository import SqlAlchemyFileAuthorizationStore
 from s3mp.files.infrastructure.ingestion_models import FileIngestionRecordModel
 from s3mp.files.infrastructure.models import UploadSessionModel
@@ -82,9 +85,31 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
                 )
                 session.add(conn)
                 await session.flush()
+                application_id = uuid4()
+                session.add(
+                    PrincipalModel(
+                        id=application_id,
+                        tenant_id=tenant_id,
+                        type=PrincipalType.APPLICATION,
+                        display_name="E2E application",
+                    )
+                )
+                await session.flush()
+                session.add(
+                    ApplicationModel(
+                        id=application_id,
+                        tenant_id=tenant_id,
+                        principal_id=application_id,
+                        name="E2E application",
+                        storage_namespace=f"t-{tenant_id}/{application_id}",
+                    )
+                )
+                await session.flush()
                 space = StorageSpaceModel(
                     tenant_id=tenant_id,
                     connection_id=conn.id,
+                    application_id=application_id,
+                    storage_namespace=f"t-{tenant_id}/{application_id}",
                     name="default",
                     bucket="s3mp-dev",
                     root_prefix="",
@@ -253,6 +278,20 @@ async def test_human_group_binding_is_loaded_but_application_is_direct_only() ->
                     created_by_principal_id=human_id,
                 )
             )
+            session.add(
+                RoleBindingModel(
+                    tenant_id=tenant_id,
+                    principal_id=human_id,
+                    role_id=role.id,
+                    effect=BindingEffect.ALLOW,
+                    storage_space_id=None,
+                    canonical_prefix=None,
+                    reason="legacy tenant-wide file grant",
+                    starts_at=datetime.now(UTC) - timedelta(minutes=1),
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                    created_by_principal_id=human_id,
+                )
+            )
             await session.commit()
         store = SqlAlchemyFileAuthorizationStore(factory)
         human_bindings = await store.bindings_for(
@@ -261,6 +300,8 @@ async def test_human_group_binding_is_loaded_but_application_is_direct_only() ->
         application_bindings = await store.bindings_for(
             tenant_id, application_id, UUID(space_id), subject_kind="application"
         )
+        # A historical tenant-wide file binding must not become an implicit
+        # cross-application grant in the shared bucket.
         assert [binding.permission for binding in human_bindings] == ["files.write"]
         assert application_bindings == []
     finally:
@@ -474,6 +515,161 @@ async def test_ingestion_rejects_conflicting_idempotency_reuse() -> None:
                 {**base, "physical_key": "idem/two.txt", "idempotency_fingerprint": "d" * 64},
             )
         assert getattr(exc_info.value, "code", None) == "idempotency_key_reused"
+    finally:
+        await delete_tenant(database_engine, tenant_id)
+        await database_engine.dispose()
+
+
+async def test_concurrent_upload_reservations_allow_only_one_claim_on_remaining_capacity() -> None:
+    """Row locks must prevent two intents from oversubscribing the same quota."""
+    database_engine = real_engine()
+    factory = real_session_factory(database_engine)
+    tenant_id, principal_id = uuid4(), uuid4()
+    await seed_tenant(database_engine, tenant_id)
+    try:
+        async with factory.begin() as session:
+            space_id = UUID(await _seed_space(session, tenant_id))
+            session.add(
+                PrincipalModel(
+                    id=principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.USER,
+                    display_name="Concurrent quota",
+                )
+            )
+            session.add(
+                QuotaModel(
+                    tenant_id=tenant_id,
+                    storage_space_id=space_id,
+                    limit_bytes=5,
+                    used_bytes=0,
+                    reserved_bytes=0,
+                )
+            )
+
+        from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
+
+        store = SqlAlchemyIngestionStore(factory)
+
+        async def create(index: int) -> dict[str, Any]:
+            return await store.create_upload_intent(
+                tenant_id,
+                {
+                    "principal_id": str(principal_id),
+                    "storage_space_id": str(space_id),
+                    "object_key": f"race/{index}.txt",
+                    "content_length": 4,
+                    "content_type": "text/plain",
+                    "expires_at": datetime.now(UTC) + timedelta(hours=1),
+                },
+                {
+                    "creator_principal_id": str(principal_id),
+                    "acting_principal_id": str(principal_id),
+                    "storage_space_id": str(space_id),
+                    "bucket": "s3mp-dev",
+                    "relative_key": f"{index}.txt",
+                    "physical_key": f"race/{index}.txt",
+                    "authorization_evidence": {"decision": "allow"},
+                    "authorization_version": 1,
+                    "request_id": f"race-{index}",
+                    "idempotency_key": f"race-key-{index}",
+                    "idempotency_fingerprint": f"{index:x}" * 64,
+                },
+            )
+
+        results = await asyncio.gather(create(1), create(2), return_exceptions=True)
+        successes = [result for result in results if isinstance(result, dict)]
+        failures = [result for result in results if isinstance(result, ApiError)]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert failures[0].code == "quota_exceeded"
+
+        async with factory() as session:
+            quota = await session.scalar(
+                select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
+            )
+            reservations = list(
+                await session.scalars(
+                    select(QuotaReservationModel).where(
+                        QuotaReservationModel.tenant_id == tenant_id
+                    )
+                )
+            )
+        assert quota is not None and (quota.used_bytes, quota.reserved_bytes) == (0, 4)
+        assert len(reservations) == 1 and reservations[0].status == "reserved"
+    finally:
+        await delete_tenant(database_engine, tenant_id)
+        await database_engine.dispose()
+
+
+async def test_expiring_an_ingestion_releases_its_reservation_idempotently() -> None:
+    """An expired/retried session must not retain capacity or release it twice."""
+    database_engine = real_engine()
+    factory = real_session_factory(database_engine)
+    tenant_id, principal_id = uuid4(), uuid4()
+    await seed_tenant(database_engine, tenant_id)
+    try:
+        async with factory.begin() as session:
+            space_id = UUID(await _seed_space(session, tenant_id))
+            session.add(
+                PrincipalModel(
+                    id=principal_id,
+                    tenant_id=tenant_id,
+                    type=PrincipalType.USER,
+                    display_name="Expiry quota",
+                )
+            )
+            session.add(
+                QuotaModel(
+                    tenant_id=tenant_id,
+                    storage_space_id=space_id,
+                    limit_bytes=10,
+                    used_bytes=0,
+                    reserved_bytes=0,
+                )
+            )
+
+        from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
+
+        store = SqlAlchemyIngestionStore(factory)
+        created = await store.create_upload_intent(
+            tenant_id,
+            {
+                "principal_id": str(principal_id),
+                "storage_space_id": str(space_id),
+                "object_key": "expiry/a.txt",
+                "content_length": 4,
+                "content_type": "text/plain",
+                "expires_at": datetime.now(UTC) + timedelta(seconds=1),
+            },
+            {
+                "creator_principal_id": str(principal_id),
+                "acting_principal_id": str(principal_id),
+                "storage_space_id": str(space_id),
+                "bucket": "s3mp-dev",
+                "relative_key": "a.txt",
+                "physical_key": "expiry/a.txt",
+                "authorization_evidence": {"decision": "allow"},
+                "authorization_version": 1,
+                "request_id": "expiry-request",
+                "idempotency_key": "expiry-key",
+                "idempotency_fingerprint": "e" * 64,
+            },
+        )
+        ingestion_id = UUID(created["ingestion_id"])
+        first = await store.expire(tenant_id, ingestion_id)
+        second = await store.expire(tenant_id, ingestion_id)
+        assert (first["status"], second["status"]) == ("expired", "expired")
+
+        async with factory() as session:
+            quota = await session.scalar(
+                select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
+            )
+            reservation = await session.scalar(
+                select(QuotaReservationModel).where(QuotaReservationModel.tenant_id == tenant_id)
+            )
+        assert quota is not None and quota.reserved_bytes == 0
+        assert reservation is not None and reservation.status == "released"
     finally:
         await delete_tenant(database_engine, tenant_id)
         await database_engine.dispose()

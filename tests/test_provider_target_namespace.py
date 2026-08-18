@@ -21,6 +21,18 @@ def test_same_relative_key_in_different_tenants_has_distinct_provider_key() -> N
     assert first.key.endswith("/team/report.csv")
 
 
+def test_provider_target_uses_server_owned_application_namespace() -> None:
+    target = derive_provider_target(
+        tenant_id=uuid4(),
+        storage_space_id=uuid4(),
+        bucket="s3mp-dev",
+        storage_namespace="tenant-a/reporting",
+        relative_key="reports/2026.csv",
+    )
+
+    assert target.key == "tenant-a/reporting/reports/2026.csv"
+
+
 @pytest.mark.parametrize(
     "prefix", ["../escape", "team//reports", "team/../private", "team\\private"]
 )

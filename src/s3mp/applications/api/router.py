@@ -33,6 +33,11 @@ class ApplicationTakeover(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ApplicationLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class ApiKeyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scopes: list[str] = Field(default_factory=list)
@@ -56,10 +61,17 @@ class ApplicationResponse(BaseModel):
     tenant_id: UUID | None = None
     principal_id: UUID | None = None
     name: str
+    storage_namespace: str | None = Field(
+        default=None,
+        description="应用不可变的共享 Bucket 命名空间；与相对对象路径共同派生物理对象 Key。",
+    )
     status: str | None = None
     authorization_version: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    deleted_at: datetime | None = None
+    deleted_by: UUID | None = None
+    deletion_reason: str | None = None
     owners: list[dict[str, str]] = Field(default_factory=list)
     takeover_required: bool = False
 
@@ -226,6 +238,38 @@ async def takeover_application(
 ) -> ApplicationResponse:
     return ApplicationResponse.model_validate(
         await _app_service(request).takeover_app(context, application_id, body.reason)
+    )
+
+
+@router.delete(
+    "/applications/{application_id}",
+    response_model=ApplicationResponse,
+    operation_id="delete_application",
+)
+async def delete_application(
+    request: Request,
+    body: ApplicationLifecycleRequest,
+    context: Annotated[PrincipalContext, management_permission("delete_application")],
+    application_id: UUID,
+) -> ApplicationResponse:
+    return ApplicationResponse.model_validate(
+        await _app_service(request).delete_app(context, application_id, body.reason)
+    )
+
+
+@router.post(
+    "/applications/{application_id}/restore",
+    response_model=ApplicationResponse,
+    operation_id="restore_application",
+)
+async def restore_application(
+    request: Request,
+    body: ApplicationLifecycleRequest,
+    context: Annotated[PrincipalContext, management_permission("restore_application")],
+    application_id: UUID,
+) -> ApplicationResponse:
+    return ApplicationResponse.model_validate(
+        await _app_service(request).restore_app(context, application_id, body.reason)
     )
 
 
