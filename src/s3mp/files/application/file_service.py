@@ -11,6 +11,7 @@ from s3mp.common.middleware import current_request_id
 from s3mp.files.application.auth_guard import FileAuthGuard
 from s3mp.files.application.authorized_command import AuthorizedFileCommand
 from s3mp.files.application.delayed_subject_validator import validate_delayed_subject
+from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.files.domain.ingestion import IngestionStatus
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
@@ -18,7 +19,11 @@ from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
 
 class FileStore(Protocol):
     async def list_files(
-        self, tenant_id: UUID, space_id: UUID, prefix: str
+        self,
+        tenant_id: UUID,
+        space_id: UUID,
+        prefix: str,
+        status: FileObjectStatus = FileObjectStatus.AVAILABLE,
     ) -> list[dict[str, Any]]: ...
     async def get_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID
@@ -704,14 +709,18 @@ class FileApplicationService:
     # ── Files ──────────────────────────────────────────────────────────────
 
     async def list_files(
-        self, ctx: PrincipalContext, space_id: str, prefix: str
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        prefix: str,
+        status: FileObjectStatus = FileObjectStatus.AVAILABLE,
     ) -> list[dict[str, Any]]:
         command = await self._command(ctx, space_id, prefix, "files.list")
         space = await self._resolve_space(ctx.tenant_id, command.storage_space_id)
         return [
             self._public_file(space, record)
             for record in await self.store.list_files(
-                ctx.tenant_id, command.storage_space_id, command.physical_key
+                ctx.tenant_id, command.storage_space_id, command.physical_key, status
             )
         ]
 

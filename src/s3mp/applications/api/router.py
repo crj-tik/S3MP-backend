@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.applications.infrastructure.models import ApiKeyStatus, ApplicationStatus
 from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
@@ -171,11 +172,13 @@ async def list_applications(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_applications")],
     cursor: str | None = Query(default=None),
+    status: Annotated[ApplicationStatus, Query()] = ApplicationStatus.ACTIVE,
 ) -> ApplicationPage:
+    query = f"applications:{status.value}"
     items, position = await _app_service(request).list_apps(
-        context, cursor=_decode_cursor(cursor, context, query="applications")
+        context, cursor=_decode_cursor(cursor, context, query=query), status=status
     )
-    return ApplicationPage.model_validate(_page(items, position, context, query="applications"))
+    return ApplicationPage.model_validate(_page(items, position, context, query=query))
 
 
 @router.post(
@@ -286,14 +289,17 @@ async def list_api_keys(
     context: Annotated[PrincipalContext, management_permission("list_api_keys")],
     application_id: UUID,
     cursor: str | None = Query(default=None),
+    status: Annotated[ApiKeyStatus, Query()] = ApiKeyStatus.ACTIVE,
 ) -> ApiKeyPage:
+    query = f"api_keys:{application_id}:{status.value}"
     items, position = await _key_service(request).list_keys(
         context,
         application_id,
-        cursor=_decode_cursor(cursor, context, query=f"api_keys:{application_id}"),
+        cursor=_decode_cursor(cursor, context, query=query),
+        status=status,
     )
     return ApiKeyPage.model_validate(
-        _page(items, position, context, query=f"api_keys:{application_id}")
+        _page(items, position, context, query=query)
     )
 
 

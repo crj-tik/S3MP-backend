@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
+from s3mp.governance.domain.quota import QuotaScope
 from s3mp.governance.infrastructure.models import QuotaModel
 from s3mp.identity.infrastructure.models import PrincipalModel
 
@@ -23,6 +24,7 @@ class SqlAlchemyQuotaStore:
         limit: int = 50,
         cursor: str | None = None,
         application_id: str | None = None,
+        scope: QuotaScope | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         async with self._sf() as session:
             stmt = select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
@@ -30,6 +32,10 @@ class SqlAlchemyQuotaStore:
                 stmt = stmt.where(QuotaModel.storage_space_id == UUID(storage_space_id))
             if application_id:
                 stmt = stmt.where(QuotaModel.application_id == UUID(application_id))
+            if scope is QuotaScope.TENANT:
+                stmt = stmt.where(QuotaModel.application_id.is_(None))
+            elif scope is QuotaScope.APPLICATION:
+                stmt = stmt.where(QuotaModel.application_id.is_not(None))
             if cursor:
                 stmt = stmt.where(QuotaModel.id > UUID(cursor))
             rows = (await session.scalars(stmt.order_by(QuotaModel.id).limit(limit + 1))).all()

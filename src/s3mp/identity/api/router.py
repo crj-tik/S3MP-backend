@@ -16,6 +16,7 @@ from s3mp.common.api.dependencies import (
 from s3mp.common.api.etag import check_etag, require_if_match
 from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.identity.infrastructure.models import MembershipStatus, PrincipalType, UserStatus
 
 router = APIRouter(prefix="/api/v1", tags=["Context"])
 identity_service = application_service("identity_management")
@@ -49,7 +50,7 @@ class UserResponse(_Strict):
     id: str
     email: str = Field(json_schema_extra={"format": "email"})
     display_name: str
-    status: Literal["active", "disabled"]
+    status: Literal["active", "disabled", "deleted"]
     created_at: datetime
 
 
@@ -129,11 +130,17 @@ async def list_users(
     context: Annotated[PrincipalContext, management_permission("list_users")],
     service: Annotated[IdentityManagementService, identity_service],
     cursor: str | None = Query(default=None),
+    status: Annotated[UserStatus, Query()] = UserStatus.ACTIVE,
+    principal_type: Annotated[PrincipalType, Query()] = PrincipalType.USER,
 ) -> object:
+    query = f"users:{status.value}:{principal_type.value}"
     items, next_position = await service.list_users(
-        context, cursor=_cursor(cursor, context, query="users")
+        context,
+        cursor=_cursor(cursor, context, query=query),
+        status=status,
+        principal_type=principal_type,
     )
-    return _page(items, next_position, context, query="users")
+    return _page(items, next_position, context, query=query)
 
 
 @router.get("/users/{user_id}", response_model=UserResponse, operation_id="get_user")
@@ -150,11 +157,13 @@ async def list_members(
     context: Annotated[PrincipalContext, management_permission("list_members")],
     service: Annotated[IdentityManagementService, identity_service],
     cursor: str | None = Query(default=None),
+    status: Annotated[MembershipStatus, Query()] = MembershipStatus.ACTIVE,
 ) -> object:
+    query = f"members:{status.value}"
     items, next_position = await service.list_members(
-        context, cursor=_cursor(cursor, context, query="members")
+        context, cursor=_cursor(cursor, context, query=query), status=status
     )
-    return _page(items, next_position, context, query="members")
+    return _page(items, next_position, context, query=query)
 
 
 @router.post(

@@ -19,7 +19,7 @@ class FakeStorageService:
         self.calls = 0
 
     async def list_connections(
-        self, tenant_id: Any, cursor: str | None = None
+        self, tenant_id: Any, cursor: str | None = None, **_: Any
     ) -> tuple[list[dict[str, Any]], str | None]:
         self.calls += 1
         return ([{"id": str(uuid4()), "name": "primary", "status": "active"}], None)
@@ -41,7 +41,7 @@ class FakeStorageService:
         return {"connection_id": conn_id, "reachable": True, "writable": True}
 
     async def list_spaces(
-        self, context: Any, cursor: str | None = None
+        self, context: Any, cursor: str | None = None, **_: Any
     ) -> tuple[list[dict[str, Any]], str | None]:
         return (
             [

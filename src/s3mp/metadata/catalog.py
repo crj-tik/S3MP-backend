@@ -1,5 +1,7 @@
 """Stable, non-sensitive enum metadata shared by the API and OpenAPI docs."""
 
+from collections.abc import Sequence
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +22,19 @@ class CatalogItem(BaseModel):
     )
 
 
+class CatalogDescriptor(BaseModel):
+    """Declares where a catalog enum is used by the public API."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str
+    resource: str
+    field: str
+    query_parameter: str | None = None
+    used_by: list[str] = Field(default_factory=list)
+    items: list[CatalogItem]
+
+
 class MetadataCatalogResponse(BaseModel):
     """前端状态下拉、筛选和状态操作使用的非敏感元数据目录。"""
 
@@ -31,6 +46,10 @@ class MetadataCatalogResponse(BaseModel):
     quota_scopes: list[CatalogItem] = Field(description="配额统计范围目录。")
     storage_addressing: list[CatalogItem] = Field(
         description="对象存储寻址方式目录；不包含端点或凭据。"
+    )
+    domains: list[str] = Field(description="本响应包含的业务域。")
+    catalog: list[CatalogDescriptor] = Field(
+        description="枚举的资源、字段、查询参数和支持接口用途映射。"
     )
 
 
@@ -88,6 +107,17 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
         _item("active", "有效", "API Key 可以代表所属应用调用接口。", ("revoked", "expired")),
         _item("revoked", "已撤销", "API Key 不能继续调用接口。", terminal=True),
         _item("expired", "已过期", "API Key 已超过有效期。", terminal=True),
+    ],
+    "file_object": [
+        _item("available", "可用", "文件已入库并可按授权访问。", ("deleting", "quarantined")),
+        _item("deleting", "删除中", "文件已进入受控删除流程。", ("delete_failed",)),
+        _item(
+            "delete_failed",
+            "删除失败",
+            "文件删除需要重试或人工处理。",
+            ("deleting", "quarantined"),
+        ),
+        _item("quarantined", "已隔离", "文件因无法证明安全归属而不可被业务访问。", terminal=True),
     ],
     "upload": [
         _item(
@@ -198,15 +228,310 @@ STORAGE_ADDRESSING = [
     _item("virtual", "Virtual-hosted-style", "使用 bucket.endpoint/key 形式访问 S3。"),
 ]
 
+DOMAIN_NAMES = (
+    "identity",
+    "lifecycle",
+    "authorization",
+    "storage",
+    "file",
+    "ingestion",
+    "quota",
+    "governance",
+)
 
-def catalog_payload() -> dict[str, Any]:
+
+def _enum_values(enum_type: type[StrEnum]) -> set[str]:
+    return {item.value for item in enum_type}
+
+
+def _descriptor(
+    domain: str,
+    resource: str,
+    field: str,
+    items: list[dict[str, Any]],
+    *used_by: str,
+    query_parameter: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "domain": domain,
+        "resource": resource,
+        "field": field,
+        "query_parameter": query_parameter,
+        "used_by": list(used_by),
+        "items": [dict(item) for item in items],
+    }
+
+
+def _catalog_descriptors() -> list[dict[str, Any]]:
+    """Build the public usage map from the same enum-backed catalog source."""
+    from s3mp.applications.infrastructure.models import ApiKeyStatus, ApplicationStatus
+    from s3mp.authorization.domain.evaluator import Decision
+    from s3mp.authorization.infrastructure.models import BindingEffect
+    from s3mp.files.domain.file_status import FileObjectStatus
+    from s3mp.files.domain.ingestion import IngestionEventType, IngestionStatus
+    from s3mp.files.domain.multipart import MultipartStatus, OperationStatus
+    from s3mp.governance.domain.access_review import (
+        ApprovalRequestStatus,
+        ReviewItemVerdict,
+        ReviewStatus,
+    )
+    from s3mp.governance.domain.quota import ReservationStatus
+    from s3mp.governance.domain.scanner import FindingSeverity, FindingType
+    from s3mp.governance.domain.security_monitor import AlertCategory, AlertSeverity
+    from s3mp.identity.infrastructure.models import MembershipStatus, PrincipalType, UserStatus
+    from s3mp.platform.domain.support_access import SupportAccessStatus
+    from s3mp.platform.infrastructure.models import TenantLifecycleStatus
+    from s3mp.storage.domain.policy import StorageOperation
+
+    enum_checks = {
+        "user": UserStatus,
+        "membership": MembershipStatus,
+        "tenant": TenantLifecycleStatus,
+        "ingestion": IngestionStatus,
+        "multipart": MultipartStatus,
+        "file_operation": OperationStatus,
+        "reservation": ReservationStatus,
+        "application": ApplicationStatus,
+        "api_key": ApiKeyStatus,
+        "file_object": FileObjectStatus,
+        "support_access": SupportAccessStatus,
+    }
+    for resource, enum_type in enum_checks.items():
+        actual = _enum_values(enum_type)
+        declared = {item["value"] for item in STATUS_CATALOG[resource]}
+        if actual != declared:
+            raise RuntimeError(f"metadata catalog drift for {resource}: {actual ^ declared}")
+
+    def enum_items(enum_type: type[StrEnum]) -> list[dict[str, Any]]:
+        return [
+            _item(member.value, member.value, f"稳定枚举值：{member.value}。")
+            for member in enum_type
+        ]
+
+    return [
+        _descriptor(
+            "identity",
+            "principal",
+            "type",
+            enum_items(PrincipalType),
+            "GET /api/v1/users",
+            query_parameter="principal_type",
+        ),
+        _descriptor(
+            "identity",
+            "user",
+            "status",
+            STATUS_CATALOG["user"],
+            "GET /api/v1/users",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "identity",
+            "membership",
+            "status",
+            STATUS_CATALOG["membership"],
+            "GET /api/v1/members",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "lifecycle",
+            "tenant",
+            "status",
+            STATUS_CATALOG["tenant"],
+            "GET /api/v1/platform/tenants",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "lifecycle",
+            "application",
+            "status",
+            STATUS_CATALOG["application"],
+            "GET /api/v1/applications",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "lifecycle",
+            "api_key",
+            "status",
+            STATUS_CATALOG["api_key"],
+            "GET /api/v1/applications/{application_id}/api_keys",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "storage",
+            "storage_connection",
+            "status",
+            STATUS_CATALOG["storage_connection"],
+            "GET /api/v1/storage_connections",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "storage",
+            "storage_space",
+            "status",
+            STATUS_CATALOG["storage_space"],
+            "GET /api/v1/storage_spaces",
+            query_parameter="status",
+        ),
+        _descriptor(
+            "governance",
+            "support_access",
+            "status",
+            STATUS_CATALOG["support_access"],
+            "GET /api/v1/platform/support-access",
+            query_parameter="status",
+        ),
+        _descriptor("storage", "operation", "operation", enum_items(StorageOperation)),
+        _descriptor(
+            "authorization",
+            "binding",
+            "effect",
+            enum_items(BindingEffect),
+            query_parameter="effect",
+        ),
+        _descriptor(
+            "authorization",
+            "decision",
+            "decision",
+            enum_items(Decision),
+            query_parameter="decision",
+        ),
+        _descriptor(
+            "authorization",
+            "scope",
+            "scope",
+            SCOPES,
+            query_parameter="scope",
+        ),
+        _descriptor(
+            "authorization",
+            "binding",
+            "effect",
+            EFFECTS,
+            query_parameter="effect",
+        ),
+        _descriptor("file", "file_object", "status", STATUS_CATALOG["file_object"],
+                    "GET /api/v1/storage_spaces/{space_id}/files", query_parameter="status"),
+        _descriptor(
+            "file",
+            "upload",
+            "status",
+            STATUS_CATALOG["upload"],
+            query_parameter="status",
+        ),
+        _descriptor(
+            "file",
+            "multipart",
+            "status",
+            enum_items(MultipartStatus),
+            query_parameter="status",
+        ),
+        _descriptor(
+            "file",
+            "file_operation",
+            "status",
+            enum_items(OperationStatus),
+            query_parameter="status",
+        ),
+        _descriptor(
+            "ingestion",
+            "ingestion",
+            "status",
+            enum_items(IngestionStatus),
+            query_parameter="status",
+        ),
+        _descriptor(
+            "ingestion",
+            "ingestion_event",
+            "event_type",
+            enum_items(IngestionEventType),
+            query_parameter="event_type",
+        ),
+        _descriptor(
+            "quota", "quota", "scope", QUOTA_SCOPES, "GET /api/v1/quotas", query_parameter="scope"
+        ),
+        _descriptor("quota", "reservation", "status", enum_items(ReservationStatus)),
+        _descriptor(
+            "storage",
+            "addressing",
+            "mode",
+            STORAGE_ADDRESSING,
+            "GET /api/v1/storage_connections",
+        ),
+        _descriptor(
+            "governance",
+            "review",
+            "status",
+            enum_items(ReviewStatus),
+            query_parameter="status",
+        ),
+        _descriptor(
+            "governance",
+            "review_item",
+            "verdict",
+            enum_items(ReviewItemVerdict),
+            query_parameter="verdict",
+        ),
+        _descriptor(
+            "governance",
+            "approval_request",
+            "status",
+            enum_items(ApprovalRequestStatus),
+            query_parameter="status",
+        ),
+        _descriptor(
+            "governance",
+            "alert",
+            "severity",
+            enum_items(AlertSeverity),
+            query_parameter="severity",
+        ),
+        _descriptor(
+            "governance",
+            "alert",
+            "category",
+            enum_items(AlertCategory),
+            query_parameter="category",
+        ),
+        _descriptor(
+            "governance",
+            "finding",
+            "severity",
+            enum_items(FindingSeverity),
+            query_parameter="severity",
+        ),
+        _descriptor(
+            "governance",
+            "finding",
+            "type",
+            enum_items(FindingType),
+            query_parameter="type",
+        ),
+    ]
+
+
+def catalog_payload(domains: Sequence[str] | None = None) -> dict[str, Any]:
     """Return a fresh payload so callers cannot mutate the shared source."""
+    selected = set(domains or DOMAIN_NAMES)
+    unknown = selected.difference(DOMAIN_NAMES)
+    if unknown:
+        raise ValueError(f"unknown metadata domains: {sorted(unknown)}")
+    descriptors = [item for item in _catalog_descriptors() if item["domain"] in selected]
+    resources = {item["resource"] for item in descriptors}
     return {
         "version": CATALOG_VERSION,
-        "statuses": {key: [dict(item) for item in items] for key, items in STATUS_CATALOG.items()},
-        "scopes": [dict(item) for item in SCOPES],
-        "effects": [dict(item) for item in EFFECTS],
-        "operations": [dict(item) for item in OPERATIONS],
-        "quota_scopes": [dict(item) for item in QUOTA_SCOPES],
-        "storage_addressing": [dict(item) for item in STORAGE_ADDRESSING],
+        "statuses": {
+            key: [dict(item) for item in items]
+            for key, items in STATUS_CATALOG.items()
+            if key in resources or key in {"user", "membership", "tenant", "application", "api_key"}
+        },
+        "scopes": [dict(item) for item in SCOPES] if "authorization" in selected else [],
+        "effects": [dict(item) for item in EFFECTS] if "authorization" in selected else [],
+        "operations": [dict(item) for item in OPERATIONS] if "storage" in selected else [],
+        "quota_scopes": [dict(item) for item in QUOTA_SCOPES] if "quota" in selected else [],
+        "storage_addressing": [dict(item) for item in STORAGE_ADDRESSING]
+        if "storage" in selected
+        else [],
+        "domains": sorted(selected),
+        "catalog": descriptors,
     }

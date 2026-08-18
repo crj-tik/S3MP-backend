@@ -1,6 +1,7 @@
 """Persistence models for tenant-scoped S3 connections and spaces."""
 
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -17,6 +18,18 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from s3mp.common.database import Base
+
+
+class StorageConnectionStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
+
+
+class StorageSpaceStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
 
 
 class PlatformStorageProfileModel(Base):

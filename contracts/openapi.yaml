@@ -92,6 +92,20 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/UserStatus'
+          default: active
+        description: 资源当前生命周期状态。
+      - name: principal_type
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/PrincipalType'
+          default: user
+        description: “principal_type”字段；具体取值和约束见当前资源说明。
       responses:
         '200':
           description: Successful Response
@@ -155,6 +169,13 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/MembershipStatus'
+          default: active
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -550,6 +571,15 @@ paths:
           default: false
           title: Include Deleted
         description: “include_deleted”字段；具体取值和约束见当前资源说明。
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/TenantLifecycleStatus'
+          - type: 'null'
+          title: Status
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -1043,12 +1073,7 @@ paths:
         required: false
         schema:
           anyOf:
-          - enum:
-            - pending
-            - approved
-            - revoked
-            - expired
-            type: string
+          - $ref: '#/components/schemas/SupportAccessStatus'
           - type: 'null'
           title: Status
         description: 资源当前生命周期状态。
@@ -1296,6 +1321,19 @@ paths:
       summary: 获取前端使用的状态、枚举、授权范围和状态流转目录。
       description: 获取前端使用的状态、枚举、授权范围和状态流转目录。
       operationId: get_metadata_catalog
+      parameters:
+      - name: domains
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: array
+            items:
+              type: string
+          - type: 'null'
+          description: 按业务域过滤，可重复传入。
+          title: Domains
+        description: “domains”字段；具体取值和约束见当前资源说明。
       responses:
         '200':
           description: Successful Response
@@ -1303,12 +1341,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MetadataCatalogResponse'
+        '422': *id001
         '400': *id001
         '401': *id001
         '403': *id001
         '404': *id001
         '409': *id001
-        '422': *id001
         '500': *id001
   /api/v1/permission_catalog:
     get:
@@ -1849,6 +1887,13 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/ApplicationStatus'
+          default: active
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -2100,6 +2145,13 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/ApiKeyStatus'
+          default: active
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -2309,6 +2361,13 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/StorageConnectionStatus'
+          default: active
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -2409,6 +2468,13 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/StorageSpaceStatus'
+          default: active
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -2509,6 +2575,13 @@ paths:
           - type: 'null'
           title: Prefix
         description: “prefix”字段；具体取值和约束见当前资源说明。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/FileObjectStatus'
+          default: available
+        description: 资源当前生命周期状态。
       responses:
         '200':
           description: Successful Response
@@ -3264,6 +3337,15 @@ paths:
           - type: 'null'
           title: Cursor
         description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: scope
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/QuotaScope'
+          - type: 'null'
+          title: Scope
+        description: 授权、查询或操作生效的资源范围。
       responses:
         '200':
           description: Successful Response
@@ -3863,6 +3945,13 @@ components:
       additionalProperties: false
       type: object
       title: ApiKeyRotate
+    ApiKeyStatus:
+      type: string
+      enum:
+      - active
+      - revoked
+      - expired
+      title: ApiKeyStatus
     ApplicationCreate:
       properties:
         name:
@@ -4003,6 +4092,14 @@ components:
       - name
       title: ApplicationResponse
       description: 租户内应用的公开管理信息。
+    ApplicationStatus:
+      type: string
+      enum:
+      - active
+      - suspended
+      - pending_takeover
+      - deleted
+      title: ApplicationStatus
     ApplicationTakeover:
       properties:
         reason:
@@ -4173,6 +4270,47 @@ components:
       - evaluated_at
       - sources
       title: AuthorizationDecisionResponse
+    CatalogDescriptor:
+      properties:
+        domain:
+          type: string
+          title: Domain
+          description: “domain”字段；具体取值和约束见当前资源说明。
+        resource:
+          type: string
+          title: Resource
+          description: “resource”字段；具体取值和约束见当前资源说明。
+        field:
+          type: string
+          title: Field
+          description: “field”字段；具体取值和约束见当前资源说明。
+        query_parameter:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Query Parameter
+          description: “query_parameter”字段；具体取值和约束见当前资源说明。
+        used_by:
+          items:
+            type: string
+          type: array
+          title: Used By
+          description: “used_by”字段；具体取值和约束见当前资源说明。
+        items:
+          items:
+            $ref: '#/components/schemas/CatalogItem'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+      additionalProperties: false
+      type: object
+      required:
+      - domain
+      - resource
+      - field
+      - items
+      title: CatalogDescriptor
+      description: Declares where a catalog enum is used by the public API.
     CatalogItem:
       properties:
         value:
@@ -4362,6 +4500,14 @@ components:
       - object_key
       title: FileObjectRuntime
       description: 已提交文件的公开元数据；不包含对象存储物理路径或鉴权证据。
+    FileObjectStatus:
+      type: string
+      enum:
+      - available
+      - deleting
+      - delete_failed
+      - quarantined
+      title: FileObjectStatus
     FileOperationCreate:
       properties:
         operation_type:
@@ -4769,6 +4915,14 @@ components:
       - updated_at
       - etag
       title: MembershipResponse
+    MembershipStatus:
+      type: string
+      enum:
+      - invited
+      - active
+      - suspended
+      - removed
+      title: MembershipStatus
     MembershipUpdate:
       properties:
         status:
@@ -4836,6 +4990,18 @@ components:
           type: array
           title: Storage Addressing
           description: 对象存储寻址方式目录；不包含端点或凭据。
+        domains:
+          items:
+            type: string
+          type: array
+          title: Domains
+          description: 本响应包含的业务域。
+        catalog:
+          items:
+            $ref: '#/components/schemas/CatalogDescriptor'
+          type: array
+          title: Catalog
+          description: 枚举的资源、字段、查询参数和支持接口用途映射。
       type: object
       required:
       - version
@@ -4845,6 +5011,8 @@ components:
       - operations
       - quota_scopes
       - storage_addressing
+      - domains
+      - catalog
       title: MetadataCatalogResponse
       description: 前端状态下拉、筛选和状态操作使用的非敏感元数据目录。
     MultipartComplete:
@@ -5404,6 +5572,13 @@ components:
       - type
       - display_name
       title: PrincipalSummary
+    PrincipalType:
+      type: string
+      enum:
+      - user
+      - group
+      - application
+      title: PrincipalType
     ProbeRequest:
       properties:
         write_test_prefix:
@@ -5539,6 +5714,12 @@ components:
       - id
       title: QuotaResponse
       description: 租户或应用范围的存储配额及当前用量。
+    QuotaScope:
+      type: string
+      enum:
+      - tenant
+      - application
+      title: QuotaScope
     QuotaUpdate:
       properties:
         limit_bytes:
@@ -5968,6 +6149,13 @@ components:
       - name
       title: StorageConnectionResponse
       description: 租户可见的对象存储连接，不暴露凭据引用或密钥材料。
+    StorageConnectionStatus:
+      type: string
+      enum:
+      - active
+      - suspended
+      - deleted
+      title: StorageConnectionStatus
     StorageSpaceCreate:
       properties:
         name:
@@ -6080,6 +6268,13 @@ components:
       - created_at
       title: StorageSpaceResponse
       description: 公开的租户存储空间信息，不包含对象存储凭据。
+    StorageSpaceStatus:
+      type: string
+      enum:
+      - active
+      - suspended
+      - deleted
+      title: StorageSpaceStatus
     SupportAccessCreate:
       properties:
         tenant_id:
@@ -6219,6 +6414,14 @@ components:
       - revoked_at
       - created_at
       title: SupportAccessResponse
+    SupportAccessStatus:
+      type: string
+      enum:
+      - pending
+      - approved
+      - revoked
+      - expired
+      title: SupportAccessStatus
     TenantCreate:
       properties:
         slug:
@@ -6259,6 +6462,13 @@ components:
       required:
       - reason
       title: TenantLifecycleRequest
+    TenantLifecycleStatus:
+      type: string
+      enum:
+      - active
+      - suspended
+      - deleted
+      title: TenantLifecycleStatus
     TenantSessionRequest:
       properties:
         tenant_id:
@@ -6462,6 +6672,7 @@ components:
           enum:
           - active
           - disabled
+          - deleted
           title: Status
           description: 资源当前生命周期状态。
         created_at:
@@ -6478,6 +6689,13 @@ components:
       - status
       - created_at
       title: UserResponse
+    UserStatus:
+      type: string
+      enum:
+      - active
+      - disabled
+      - deleted
+      title: UserStatus
     ValidationError:
       properties:
         loc:
@@ -6577,6 +6795,15 @@ components:
       - active
       - revoked
       - expired
+      description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
+    MetadataFileObjectStatus:
+      type: string
+      title: MetadataFileObjectStatus
+      enum:
+      - available
+      - deleting
+      - delete_failed
+      - quarantined
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataUploadStatus:
       type: string

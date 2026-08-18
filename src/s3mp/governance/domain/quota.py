@@ -12,6 +12,11 @@ class ReservationStatus(StrEnum):
     RELEASED = "released"
 
 
+class QuotaScope(StrEnum):
+    TENANT = "tenant"
+    APPLICATION = "application"
+
+
 class QuotaExceededError(ValueError):
     code = "quota_exceeded"
 

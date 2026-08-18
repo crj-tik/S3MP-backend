@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
+from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.files.infrastructure.models import (
     FileObjectModel,
     FileOperationModel,
@@ -27,7 +28,11 @@ class SqlAlchemyFileStore:
     # ── Files ──────────────────────────────────────────────────────────────
 
     async def list_files(
-        self, tenant_id: UUID, space_id: UUID, prefix: str
+        self,
+        tenant_id: UUID,
+        space_id: UUID,
+        prefix: str,
+        status: FileObjectStatus = FileObjectStatus.AVAILABLE,
     ) -> list[dict[str, Any]]:
         async with self._sf() as session:
             stmt = (
@@ -41,7 +46,7 @@ class SqlAlchemyFileStore:
                 .where(
                     FileObjectModel.tenant_id == tenant_id,
                     FileObjectModel.storage_space_id == space_id,
-                    FileObjectModel.status == "available",
+                    FileObjectModel.status == status.value,
                     StorageSpaceModel.status == "active",
                     TenantModel.status == "active",
                 )

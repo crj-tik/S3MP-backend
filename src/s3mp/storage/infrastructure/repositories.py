@@ -9,7 +9,9 @@ from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.storage.infrastructure.models import (
     PlatformStorageProfileModel,
     StorageConnectionModel,
+    StorageConnectionStatus,
     StorageSpaceModel,
+    StorageSpaceStatus,
 )
 from s3mp.tenant.infrastructure.models import TenantModel
 
@@ -124,7 +126,11 @@ class SqlAlchemyStorageStore:
             return _profile(model)
 
     async def list_connections(
-        self, tenant_id: UUID, limit: int = 50, cursor: str | None = None
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: str | None = None,
+        status: StorageConnectionStatus = StorageConnectionStatus.ACTIVE,
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = (
@@ -132,7 +138,7 @@ class SqlAlchemyStorageStore:
                 .join(TenantModel, TenantModel.id == StorageConnectionModel.tenant_id)
                 .where(
                     StorageConnectionModel.tenant_id == tenant_id,
-                    StorageConnectionModel.status == "active",
+                    StorageConnectionModel.status == status,
                     TenantModel.status == "active",
                 )
             )
@@ -225,7 +231,11 @@ class SqlAlchemyStorageStore:
             return _connection(model)
 
     async def list_spaces(
-        self, tenant_id: UUID, limit: int = 50, cursor: str | None = None
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: str | None = None,
+        status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = (
@@ -243,7 +253,7 @@ class SqlAlchemyStorageStore:
                 )
                 .where(
                     StorageSpaceModel.tenant_id == tenant_id,
-                    StorageSpaceModel.status == "active",
+                    StorageSpaceModel.status == status,
                     StorageConnectionModel.status == "active",
                     ApplicationModel.status == "active",
                     StorageSpaceModel.storage_namespace.is_not(None),

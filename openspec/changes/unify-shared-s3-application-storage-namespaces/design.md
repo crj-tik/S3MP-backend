@@ -98,6 +98,14 @@ used_bytes + reserved_bytes + declared_size <= limit
 
 OpenAPI 与运行时目录 SHALL 使用同一服务端枚举定义生成，防止契约和目录的 value 集合分叉。
 
+枚举的使用链路必须贯穿四层：领域层定义 `StrEnum`、接口层将查询参数声明为对应枚举、应用服务层接收枚举并校验状态与父级生命周期、仓储层将枚举转换为 SQL 条件。任何一层不得退化为不受约束的 `str`，也不得在服务层接收后丢弃筛选条件。
+
+`GET /api/v1/metadata/catalog` 的每个目录项 SHALL 额外声明 `domain`、`resource`、`field`、`query_parameter` 和 `used_by`。允许前端使用目录驱动筛选的业务域包括：`identity`、`lifecycle`、`authorization`、`storage`、`file`、`ingestion`、`quota`、`governance`。未携带 domain 时返回全部公开域；携带重复 `domains` 时按并集返回；未知 domain 返回 `422 validation_failed`。
+
+列表接口的枚举筛选契约固定为：`/users` 支持 `status`、`principal_type`；`/members` 支持 `status`；`/applications`、`/api_keys`、`/storage_spaces`、`/storage_connections`、`/files` 支持 `status`；`/quotas` 支持 `scope`、`status`；`/audit_events` 支持 `event_type`、`severity`；`/platform/tenants` 与 `/platform/support-access` 支持 `status`；入库记录支持 `status`，入库事件支持 `event_type`。不适用的列表接口不得虚构筛选字段。
+
+仓储查询必须同时应用枚举筛选、稳定游标排序、默认软删除过滤以及当前 tenant/application 边界；父级租户或应用处于非活动状态时，子资源不得作为有效业务数据返回。OpenAPI 参数枚举、运行时目录、领域枚举和仓储支持字段必须由一致性测试校验。
+
 ## Risks / Trade-offs
 
 - [旧对象没有唯一应用归属] → 迁移前执行 tenant/application/key 审计；无法唯一映射的对象进入 quarantine，不能通过文件 API 或签名 URL 暴露。

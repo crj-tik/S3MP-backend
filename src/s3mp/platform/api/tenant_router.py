@@ -13,6 +13,7 @@ from s3mp.common.errors import ApiError
 from s3mp.platform.api.dependencies import platform_permission
 from s3mp.platform.application.tenant_lifecycle import PlatformTenantLifecycleService
 from s3mp.platform.domain.context import PlatformContext
+from s3mp.platform.infrastructure.models import TenantLifecycleStatus
 
 router = APIRouter(prefix="/api/v1/platform", tags=["Platform tenants"])
 tenant_service = application_service("platform_tenant_lifecycle")
@@ -59,19 +60,19 @@ ManageContext = Annotated[PlatformContext, platform_permission("platform.tenants
 ReadContext = Annotated[PlatformContext, platform_permission("platform.tenants.read")]
 
 
-def _cursor(value: str | None, context: PlatformContext) -> UUID | None:
+def _cursor(value: str | None, context: PlatformContext, *, query: str) -> UUID | None:
     if value is None:
         return None
-    position = _codec.decode(value, _platform_tenant, context.user_id, 1, query="platform_tenants")
+    position = _codec.decode(value, _platform_tenant, context.user_id, 1, query=query)
     try:
         return UUID(position)
     except ValueError as exc:
         raise ApiError("invalid_cursor", "Invalid platform cursor", 400) from exc
 
 
-def _next(position: UUID | None, context: PlatformContext) -> str | None:
+def _next(position: UUID | None, context: PlatformContext, *, query: str) -> str | None:
     return (
-        _codec.encode(_platform_tenant, context.user_id, 1, str(position), query="platform_tenants")
+        _codec.encode(_platform_tenant, context.user_id, 1, str(position), query=query)
         if position
         else None
     )
@@ -88,13 +89,19 @@ async def list_tenants(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     include_deleted: bool = Query(default=False),
+    status: Annotated[TenantLifecycleStatus | None, Query()] = None,
 ) -> PlatformTenantPage:
+    query = f"platform_tenants:{status.value if status else 'all'}:{include_deleted}"
     items, position = await service.list_tenants(
-        context, limit=limit, cursor=_cursor(cursor, context), include_deleted=include_deleted
+        context,
+        limit=limit,
+        cursor=_cursor(cursor, context, query=query),
+        status=status,
+        include_deleted=include_deleted,
     )
     return PlatformTenantPage(
         items=[PlatformTenantResponse.model_validate(item) for item in items],
-        next_cursor=_next(position, context),
+        next_cursor=_next(position, context, query=query),
     )
 
 

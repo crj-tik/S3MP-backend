@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import (
     ApiKeyModel,
+    ApiKeyStatus,
     ApplicationModel,
     ApplicationOwnerModel,
+    ApplicationStatus,
 )
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.identity.infrastructure.models import MembershipModel, PrincipalModel, PrincipalType
@@ -57,7 +59,11 @@ class SqlAlchemyApplicationStore:
         self._sessions = session_factory
 
     async def list_apps(
-        self, tenant_id: UUID, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        limit: int,
+        cursor: str | None,
+        status: ApplicationStatus = ApplicationStatus.ACTIVE,
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = (
@@ -65,7 +71,7 @@ class SqlAlchemyApplicationStore:
                 .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
                 .where(
                     ApplicationModel.tenant_id == tenant_id,
-                    ApplicationModel.status != "deleted",
+                    ApplicationModel.status == status,
                     TenantModel.status == "active",
                 )
             )
@@ -560,12 +566,18 @@ class SqlAlchemyApplicationStore:
         return changed
 
     async def list_keys(
-        self, tenant_id: UUID, app_id: UUID, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        app_id: UUID,
+        limit: int,
+        cursor: str | None,
+        status: ApiKeyStatus = ApiKeyStatus.ACTIVE,
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = select(ApiKeyModel).where(
                 ApiKeyModel.tenant_id == tenant_id,
                 ApiKeyModel.application_id == app_id,
+                ApiKeyModel.status == status,
                 ApiKeyModel.application_id.in_(
                     select(ApplicationModel.id)
                     .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)

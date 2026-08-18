@@ -5,6 +5,7 @@ from uuid import UUID
 
 from s3mp.common.errors import ApiError
 from s3mp.platform.domain.context import PlatformContext
+from s3mp.platform.domain.support_access import SupportAccessStatus
 
 
 class PlatformControlPlaneStore(Protocol):
@@ -112,7 +113,12 @@ class PlatformControlPlaneService:
         return await self._store.list_platform_role_bindings(limit=limit, cursor=cursor)
 
     async def list_support(
-        self, _actor: PlatformContext, *, limit: int, cursor: UUID | None, status: str | None
+        self,
+        _actor: PlatformContext,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        status: SupportAccessStatus | None,
     ) -> tuple[list[dict[str, object]], UUID | None]:
         return await self._store.list_support_access(limit=limit, cursor=cursor, status=status)
 

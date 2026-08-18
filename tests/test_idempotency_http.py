@@ -33,7 +33,7 @@ class IdempotentApplicationService:
         self._first_result: dict[str, Any] | None = None
 
     async def list_apps(
-        self, tenant_id: Any, limit: int = 50, cursor: str | None = None
+        self, tenant_id: Any, limit: int = 50, cursor: str | None = None, **_: Any
     ) -> tuple[list[dict[str, Any]], str | None]:
         return ([], None)
 

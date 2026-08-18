@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
+from s3mp.governance.domain.quota import QuotaScope
 from s3mp.identity.domain.context import PrincipalContext
 
 router = APIRouter(prefix="/api/v1", tags=["Quotas", "Audit"])
@@ -151,13 +152,16 @@ async def list_quotas(
     storage_space_id: str | None = None,
     application_id: str | None = None,
     cursor: str | None = Query(default=None),
+    scope: Annotated[QuotaScope | None, Query()] = None,
 ) -> QuotaPage:
-    query = f"quotas:{storage_space_id or 'all'}:{application_id or 'all'}"
+    query = f"quotas:{storage_space_id or 'all'}:{application_id or 'all'}:{scope or 'all'}"
     quota_kwargs: dict[str, Any] = {
         "cursor": _cursor(cursor, context, query=query),
     }
     if application_id is not None:
         quota_kwargs["application_id"] = application_id
+    if scope is not None:
+        quota_kwargs["scope"] = scope
     items, position = await _quota_svc(request).list_quotas(
         context, storage_space_id, **quota_kwargs
     )

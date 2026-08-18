@@ -18,7 +18,7 @@ class FakeApplicationService:
         self.create_calls = 0
 
     async def list_apps(
-        self, context: Any, limit: int = 50, cursor: str | None = None
+        self, context: Any, limit: int = 50, cursor: str | None = None, **_: Any
     ) -> tuple[list[dict[str, Any]], str | None]:
         return ([{"id": str(uuid4()), "name": "app-1", "status": "active"}], None)
 
@@ -41,7 +41,7 @@ class FakeApiKeyService:
         self.issued = 0
 
     async def list_keys(
-        self, context: Any, app_id: Any, limit: int = 50, cursor: str | None = None
+        self, context: Any, app_id: Any, limit: int = 50, cursor: str | None = None, **_: Any
     ) -> tuple[list[dict[str, Any]], str | None]:
         return ([{"id": str(uuid4()), "key_id": "sk_test", "status": "active"}], None)
 

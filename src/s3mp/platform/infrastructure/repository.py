@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
@@ -22,6 +22,7 @@ from s3mp.identity.infrastructure.models import (
     UserStatus,
 )
 from s3mp.platform.application.baseline import ensure_support_role, ensure_tenant_admin_role
+from s3mp.platform.domain.support_access import SupportAccessStatus
 from s3mp.platform.infrastructure.models import (
     PlatformAuditEventModel,
     PlatformBootstrapStateModel,
@@ -275,12 +276,19 @@ class SqlAlchemyPlatformStore:
             )
 
     async def list_platform_tenants(
-        self, *, limit: int, cursor: UUID | None, include_deleted: bool = False
+        self,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        status: TenantLifecycleStatus | None = None,
+        include_deleted: bool = False,
     ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
             statement = select(TenantModel).order_by(TenantModel.id).limit(limit + 1)
             if not include_deleted:
                 statement = statement.where(TenantModel.status != TenantLifecycleStatus.DELETED)
+            if status is not None:
+                statement = statement.where(TenantModel.status == status)
             if cursor is not None:
                 statement = statement.where(TenantModel.id > cursor)
             rows = list((await session.scalars(statement)).all())
@@ -432,7 +440,7 @@ class SqlAlchemyPlatformStore:
                         UserModel.normalized_email == user.normalized_email,
                         (UserModel.normalized_employee_number == user.normalized_employee_number)
                         if user.normalized_employee_number is not None
-                        else False,
+                        else true(),
                     ),
                 )
             )
@@ -488,7 +496,7 @@ class SqlAlchemyPlatformStore:
             )
 
     async def list_support_access(
-        self, *, limit: int, cursor: UUID | None, status: str | None
+        self, *, limit: int, cursor: UUID | None, status: SupportAccessStatus | None
     ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
             now = datetime.now(UTC)
@@ -1183,6 +1191,59 @@ class SqlAlchemyPlatformStore:
                     resource_type="platform_role_binding",
                     resource_id=None,
                     details={"role": "platform_admin"},
+                )
+            )
+            return user.id
+
+    async def ensure_platform_admin(
+        self, *, email: str, employee_number: str, display_name: str, password_hash: str
+    ) -> UUID | None:
+        """Create the configured local admin only when no active admin exists."""
+        async with self.session_factory.begin() as session:
+            state = await session.get(PlatformBootstrapStateModel, True, with_for_update=True)
+            active_id = await session.scalar(
+                select(UserModel.id)
+                .join(PlatformRoleBindingModel, PlatformRoleBindingModel.user_id == UserModel.id)
+                .join(PlatformRoleModel, PlatformRoleModel.id == PlatformRoleBindingModel.role_id)
+                .where(
+                    PlatformRoleModel.name == "platform_admin",
+                    PlatformRoleBindingModel.revoked_at.is_(None),
+                    UserModel.status == UserStatus.ACTIVE,
+                )
+                .with_for_update()
+            )
+            if active_id is not None:
+                return active_id
+            if state is None:
+                session.add(PlatformBootstrapStateModel(singleton=True))
+                await session.flush()
+                action = "platform.bootstrap_completed"
+            else:
+                action = "platform.bootstrap_recovered"
+            role = await session.scalar(
+                select(PlatformRoleModel).where(PlatformRoleModel.name == "platform_admin")
+            )
+            if role is None:
+                raise ValueError("platform authorization baseline is not seeded")
+            user = UserModel(
+                email=email,
+                normalized_email=email.strip().casefold(),
+                employee_number=employee_number,
+                normalized_employee_number=employee_number.strip().casefold(),
+                display_name=display_name,
+                status=UserStatus.ACTIVE,
+                password_hash=password_hash,
+            )
+            session.add(user)
+            await session.flush()
+            session.add(PlatformRoleBindingModel(user_id=user.id, role_id=role.id))
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=user.id,
+                    action=action,
+                    resource_type="platform_role_binding",
+                    resource_id=None,
+                    details={"role": "platform_admin", "source": "startup_bootstrap"},
                 )
             )
             return user.id
