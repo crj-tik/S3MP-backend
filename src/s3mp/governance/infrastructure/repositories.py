@@ -6,11 +6,14 @@ from uuid import UUID
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
 from s3mp.governance.domain.quota import QuotaScope
 from s3mp.governance.infrastructure.models import QuotaModel
 from s3mp.identity.infrastructure.models import PrincipalModel
+from s3mp.storage.infrastructure.models import StorageSpaceModel
+from s3mp.tenant.infrastructure.models import TenantModel
 
 
 class SqlAlchemyQuotaStore:
@@ -36,6 +39,11 @@ class SqlAlchemyQuotaStore:
                 stmt = stmt.where(QuotaModel.application_id.is_(None))
             elif scope is QuotaScope.APPLICATION:
                 stmt = stmt.where(QuotaModel.application_id.is_not(None))
+            elif scope is QuotaScope.STORAGE_SPACE:
+                stmt = stmt.where(
+                    QuotaModel.storage_space_id.is_not(None),
+                    QuotaModel.application_id.is_(None),
+                )
             if cursor:
                 stmt = stmt.where(QuotaModel.id > UUID(cursor))
             rows = (await session.scalars(stmt.order_by(QuotaModel.id).limit(limit + 1))).all()
@@ -62,7 +70,25 @@ class SqlAlchemyQuotaStore:
             )
             if row is None:
                 return None
+            tenant = await session.scalar(
+                select(TenantModel)
+                .where(TenantModel.id == tenant_id, TenantModel.status == "active")
+                .with_for_update()
+            )
+            if tenant is None:
+                return None
             if row.application_id is not None:
+                application = await session.scalar(
+                    select(ApplicationModel)
+                    .where(
+                        ApplicationModel.tenant_id == tenant_id,
+                        ApplicationModel.id == row.application_id,
+                        ApplicationModel.status == "active",
+                    )
+                    .with_for_update()
+                )
+                if application is None:
+                    return None
                 tenant_quota = await session.scalar(
                     select(QuotaModel)
                     .where(
@@ -76,6 +102,33 @@ class SqlAlchemyQuotaStore:
                     raise ApiError(
                         "quota_allocation_exceeded",
                         "Application quota cannot exceed tenant quota",
+                        status_code=422,
+                    )
+            elif row.storage_space_id is not None:
+                space = await session.scalar(
+                    select(StorageSpaceModel)
+                    .where(
+                        StorageSpaceModel.tenant_id == tenant_id,
+                        StorageSpaceModel.id == row.storage_space_id,
+                        StorageSpaceModel.status == "active",
+                    )
+                    .with_for_update()
+                )
+                if space is None:
+                    return None
+                tenant_quota = await session.scalar(
+                    select(QuotaModel)
+                    .where(
+                        QuotaModel.tenant_id == tenant_id,
+                        QuotaModel.application_id.is_(None),
+                        QuotaModel.storage_space_id.is_(None),
+                    )
+                    .with_for_update()
+                )
+                if tenant_quota is not None and limit_bytes > tenant_quota.limit_bytes:
+                    raise ApiError(
+                        "quota_allocation_exceeded",
+                        "Storage space quota cannot exceed tenant quota",
                         status_code=422,
                     )
             row.limit_bytes = limit_bytes
@@ -145,7 +198,16 @@ def _quota_dict(m: QuotaModel) -> dict[str, Any]:
         "available_bytes": max(
             (m.limit_bytes or 0) - (m.used_bytes or 0) - (m.reserved_bytes or 0), 0
         ),
-        "measured_at": m.updated_at.isoformat() if m.updated_at else None,
+        "consistency_status": m.consistency_status,
+        "drift_summary": dict(m.drift_summary or {}),
+        "measured_at": (
+            (m.measured_at or m.updated_at).isoformat()
+            if (m.measured_at or m.updated_at)
+            else None
+        ),
+        "last_reconciliation_run_id": (
+            str(m.last_reconciliation_run_id) if m.last_reconciliation_run_id else None
+        ),
         "scope_type": (
             "application"
             if m.application_id

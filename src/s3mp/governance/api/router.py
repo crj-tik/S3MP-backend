@@ -1,14 +1,16 @@
 """Quota and audit HTTP endpoints."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Path, Query, Request
+from fastapi import APIRouter, Body, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
+from s3mp.governance.application.quota_reconciliation import ReconciliationDifference
 from s3mp.governance.domain.quota import QuotaScope
 from s3mp.identity.domain.context import PrincipalContext
 
@@ -53,7 +55,23 @@ class QuotaResponse(BaseModel):
     )
     scope_type: str | None = Field(
         default=None,
-        description="配额范围：tenant 表示租户总量，application 表示单个应用。",
+        description=(
+            "配额范围：tenant 表示租户总量，application 表示单个应用，"
+            "storage_space 表示逻辑存储空间。"
+        ),
+    )
+    consistency_status: str | None = Field(
+        default=None,
+        description=(
+            "统计一致性：realtime 表示事务计数，reconciled 表示已对账，"
+            "drift_detected 表示存在待处理差异。"
+        ),
+    )
+    drift_summary: dict[str, Any] = Field(
+        default_factory=dict, description="非敏感的对账差异摘要。"
+    )
+    last_reconciliation_run_id: str | None = Field(
+        default=None, description="最近一次对账运行的稳定标识。"
     )
     updated_at: datetime | None = Field(default=None, description="配额记录最后更新的时间。")
 
@@ -87,6 +105,59 @@ class QuotaPage(BaseModel):
 class AuditEventPage(BaseModel):
     items: list[AuditEventResponse]
     next_cursor: str | None = None
+
+
+class QuotaReconciliationMode(StrEnum):
+    AUDIT = "audit"
+    APPLY = "apply"
+
+
+class QuotaReconciliationStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class QuotaReconciliationDifference(BaseModel):
+    kind: ReconciliationDifference
+    recorded_bytes: int | None = None
+    observed_bytes: int | None = None
+    physical_key_fingerprint: str | None = Field(
+        default=None, description="物理对象键的 SHA-256 指纹，不返回完整物理路径。"
+    )
+
+
+class QuotaReconciliationRequest(BaseModel):
+    """配额对账请求；audit 只检查，apply 才会写入用量投影。"""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: "QuotaReconciliationMode" = Field(
+        default=QuotaReconciliationMode.AUDIT,
+        description="运行模式：audit 只读检查，apply 应用可信匹配结果。",
+    )
+    application_id: str | None = Field(
+        default=None, description="可选的应用稳定标识，用于缩小对账范围。"
+    )
+    storage_space_id: str | None = Field(
+        default=None, description="可选的逻辑存储空间稳定标识，用于缩小对账范围。"
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        description="apply 重试使用的幂等键；同一租户重复使用时返回同一对账运行结果。",
+    )
+
+
+class QuotaReconciliationResponse(BaseModel):
+    id: str
+    mode: "QuotaReconciliationMode"
+    status: "QuotaReconciliationStatus"
+    counts: dict[str, int] = Field(default_factory=dict)
+    matched_files: int = 0
+    provider_objects: int = 0
+    summary: dict[str, Any] = Field(default_factory=dict)
+    differences: list["QuotaReconciliationDifference"] = Field(default_factory=list)
 
 
 def _page(
@@ -186,6 +257,53 @@ async def update_quota(
 ) -> QuotaResponse:
     return QuotaResponse.model_validate(
         await _quota_svc(request).update_quota(context, quota_id, body.limit_bytes)
+    )
+
+
+@router.post(
+    "/quotas/reconciliation",
+    response_model=QuotaReconciliationResponse,
+    operation_id="start_quota_reconciliation",
+)
+async def start_quota_reconciliation(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("start_quota_reconciliation")],
+    body: Annotated[QuotaReconciliationRequest, Body()],
+) -> QuotaReconciliationResponse:
+    svc = getattr(request.app.state, "quota_reconciliation_service", None)
+    if svc is None:
+        raise ApiError(
+            "internal_error", "Quota reconciliation service is not configured", status_code=500
+        )
+    return QuotaReconciliationResponse.model_validate(
+        await svc.reconcile(
+            context,
+            mode=body.mode,
+            application_id=body.application_id,
+            storage_space_id=body.storage_space_id,
+            idempotency_key=body.idempotency_key,
+        )
+    )
+
+
+@router.get(
+    "/quotas/reconciliation/{run_id}",
+    response_model=QuotaReconciliationResponse,
+    operation_id="get_quota_reconciliation",
+)
+async def get_quota_reconciliation(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_quota_reconciliation")],
+    run_id: str = Path(min_length=1),
+    difference_kind: Annotated[ReconciliationDifference | None, Query()] = None,
+) -> QuotaReconciliationResponse:
+    svc = getattr(request.app.state, "quota_reconciliation_service", None)
+    if svc is None:
+        raise ApiError(
+            "internal_error", "Quota reconciliation service is not configured", status_code=500
+        )
+    return QuotaReconciliationResponse.model_validate(
+        await svc.get_run(context, run_id, difference_kind=difference_kind)
     )
 
 

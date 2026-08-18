@@ -1,6 +1,7 @@
 """Alembic migration environment."""
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -22,6 +23,12 @@ from s3mp.tenant.infrastructure import models as tenant_models  # noqa: F401
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+# The Compose/runtime environment is authoritative.  Keeping a local URL in
+# alembic.ini is useful for host development, but must not override the URL
+# injected into an API/worker container.
+database_url = os.getenv("S3MP_DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 
