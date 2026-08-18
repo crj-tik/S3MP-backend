@@ -28,6 +28,11 @@ from s3mp.identity.infrastructure.models import (
     UserModel,
     UserStatus,
 )
+from s3mp.platform.infrastructure.models import TenantLifecycleStatus
+from s3mp.storage.infrastructure.models import (
+    StorageConnectionModel,
+    StorageSpaceModel,
+)
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
@@ -593,6 +598,7 @@ class SqlAlchemyIdentityAdminStore:
         principal_id: UUID | None = None,
         limit: int = 50,
         cursor: UUID | None = None,
+        storage_space_id: UUID | None = None,
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         async with self._sf() as session:
             statement = (
@@ -605,6 +611,32 @@ class SqlAlchemyIdentityAdminStore:
             )
             if principal_id is not None:
                 statement = statement.where(RoleBindingModel.principal_id == principal_id)
+            if storage_space_id is not None:
+                statement = (
+                    statement.join(
+                        StorageSpaceModel,
+                        (StorageSpaceModel.tenant_id == RoleBindingModel.tenant_id)
+                        & (StorageSpaceModel.id == RoleBindingModel.storage_space_id),
+                    )
+                    .join(
+                        ApplicationModel,
+                        (ApplicationModel.tenant_id == StorageSpaceModel.tenant_id)
+                        & (ApplicationModel.id == StorageSpaceModel.application_id),
+                    )
+                    .join(
+                        StorageConnectionModel,
+                        (StorageConnectionModel.tenant_id == StorageSpaceModel.tenant_id)
+                        & (StorageConnectionModel.id == StorageSpaceModel.connection_id),
+                    )
+                    .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
+                    .where(
+                        RoleBindingModel.storage_space_id == storage_space_id,
+                        StorageSpaceModel.status == "active",
+                        ApplicationModel.status == "active",
+                        StorageConnectionModel.status == "active",
+                        TenantModel.status == TenantLifecycleStatus.ACTIVE,
+                    )
+                )
             if cursor is not None:
                 statement = statement.where(RoleBindingModel.id > cursor)
             rows = (await session.scalars(statement)).all()

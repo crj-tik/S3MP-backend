@@ -90,6 +90,16 @@ def _set_account_cookies(
     )
 
 
+def _clear_tenant_cookies(response: Response, request: Request) -> None:
+    secure = request.app.state.settings.secure_browser_cookies
+    response.delete_cookie(
+        "s3mp_session", path="/", secure=secure, httponly=True, samesite="lax"
+    )
+    response.delete_cookie(
+        "s3mp_csrf", path="/", secure=secure, httponly=False, samesite="lax"
+    )
+
+
 @router.post("/login", response_model=AccountContext, operation_id="account_login")
 async def login(
     body: LoginRequest,
@@ -110,6 +120,7 @@ async def login(
         body.password,
         rate_limit_key=f"account-login:{client}:{identifier.strip().casefold()}",
     )
+    _clear_tenant_cookies(response, request)
     _set_account_cookies(response, request, session_token, csrf_token)
     return AccountContext.model_validate(result)
 
@@ -151,6 +162,7 @@ async def logout(
     response.delete_cookie(
         "s3mp_account_csrf", path="/", secure=secure, httponly=False, samesite="lax"
     )
+    _clear_tenant_cookies(response, request)
 
 
 @router.post("/tenant-sessions", status_code=204, operation_id="select_tenant_session")

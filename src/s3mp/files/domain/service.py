@@ -11,7 +11,7 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from s3mp.storage.domain.connection import PresignedRequest, S3Adapter
-from s3mp.storage.domain.policy import StorageCapabilities, canonical_object_key, choose_upload_mode
+from s3mp.storage.domain.policy import canonical_object_key
 
 
 class FileValidationError(ValueError):
@@ -110,11 +110,6 @@ class FileService:
         self._quota = quota
         self._subject_is_active = subject_is_active or (lambda _principal_id: True)
 
-    def choose_upload_mode(
-        self, capabilities: StorageCapabilities, *, direct_requested: bool
-    ) -> str:
-        return choose_upload_mode(capabilities, direct_requested=direct_requested)
-
     async def list_authorized(self, prefix: str) -> list[ObjectMetadata]:
         canonical_object_key(prefix, allow_empty=True)
         objects = await self._store.list(prefix)
@@ -123,31 +118,6 @@ class FileService:
     async def head_authorized(self, key: str, prefix: str) -> ObjectMetadata | None:
         self._authorize_key(key, prefix)
         return await self._store.head(key)
-
-    async def proxy_upload(
-        self,
-        key: str,
-        prefix: str,
-        body: bytes,
-        content_length: int,
-        content_type: str,
-        *,
-        overwrite: bool = False,
-    ) -> ObjectMetadata:
-        self._authorize_key(key, prefix)
-        if content_length != len(body) or content_length < 0:
-            raise FileValidationError("Content-Length does not match request body")
-        if not content_type or content_type.strip() != content_type:
-            raise FileValidationError("valid Content-Type is required")
-        if not overwrite and await self._store.head(key) is not None:
-            raise FileConflictError("object already exists")
-        reservation = await self._quota.reserve(content_length) if self._quota else None
-        try:
-            return await self._store.put(key, body, content_type)
-        except Exception:
-            if reservation is not None and self._quota is not None:
-                await self._quota.release(reservation)
-            raise
 
     def create_upload_session(
         self,

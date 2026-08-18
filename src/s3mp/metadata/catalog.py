@@ -110,13 +110,14 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
     ],
     "file_object": [
         _item("available", "可用", "文件已入库并可按授权访问。", ("deleting", "quarantined")),
-        _item("deleting", "删除中", "文件已进入受控删除流程。", ("delete_failed",)),
+        _item("deleting", "删除中", "文件已进入受控删除流程。", ("deleted", "delete_failed")),
         _item(
             "delete_failed",
             "删除失败",
             "文件删除需要重试或人工处理。",
             ("deleting", "quarantined"),
         ),
+        _item("deleted", "已删除", "文件已完成 provider 删除并释放配额。", terminal=True),
         _item("quarantined", "已隔离", "文件因无法证明安全归属而不可被业务访问。", terminal=True),
     ],
     "upload": [
@@ -197,9 +198,15 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
         ),
     ],
     "reservation": [
-        _item("reserved", "已预留", "容量已被进行中的上传占用。", ("settled", "released")),
+        _item(
+            "reserved",
+            "已预留",
+            "容量已被进行中的上传占用。",
+            ("settled", "released", "quarantined"),
+        ),
         _item("settled", "已结算", "预留已按实际对象大小结算。", terminal=True),
         _item("released", "已释放", "预留已释放回可用容量。", terminal=True),
+        _item("quarantined", "已隔离", "预留关联异常，需要人工或对账处理。", terminal=True),
     ],
 }
 
@@ -222,6 +229,7 @@ OPERATIONS = [
 QUOTA_SCOPES = [
     _item("tenant", "租户", "统计租户全部应用的容量。"),
     _item("application", "应用", "统计单个应用命名空间的容量。"),
+    _item("storage_space", "存储空间", "统计单个逻辑存储空间命名空间的容量。"),
 ]
 STORAGE_ADDRESSING = [
     _item("path", "Path-style", "使用 /bucket/key 形式访问 S3 兼容服务。"),
@@ -267,9 +275,9 @@ def _catalog_descriptors() -> list[dict[str, Any]]:
     from s3mp.applications.infrastructure.models import ApiKeyStatus, ApplicationStatus
     from s3mp.authorization.domain.evaluator import Decision
     from s3mp.authorization.infrastructure.models import BindingEffect
+    from s3mp.files.domain.file_operations import MultipartStatus, OperationStatus
     from s3mp.files.domain.file_status import FileObjectStatus
     from s3mp.files.domain.ingestion import IngestionEventType, IngestionStatus
-    from s3mp.files.domain.multipart import MultipartStatus, OperationStatus
     from s3mp.governance.domain.access_review import (
         ApprovalRequestStatus,
         ReviewItemVerdict,

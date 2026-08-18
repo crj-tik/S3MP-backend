@@ -153,6 +153,19 @@ class SqlAlchemyPlatformStore:
                 .values(revoked_at=datetime.now(UTC))
             )
 
+    async def revoke_tenant_sessions(self, user_id: UUID) -> None:
+        async with self.session_factory.begin() as session:
+            await session.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.membership_id.in_(
+                        select(MembershipModel.id).where(MembershipModel.user_id == user_id)
+                    ),
+                    SessionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=datetime.now(UTC))
+            )
+
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None:
         now = datetime.now(UTC)
         async with self.session_factory() as session:
@@ -556,7 +569,13 @@ class SqlAlchemyPlatformStore:
             return self._support_read_summary(*value) if value else None
 
     async def list_platform_audit_events(
-        self, *, limit: int, cursor: UUID | None, action: str | None
+        self,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        action: str | None,
+        resource_type: str | None,
+        resource_id: str | None,
     ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
             statement = (
@@ -568,6 +587,12 @@ class SqlAlchemyPlatformStore:
                 statement = statement.where(PlatformAuditEventModel.id > cursor)
             if action:
                 statement = statement.where(PlatformAuditEventModel.action == action)
+            if resource_type:
+                statement = statement.where(
+                    PlatformAuditEventModel.resource_type == resource_type
+                )
+            if resource_id:
+                statement = statement.where(PlatformAuditEventModel.resource_id == resource_id)
             rows = list((await session.scalars(statement)).all())
             page = rows[:limit]
             return [self._audit_summary(row) for row in page], (
@@ -855,8 +880,13 @@ class SqlAlchemyPlatformStore:
     async def revoke_platform_role(self, *, actor_user_id: UUID, binding_id: UUID) -> bool:
         async with self.session_factory.begin() as session:
             binding = await session.get(PlatformRoleBindingModel, binding_id, with_for_update=True)
-            if binding is None or binding.revoked_at is not None:
+            if binding is None:
                 return False
+            # DELETE is idempotent: a cached/stale UI row may already be
+            # revoked, but the resource did exist and is in the requested
+            # terminal state.  Do not emit a duplicate audit event.
+            if binding.revoked_at is not None:
+                return True
             role = await session.get(PlatformRoleModel, binding.role_id)
             binding.revoked_at = datetime.now(UTC)
             session.add(

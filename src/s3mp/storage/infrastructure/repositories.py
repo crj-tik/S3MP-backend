@@ -210,7 +210,6 @@ class SqlAlchemyStorageStore:
                     capabilities={
                         "list_objects": True,
                         "head_object": True,
-                        "proxy_upload": True,
                         "presigned_get": True,
                         "presigned_put": True,
                         "multipart": True,
@@ -236,6 +235,7 @@ class SqlAlchemyStorageStore:
         limit: int = 50,
         cursor: str | None = None,
         status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
+        application_id: UUID | None = None,
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = (
@@ -260,6 +260,8 @@ class SqlAlchemyStorageStore:
                     TenantModel.status == "active",
                 )
             )
+            if application_id is not None:
+                statement = statement.where(StorageSpaceModel.application_id == application_id)
             if cursor:
                 statement = statement.where(StorageSpaceModel.id > UUID(cursor))
             models = (

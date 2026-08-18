@@ -32,6 +32,8 @@ class AccountAuthStore(Protocol):
 
     async def revoke_account_session(self, session_id: UUID) -> None: ...
 
+    async def revoke_tenant_sessions(self, user_id: UUID) -> None: ...
+
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None: ...
 
     async def effective_permissions(self, user_id: UUID) -> frozenset[str]: ...
@@ -142,6 +144,7 @@ class AccountAuthenticationService:
 
     async def logout(self, context: PlatformContext) -> None:
         await self._store.revoke_account_session(context.session_id)
+        await self._store.revoke_tenant_sessions(context.user_id)
 
     async def select_tenant(self, context: PlatformContext, tenant_id: UUID) -> tuple[str, str]:
         issued = self._tokens.issue()

@@ -29,7 +29,11 @@ from s3mp.files.infrastructure.models import (
     UploadSessionModel,
 )
 from s3mp.files.infrastructure.repositories import _mp_dict, _upload_dict
-from s3mp.governance.infrastructure.models import QuotaModel, QuotaReservationModel
+from s3mp.governance.infrastructure.models import (
+    QuotaAdjustmentModel,
+    QuotaModel,
+    QuotaReservationModel,
+)
 from s3mp.storage.infrastructure.models import StorageSpaceModel
 
 
@@ -201,6 +205,103 @@ class SqlAlchemyIngestionStore:
             )
             return _ingestion_dict(row) if row else None
 
+    async def get_provenance(self, tenant_id: UUID, ingestion_id: UUID) -> dict[str, Any] | None:
+        """Return a tenant-scoped, redacted provenance chain."""
+        async with self._sf() as session:
+            record = await session.scalar(
+                select(FileIngestionRecordModel).where(
+                    FileIngestionRecordModel.tenant_id == tenant_id,
+                    FileIngestionRecordModel.id == ingestion_id,
+                )
+            )
+            if record is None:
+                return None
+            events = (
+                await session.scalars(
+                    select(FileIngestionEventModel)
+                    .where(
+                        FileIngestionEventModel.tenant_id == tenant_id,
+                        FileIngestionEventModel.ingestion_record_id == ingestion_id,
+                    )
+                    .order_by(FileIngestionEventModel.occurred_at, FileIngestionEventModel.id)
+                )
+            ).all()
+            file_row = None
+            if record.file_object_id is not None:
+                file_row = await session.scalar(
+                    select(FileObjectModel).where(
+                        FileObjectModel.tenant_id == tenant_id,
+                        FileObjectModel.id == record.file_object_id,
+                    )
+                )
+            adjustments: list[Any] = []
+            if file_row is not None:
+                adjustments = list(
+                    (
+                        await session.execute(
+                            select(QuotaAdjustmentModel).where(
+                                QuotaAdjustmentModel.tenant_id == tenant_id,
+                                QuotaAdjustmentModel.file_object_id == file_row.id,
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            return {
+                "ingestion": {
+                    "id": str(record.id),
+                    "status": record.status,
+                    "storage_space_id": str(record.storage_space_id),
+                    "application_id": str(record.application_id) if record.application_id else None,
+                    "relative_key": record.relative_key,
+                    "file_object_id": str(record.file_object_id) if record.file_object_id else None,
+                    "quota_reservation_id": (
+                        str(record.quota_reservation_id) if record.quota_reservation_id else None
+                    ),
+                    "actual_size": record.actual_size,
+                    "committed_at": record.committed_at.isoformat()
+                    if record.committed_at
+                    else None,
+                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                },
+                "events": [
+                    {
+                        "id": str(event.id),
+                        "event_type": event.event_type,
+                        "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
+                    }
+                    for event in events
+                ],
+                "file_object": (
+                    {
+                        "id": str(file_row.id),
+                        "status": file_row.status,
+                        "content_length": file_row.content_length,
+                        "created_at": file_row.created_at.isoformat()
+                        if file_row.created_at
+                        else None,
+                        "deleted_at": file_row.deleted_at.isoformat()
+                        if file_row.deleted_at
+                        else None,
+                    }
+                    if file_row is not None
+                    else None
+                ),
+                "quota_adjustments": [
+                    {
+                        "id": str(adjustment.id),
+                        "quota_id": str(adjustment.quota_id),
+                        "delta_bytes": adjustment.delta_bytes,
+                        "reason": adjustment.reason,
+                        "created_at": adjustment.created_at.isoformat()
+                        if adjustment.created_at
+                        else None,
+                    }
+                    for adjustment in adjustments
+                ],
+            }
+
     async def get_for_session(
         self,
         tenant_id: UUID,
@@ -243,6 +344,91 @@ class SqlAlchemyIngestionStore:
                 stmt = stmt.where(FileIngestionRecordModel.tenant_id == tenant_id)
             rows = await session.scalars(stmt.order_by(FileIngestionRecordModel.created_at))
             return [_ingestion_dict(row) for row in rows]
+
+    async def reap_orphan_reservations(
+        self, tenant_id: UUID | None = None, limit: int = 100
+    ) -> list[str]:
+        """Release stale reservations without deleting provenance evidence."""
+        processed: list[str] = []
+        async with self._sf.begin() as session:
+            stmt = (
+                select(QuotaReservationModel)
+                .where(QuotaReservationModel.status == "reserved")
+                .order_by(QuotaReservationModel.created_at, QuotaReservationModel.id)
+                .limit(max(1, min(limit, 500)))
+                .with_for_update(skip_locked=True)
+            )
+            if tenant_id is not None:
+                stmt = stmt.where(QuotaReservationModel.tenant_id == tenant_id)
+            reservations = (await session.scalars(stmt)).all()
+            for reservation in reservations:
+                ingestion = await session.scalar(
+                    select(FileIngestionRecordModel)
+                    .where(
+                        FileIngestionRecordModel.tenant_id == reservation.tenant_id,
+                        FileIngestionRecordModel.quota_reservation_id == reservation.id,
+                    )
+                    .with_for_update()
+                )
+                if ingestion is not None and ingestion.status in {
+                    IngestionStatus.COMMITTED.value,
+                    IngestionStatus.AVAILABLE.value,
+                }:
+                    if ingestion.actual_size is not None:
+                        if await _settle_quota_reservation(
+                            session, reservation.tenant_id, ingestion
+                        ):
+                            processed.append(str(reservation.id))
+                    continue
+
+                if ingestion is not None and ingestion.status not in {
+                    IngestionStatus.FAILED.value,
+                    IngestionStatus.EXPIRED.value,
+                    IngestionStatus.RECONCILIATION_REQUIRED.value,
+                }:
+                    continue
+
+                quota_ids = {
+                    quota_id
+                    for quota_id in (
+                        reservation.quota_id,
+                        reservation.application_quota_id,
+                        reservation.tenant_quota_id,
+                    )
+                    if quota_id is not None
+                }
+                quotas = (
+                    await session.scalars(
+                        select(QuotaModel)
+                        .where(
+                            QuotaModel.tenant_id == reservation.tenant_id,
+                            QuotaModel.id.in_(quota_ids),
+                        )
+                        .order_by(QuotaModel.id)
+                        .with_for_update()
+                    )
+                ).all()
+                for quota in quotas:
+                    quota.reserved_bytes = max(
+                        quota.reserved_bytes - reservation.requested_bytes, 0
+                    )
+                    quota.measured_at = datetime.now(UTC)
+                reservation.status = "released" if ingestion is not None else "quarantined"
+                reservation.settled_at = datetime.now(UTC)
+                session.add(
+                    AuditEventModel(
+                        tenant_id=reservation.tenant_id,
+                        action="quota.reservation_reaped",
+                        resource_type="quota_reservation",
+                        resource_id=str(reservation.id),
+                        details={
+                            "status": reservation.status,
+                            "ingestion_id": str(ingestion.id) if ingestion else None,
+                        },
+                    )
+                )
+                processed.append(str(reservation.id))
+        return processed
 
     async def reconciliation_attempt_count(self, tenant_id: UUID, ingestion_id: UUID) -> int:
         async with self._sf() as session:
@@ -622,9 +808,7 @@ async def _reserve_quota(
         else QuotaModel.storage_space_id == storage_space_id
     )
     scoped_quota = await session.scalar(
-        select(QuotaModel)
-        .where(QuotaModel.tenant_id == tenant_id, scoped_filter)
-        .with_for_update()
+        select(QuotaModel).where(QuotaModel.tenant_id == tenant_id, scoped_filter).with_for_update()
     )
     if tenant_quota is None and scoped_quota is None:
         return None

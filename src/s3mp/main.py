@@ -41,6 +41,7 @@ from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
 from s3mp.files.infrastructure.work_signal import RedisWorkSignal
 from s3mp.governance.api.router import router as governance_router
 from s3mp.governance.application.governance_service import AuditService, QuotaService
+from s3mp.governance.application.reconciliation_service import QuotaReconciliationService
 from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, SqlAlchemyQuotaStore
 from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
@@ -256,6 +257,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit_store: Any = SqlAlchemyAuditStore(session_factory) if session_factory else _store
         app.state.quota_service = QuotaService(
             quota_store, getattr(app.state, "authorization_management", None)
+        )
+        app.state.quota_reconciliation_service = (
+            QuotaReconciliationService(
+                session_factory,
+                object_storage,
+                getattr(app.state, "authorization_management", None),
+            )
+            if session_factory
+            else None
         )
         app.state.audit_service = AuditService(
             audit_store, getattr(app.state, "authorization_management", None)

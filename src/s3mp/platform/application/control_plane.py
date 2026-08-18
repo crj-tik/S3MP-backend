@@ -38,13 +38,19 @@ class PlatformControlPlaneStore(Protocol):
     ) -> tuple[list[dict[str, object]], UUID | None]: ...
 
     async def list_support_access(
-        self, *, limit: int, cursor: UUID | None, status: str | None
+        self, *, limit: int, cursor: UUID | None, status: SupportAccessStatus | None
     ) -> tuple[list[dict[str, object]], UUID | None]: ...
 
     async def get_support_access(self, request_id: UUID) -> dict[str, object] | None: ...
 
     async def list_platform_audit_events(
-        self, *, limit: int, cursor: UUID | None, action: str | None
+        self,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        action: str | None,
+        resource_type: str | None,
+        resource_id: str | None,
     ) -> tuple[list[dict[str, object]], UUID | None]: ...
 
     async def get_platform_audit_event(self, event_id: UUID) -> dict[str, object] | None: ...
@@ -128,10 +134,21 @@ class PlatformControlPlaneService:
         return await self._store.get_support_access(request_id)
 
     async def list_audit(
-        self, _actor: PlatformContext, *, limit: int, cursor: UUID | None, action: str | None
+        self,
+        _actor: PlatformContext,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        action: str | None,
+        resource_type: str | None,
+        resource_id: str | None,
     ) -> tuple[list[dict[str, object]], UUID | None]:
         return await self._store.list_platform_audit_events(
-            limit=limit, cursor=cursor, action=action
+            limit=limit,
+            cursor=cursor,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
         )
 
     async def get_audit(self, _actor: PlatformContext, event_id: UUID) -> dict[str, object] | None:

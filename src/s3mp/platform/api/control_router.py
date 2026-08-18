@@ -318,13 +318,25 @@ async def list_audit_events(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     action: str | None = Query(default=None, max_length=160),
+    resource_type: str | None = Query(default=None, max_length=80),
+    resource_id: str | None = Query(default=None, max_length=120),
 ) -> PlatformAuditEventPage:
-    scope = _query_scope("platform_audit_events", action=action)
+    action = action.strip() if action else None
+    resource_type = resource_type.strip() if resource_type else None
+    resource_id = resource_id.strip() if resource_id else None
+    scope = _query_scope(
+        "platform_audit_events",
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )
     items, position = await service.list_audit(
         context,
         limit=limit,
         cursor=_cursor(cursor, context, query=scope),
         action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
     )
     return PlatformAuditEventPage(
         items=[PlatformAuditEventResponse.model_validate(item) for item in items],

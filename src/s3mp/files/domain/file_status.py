@@ -6,5 +6,6 @@ from enum import StrEnum
 class FileObjectStatus(StrEnum):
     AVAILABLE = "available"
     DELETING = "deleting"
+    DELETED = "deleted"
     DELETE_FAILED = "delete_failed"
     QUARANTINED = "quarantined"

@@ -26,6 +26,16 @@ PUBLIC_PATHS: frozenset[str] = frozenset(
 # Skip auth when the test harness has already injected a principal_context
 SKIP_AUTH_HEADER = "X-S3MP-Test-Auth-Bypass"
 
+# These endpoints are authenticated by the platform account session.  A stale
+# tenant cookie must not be resolved here: it can be revoked while the account
+# session is still valid and would otherwise abort the request before the
+# account endpoint is reached.
+ACCOUNT_CONTEXT_PATH_PREFIXES = (
+    "/api/v1/auth/",
+    "/api/v1/platform/",
+    "/api/v1/account/",
+)
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
     """Resolve session or API key credentials to PrincipalContext on request.state."""
@@ -70,6 +80,12 @@ async def _resolve_available_contexts(request: Request) -> None:
                 "authentication_required", "Account session is not active", status_code=401
             )
         request.state.platform_context = account_context
+
+    # Account-domain requests intentionally ignore any tenant cookie.  This
+    # allows login, logout, tenant selection, and platform management to
+    # recover from a stale/revoked tenant session.
+    if request.url.path.startswith(ACCOUNT_CONTEXT_PATH_PREFIXES):
+        return
 
     session_token = request.cookies.get("s3mp_session")
     if session_token:

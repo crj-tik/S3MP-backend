@@ -6,10 +6,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKeyConstraint,
     Index,
-    Integer,
     String,
     UniqueConstraint,
     func,
@@ -62,7 +62,7 @@ class FileIngestionRecordModel(Base):
     )
     provider_etag: Mapped[str | None] = mapped_column(String(512))
     provider_version_id: Mapped[str | None] = mapped_column(String(512))
-    actual_size: Mapped[int | None] = mapped_column(Integer())
+    actual_size: Mapped[int | None] = mapped_column(BigInteger())
     actual_content_type: Mapped[str | None] = mapped_column(String(255))
     checksum: Mapped[str | None] = mapped_column(String(512))
     authorization_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
