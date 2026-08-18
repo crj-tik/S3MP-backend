@@ -44,3 +44,14 @@
 #### Scenario: Unknown authorization enum is submitted
 - **WHEN** 请求提交目录中不存在的 scope 或 effect
 - **THEN** 系统 SHALL 返回稳定的 validation_failed 错误，不得把未知字符串当作默认授权范围
+
+### Requirement: Identity and authorization enum filters
+身份和授权列表接口 SHALL 使用服务端公开的主体类型、用户状态、成员状态、授权来源和授权判定枚举；`GET /users` SHALL 支持 `status` 与 `principal_type`，`GET /members` SHALL 支持 `status`。筛选条件 SHALL 贯穿接口、应用服务、领域校验和持久化查询，并 SHALL 保留租户边界。
+
+#### Scenario: User list is filtered by enum
+- **WHEN** 调用方使用目录中的 `status` 或 `principal_type` 查询用户
+- **THEN** 系统 SHALL 只返回匹配且属于当前租户的用户，并在 OpenAPI 中声明相同枚举值
+
+#### Scenario: Invalid identity filter is submitted
+- **WHEN** 调用方提交目录中不存在的身份或授权枚举值
+- **THEN** 系统 SHALL 返回 `422 validation_failed`，不得把未知值当作无筛选条件

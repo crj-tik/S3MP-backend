@@ -1,12 +1,13 @@
 """Files, uploads, presigned downloads, and multipart HTTP endpoints."""
 
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Body, Header, Path, Request
+from fastapi import APIRouter, Body, Header, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from s3mp.common.application.idempotency import IdempotencyGuard
 from s3mp.common.errors import ApiError
+from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.identity.domain.context import PrincipalContext
 
 router = APIRouter(prefix="/api/v1", tags=["Files", "Uploads", "Multipart"])
@@ -172,10 +173,13 @@ async def list_files(
     request: Request,
     space_id: str = Path(min_length=1),
     prefix: str | None = None,
+    status: Annotated[FileObjectStatus, Query()] = FileObjectStatus.AVAILABLE,
 ) -> list[FileObjectRuntime]:
     return [
         FileObjectRuntime.model_validate(item)
-        for item in await _file_svc(request).list_files(_context(request), space_id, prefix or "")
+        for item in await _file_svc(request).list_files(
+            _context(request), space_id, prefix or "", status
+        )
     ]
 
 

@@ -54,3 +54,14 @@
 #### Scenario: Runtime catalog and contract are compared
 - **WHEN** 服务端生成 OpenAPI 契约或返回元数据目录
 - **THEN** 两者 SHALL 使用同一服务端枚举定义，状态 value 不得出现集合分叉
+
+### Requirement: Storage and lifecycle enum filters
+存储和生命周期列表接口 SHALL 使用目录中的租户、应用、API Key、存储空间和存储连接状态枚举；应用、API Key、storage space 与 storage connection 列表 SHALL 支持 `status` 筛选。筛选 SHALL 在服务层验证父级租户/应用状态，并在持久层执行真实条件。
+
+#### Scenario: Storage list is filtered by status
+- **WHEN** 管理员按目录中的 `status` 查询应用或存储资源
+- **THEN** 系统 SHALL 返回匹配状态且未软删除、父级状态有效的资源，不得返回已删除父级下的孤儿记录
+
+#### Scenario: Caller submits a status not in the catalog
+- **WHEN** 请求携带未知 storage 或 lifecycle status
+- **THEN** 系统 SHALL 返回 `422 validation_failed`，不得执行无条件列表查询

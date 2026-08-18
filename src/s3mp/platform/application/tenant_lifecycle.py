@@ -5,11 +5,17 @@ from uuid import UUID
 
 from s3mp.common.errors import ApiError
 from s3mp.platform.domain.context import PlatformContext
+from s3mp.platform.infrastructure.models import TenantLifecycleStatus
 
 
 class PlatformTenantStore(Protocol):
     async def list_platform_tenants(
-        self, *, limit: int, cursor: UUID | None, include_deleted: bool = False
+        self,
+        *,
+        limit: int,
+        cursor: UUID | None,
+        status: TenantLifecycleStatus | None = None,
+        include_deleted: bool = False,
     ) -> tuple[list[dict[str, object]], UUID | None]: ...
 
     async def get_platform_tenant(self, tenant_id: UUID) -> dict[str, object] | None: ...
@@ -41,12 +47,13 @@ class PlatformTenantLifecycleService:
         *,
         limit: int,
         cursor: UUID | None,
+        status: TenantLifecycleStatus | None = None,
         include_deleted: bool = False,
     ) -> tuple[list[dict[str, object]], UUID | None]:
         if include_deleted and "platform.audit.read" not in actor.permissions:
             raise ApiError("permission_denied", "Historical tenant access is not permitted", 403)
         return await self._store.list_platform_tenants(
-            limit=limit, cursor=cursor, include_deleted=include_deleted
+            limit=limit, cursor=cursor, status=status, include_deleted=include_deleted
         )
 
     async def get_tenant(self, _actor: PlatformContext, tenant_id: UUID) -> dict[str, object]:

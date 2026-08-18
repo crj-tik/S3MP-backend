@@ -103,7 +103,12 @@ class SqlAlchemyIdentityAdminStore:
             return _principal_dict(row) if row else None
 
     async def list_users(
-        self, tenant_id: UUID, limit: int = 50, cursor: UUID | None = None
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: UUID | None = None,
+        status: UserStatus = UserStatus.ACTIVE,
+        principal_type: PrincipalType = PrincipalType.USER,
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         async with self._sf() as session:
             statement = (
@@ -118,8 +123,8 @@ class SqlAlchemyIdentityAdminStore:
                 .where(
                     MembershipModel.tenant_id == tenant_id,
                     MembershipModel.status == MembershipStatus.ACTIVE,
-                    UserModel.status == UserStatus.ACTIVE,
-                    PrincipalModel.enabled.is_(True),
+                    UserModel.status == status,
+                    PrincipalModel.type == principal_type,
                     TenantModel.status == "active",
                 )
                 .order_by(UserModel.id)
@@ -195,7 +200,11 @@ class SqlAlchemyIdentityAdminStore:
             return _membership_dict(membership, user)
 
     async def list_members(
-        self, tenant_id: UUID, limit: int = 50, cursor: UUID | None = None
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: UUID | None = None,
+        status: MembershipStatus = MembershipStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         async with self._sf() as session:
             statement = (
@@ -209,7 +218,7 @@ class SqlAlchemyIdentityAdminStore:
                 .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
                 .where(
                     MembershipModel.tenant_id == tenant_id,
-                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    MembershipModel.status == status,
                     UserModel.status == UserStatus.ACTIVE,
                     PrincipalModel.enabled.is_(True),
                     TenantModel.status == "active",

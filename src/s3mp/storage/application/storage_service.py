@@ -9,11 +9,16 @@ from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.connection import S3ConnectionConfig
 from s3mp.storage.domain.policy import StorageCapabilities
+from s3mp.storage.infrastructure.models import StorageConnectionStatus, StorageSpaceStatus
 
 
 class StorageStore(Protocol):
     async def list_connections(
-        self, tenant_id: UUID, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        limit: int,
+        cursor: str | None,
+        status: StorageConnectionStatus = StorageConnectionStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_connection(self, tenant_id: UUID, conn_id: UUID) -> dict[str, Any] | None: ...
     async def create_connection(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
@@ -21,7 +26,11 @@ class StorageStore(Protocol):
         self, tenant_id: UUID, profile: dict[str, Any]
     ) -> dict[str, Any]: ...
     async def list_spaces(
-        self, tenant_id: UUID, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        limit: int,
+        cursor: str | None,
+        status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any] | None: ...
     async def create_space(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
@@ -38,11 +47,15 @@ class StorageService:
     shared_profile: dict[str, Any] | None = None
 
     async def list_connections(
-        self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
+        self,
+        context: PrincipalContext,
+        limit: int = 50,
+        cursor: str | None = None,
+        status: StorageConnectionStatus = StorageConnectionStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "storage_connections.read")
         connections, next_cursor = await self.store.list_connections(
-            context.tenant_id, min(limit, 200), cursor
+            context.tenant_id, min(limit, 200), cursor, status
         )
         return [_public_connection(connection) for connection in connections], next_cursor
 
@@ -94,10 +107,14 @@ class StorageService:
         }
 
     async def list_spaces(
-        self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
+        self,
+        context: PrincipalContext,
+        limit: int = 50,
+        cursor: str | None = None,
+        status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "storage_spaces.read")
-        return await self.store.list_spaces(context.tenant_id, min(limit, 200), cursor)
+        return await self.store.list_spaces(context.tenant_id, min(limit, 200), cursor, status)
 
     async def get_space(self, context: PrincipalContext, space_id: str) -> dict[str, Any]:
         await self._require(context, "storage_spaces.read")

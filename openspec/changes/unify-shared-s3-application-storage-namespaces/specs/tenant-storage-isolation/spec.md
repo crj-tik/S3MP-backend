@@ -36,3 +36,14 @@
 #### Scenario: Existing mapping conflicts with another tenant
 - **WHEN** 迁移审计识别出 provider bucket/key namespace 被多个 tenant 使用
 - **THEN** 系统 SHALL 报告冲突并不得静默保留跨租户 provider access
+
+### Requirement: Cross-layer enum and lifecycle filtering
+所有带枚举筛选的存储、文件和迁移查询 SHALL 在接口层、应用服务层、领域层和持久层使用同一枚举定义；默认 SHALL 过滤软删除、隔离和父级无效记录。任何仅在 API 层声明但未在仓储层执行的筛选 SHALL 视为契约不合格。
+
+#### Scenario: Enum filter is applied at every layer
+- **WHEN** 调用方提交一个合法状态筛选并使用游标分页
+- **THEN** 系统 SHALL 在服务和仓储查询中保留该筛选，结果 SHALL 不包含其他状态或其他租户/应用的记录
+
+#### Scenario: Filter implementation is missing
+- **WHEN** 某列表端点声明了枚举筛选但对应仓储未实现条件
+- **THEN** 契约一致性测试 SHALL 失败，发布流程不得通过

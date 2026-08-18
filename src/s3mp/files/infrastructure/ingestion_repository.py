@@ -636,9 +636,11 @@ async def _reserve_quota(
             and quota.used_bytes + quota.reserved_bytes + requested_bytes > quota.limit_bytes
         ):
             raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
+    selected_quota = scoped_quota or tenant_quota
+    assert selected_quota is not None
     reservation = QuotaReservationModel(
         tenant_id=tenant_id,
-        quota_id=(scoped_quota or tenant_quota).id,
+        quota_id=selected_quota.id,
         application_quota_id=(
             scoped_quota.id if space.application_id is not None and scoped_quota else None
         ),

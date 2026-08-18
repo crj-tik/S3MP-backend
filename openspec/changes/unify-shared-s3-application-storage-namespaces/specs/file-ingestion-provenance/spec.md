@@ -37,3 +37,14 @@
 #### Scenario: Provider object fails verification
 - **WHEN** provider 元数据缺失或与授权命令不一致
 - **THEN** 系统 SHALL 不得使文件可用， SHALL 标记 failed 或 quarantined，并追加非敏感失败原因事件
+
+### Requirement: Ingestion enum filters
+入库记录和入库事件查询 SHALL 使用目录中的 ingestion status 与 event type 枚举；入库记录列表 SHALL 支持 `status`，事件列表 SHALL 支持 `event_type`。筛选条件 SHALL 传递到服务和仓储层，并 SHALL 限定当前租户、应用和授权命名空间。
+
+#### Scenario: Ingestion records are filtered
+- **WHEN** 管理员按目录中的入库状态或事件类型查询
+- **THEN** 系统 SHALL 返回真实匹配的记录，并保持分页游标和租户/应用隔离
+
+#### Scenario: Unknown ingestion enum is submitted
+- **WHEN** 请求提交未知入库状态或事件类型
+- **THEN** 系统 SHALL 返回 `422 validation_failed`，不得返回全量结果

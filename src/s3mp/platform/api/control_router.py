@@ -15,6 +15,7 @@ from s3mp.platform.api.dependencies import platform_permission
 from s3mp.platform.api.tenant_router import PlatformTenantResponse
 from s3mp.platform.application.control_plane import PlatformControlPlaneService
 from s3mp.platform.domain.context import PlatformContext
+from s3mp.platform.domain.support_access import SupportAccessStatus
 
 router = APIRouter(prefix="/api/v1/platform", tags=["Platform control plane"])
 control_service = application_service("platform_control_plane")
@@ -275,7 +276,7 @@ async def list_support_access(
     service: Annotated[PlatformControlPlaneService, control_service],
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
-    status: Literal["pending", "approved", "revoked", "expired"] | None = Query(default=None),
+    status: Annotated[SupportAccessStatus | None, Query()] = None,
 ) -> SupportAccessPage:
     scope = _query_scope("platform_support_access", status=status)
     items, position = await service.list_support(

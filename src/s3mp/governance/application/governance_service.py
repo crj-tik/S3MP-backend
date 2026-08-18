@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
+from s3mp.governance.domain.quota import QuotaScope
 from s3mp.identity.domain.context import PrincipalContext
 
 
@@ -16,6 +17,7 @@ class QuotaStore(Protocol):
         limit: int,
         cursor: str | None,
         application_id: str | None = None,
+        scope: QuotaScope | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_quota(self, tenant_id: UUID, quota_id: UUID) -> dict[str, Any] | None: ...
     async def update_quota(
@@ -46,6 +48,7 @@ class QuotaService:
         limit: int = 50,
         cursor: str | None = None,
         application_id: str | None = None,
+        scope: QuotaScope | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "quotas.read")
         return await self.store.list_quotas(
@@ -54,6 +57,7 @@ class QuotaService:
             min(limit, 200),
             cursor,
             application_id=application_id,
+            scope=scope,
         )
 
     async def get_quota(self, context: PrincipalContext, quota_id: str) -> dict[str, Any]:

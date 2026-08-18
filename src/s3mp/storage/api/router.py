@@ -11,6 +11,7 @@ from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.storage.infrastructure.models import StorageConnectionStatus, StorageSpaceStatus
 
 router = APIRouter(prefix="/api/v1", tags=["Storage"])
 
@@ -154,12 +155,14 @@ async def list_storage_connections(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_storage_connections")],
     cursor: str | None = Query(default=None),
+    status: Annotated[StorageConnectionStatus, Query()] = StorageConnectionStatus.ACTIVE,
 ) -> StorageConnectionPage:
+    query = f"storage_connections:{status.value}"
     items, position = await _svc(request).list_connections(
-        context, cursor=_cursor(cursor, context, query="storage_connections")
+        context, cursor=_cursor(cursor, context, query=query), status=status
     )
     return StorageConnectionPage.model_validate(
-        _page(items, position, context, query="storage_connections")
+        _page(items, position, context, query=query)
     )
 
 
@@ -205,11 +208,13 @@ async def list_storage_spaces(
     request: Request,
     context: Annotated[PrincipalContext, management_permission("list_storage_spaces")],
     cursor: str | None = Query(default=None),
+    status: Annotated[StorageSpaceStatus, Query()] = StorageSpaceStatus.ACTIVE,
 ) -> StorageSpacePage:
+    query = f"storage_spaces:{status.value}"
     items, position = await _svc(request).list_spaces(
-        context, cursor=_cursor(cursor, context, query="storage_spaces")
+        context, cursor=_cursor(cursor, context, query=query), status=status
     )
-    return StorageSpacePage.model_validate(_page(items, position, context, query="storage_spaces"))
+    return StorageSpacePage.model_validate(_page(items, position, context, query=query))
 
 
 @router.post(

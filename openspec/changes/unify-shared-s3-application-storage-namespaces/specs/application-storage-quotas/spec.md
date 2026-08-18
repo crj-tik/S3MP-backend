@@ -35,3 +35,14 @@
 #### Scenario: Reconciliation finds an orphan object
 - **WHEN** 共享 Bucket 中存在无法映射到 active tenant/application namespace 的对象
 - **THEN** 系统 SHALL 将其报告为隔离对象，不得计入任何应用可用量或通过文件接口返回
+
+### Requirement: Quota enum filters
+配额列表 SHALL 使用目录中的 quota scope 和 reservation status 枚举，并支持按 `scope`、`status` 查询。服务层 SHALL 校验 scope 与租户/应用层级的关联，仓储层 SHALL 执行真实筛选并排除已删除租户、应用及孤儿 reservation。
+
+#### Scenario: Quota list is filtered by scope and status
+- **WHEN** 管理员按目录中的配额范围和预留状态查询
+- **THEN** 系统 SHALL 返回同时匹配的租户或应用配额，并提供稳定分页结果
+
+#### Scenario: Quota filter crosses lifecycle boundary
+- **WHEN** 查询命中已删除应用或无归属 reservation
+- **THEN** 系统 SHALL 排除该记录，不得将其计入 available 或返回为有效配额

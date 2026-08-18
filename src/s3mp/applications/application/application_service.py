@@ -11,6 +11,7 @@ from s3mp.applications.domain.credentials import (
     orphaned_application,
     parse_credential,
 )
+from s3mp.applications.infrastructure.models import ApiKeyStatus, ApplicationStatus
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
@@ -38,7 +39,11 @@ async def _application_view(store: Any, tenant_id: UUID, record: dict[str, Any])
 
 class ApplicationStore(Protocol):
     async def list_apps(
-        self, tenant_id: UUID, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        limit: int,
+        cursor: str | None,
+        status: ApplicationStatus = ApplicationStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
 
     async def get_app(self, tenant_id: UUID, app_id: UUID) -> dict[str, Any] | None: ...
@@ -80,7 +85,12 @@ class ApiKeyStore(Protocol):
     async def list_active_owners(self, tenant_id: UUID, app_id: UUID) -> list[UUID]: ...
 
     async def list_keys(
-        self, tenant_id: UUID, app_id: UUID, limit: int, cursor: str | None
+        self,
+        tenant_id: UUID,
+        app_id: UUID,
+        limit: int,
+        cursor: str | None,
+        status: ApiKeyStatus = ApiKeyStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
 
     async def get_key(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any] | None: ...
@@ -116,10 +126,16 @@ class ApplicationService:
     authorizer: PermissionAuthorizer | None = None
 
     async def list_apps(
-        self, context: PrincipalContext, limit: int = 50, cursor: str | None = None
+        self,
+        context: PrincipalContext,
+        limit: int = 50,
+        cursor: str | None = None,
+        status: ApplicationStatus = ApplicationStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "applications.read")
-        items, next_cursor = await self.store.list_apps(context.tenant_id, min(limit, 200), cursor)
+        items, next_cursor = await self.store.list_apps(
+            context.tenant_id, min(limit, 200), cursor, status
+        )
         views = [await _application_view(self.store, context.tenant_id, item) for item in items]
         return views, next_cursor
 
@@ -230,11 +246,16 @@ class ApiKeyService:
     authorizer: PermissionAuthorizer | None = None
 
     async def list_keys(
-        self, context: PrincipalContext, app_id: UUID, limit: int = 50, cursor: str | None = None
+        self,
+        context: PrincipalContext,
+        app_id: UUID,
+        limit: int = 50,
+        cursor: str | None = None,
+        status: ApiKeyStatus = ApiKeyStatus.ACTIVE,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require_owner_or_permission(context, app_id, "api_keys.read")
         items, next_cursor = await self.store.list_keys(
-            context.tenant_id, app_id, min(limit, 200), cursor
+            context.tenant_id, app_id, min(limit, 200), cursor, status
         )
         return [_public_api_key(item) for item in items], next_cursor
 

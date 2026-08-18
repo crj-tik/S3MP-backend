@@ -3,6 +3,8 @@
 from typing import Any, Protocol
 from uuid import UUID
 
+from s3mp.identity.infrastructure.models import MembershipStatus, PrincipalType, UserStatus
+
 Page = tuple[list[dict[str, Any]], UUID | None]
 
 
@@ -14,11 +16,20 @@ class IdentityManagementStore(Protocol):
         self, principal_id: UUID
     ) -> list[dict[str, Any]]: ...
     async def list_users(
-        self, tenant_id: UUID, limit: int = 50, cursor: UUID | None = None
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: UUID | None = None,
+        status: UserStatus = UserStatus.ACTIVE,
+        principal_type: PrincipalType = PrincipalType.USER,
     ) -> Page: ...
     async def get_user(self, tenant_id: UUID, user_id: UUID) -> dict[str, Any] | None: ...
     async def list_members(
-        self, tenant_id: UUID, limit: int = 50, cursor: UUID | None = None
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: UUID | None = None,
+        status: MembershipStatus = MembershipStatus.ACTIVE,
     ) -> Page: ...
     async def create_member(
         self, tenant_id: UUID, email: str, display_name: str | None
