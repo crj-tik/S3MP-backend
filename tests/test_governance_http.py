@@ -50,6 +50,29 @@ class FakeAuditService:
         return {"id": str(audit_event_id), "action": "file.upload"}
 
 
+class FakeReconciliationService:
+    async def reconcile(self, _context: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "id": str(uuid4()),
+            "mode": "audit",
+            "status": "completed",
+            "counts": {"matched": 1},
+            "matched_files": 1,
+            "provider_objects": 1,
+            "summary": {"counts": {"matched": 1}},
+            "differences": [],
+        }
+
+    async def get_run(self, _context: Any, run_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "id": run_id,
+            "mode": "audit",
+            "status": "failed",
+            "summary": {"error": "provider_or_reconciliation_failure"},
+            "differences": [],
+        }
+
+
 class DenyingAuthorizationManagement:
     async def require_permission(self, _context: PrincipalContext, _permission: str) -> None:
         from s3mp.common.errors import ApiError
@@ -125,3 +148,22 @@ async def test_human_without_permission_cannot_call_audit_management_before_serv
         response = await client.get("/api/v1/audit_events")
 
     assert response.status_code == 403
+
+
+async def test_reconciliation_start_and_get_are_typed_and_redacted() -> None:
+    run_id = str(uuid4())
+    app = make_app(
+        {"quota_reconciliation_service": FakeReconciliationService()},
+        context=_ctx(),
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        started = await client.post("/api/v1/quotas/reconciliation", json={"mode": "audit"})
+        fetched = await client.get(f"/api/v1/quotas/reconciliation/{run_id}")
+
+    assert started.status_code == 200
+    assert started.json()["status"] == "completed"
+    assert fetched.status_code == 200
+    payload = fetched.json()
+    assert payload["status"] == "failed"
+    assert "physical_key" not in str(payload)
+    assert "access_key" not in str(payload)

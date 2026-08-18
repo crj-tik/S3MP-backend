@@ -7,7 +7,9 @@ clear and rebuild). Uses ``asyncio.run()`` for async table inspection since
 """
 
 import asyncio
+import os
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
@@ -44,6 +46,9 @@ EXPECTED_TABLES = {
     "provider_migration_manifest",
     "quota",
     "quota_reservation",
+    "quota_adjustment",
+    "quota_reconciliation_difference",
+    "quota_reconciliation_run",
     "review_item",
     "role",
     "role_binding",
@@ -96,7 +101,7 @@ def test_migration_history_has_single_head() -> None:
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(migration_config())
-    assert scripts.get_heads() == ["0029_backfill_space_bindings"]
+    assert scripts.get_heads() == ["0034_reconciliation_idempotency"]
 
 
 def test_lifecycle_migration_exposes_soft_delete_metadata_and_partial_indexes() -> None:
@@ -132,6 +137,11 @@ def test_lifecycle_migration_exposes_soft_delete_metadata_and_partial_indexes() 
 
 
 def test_upgrade_downgrade_upgrade_cycle() -> None:
+    if os.environ.get("S3MP_ALLOW_DESTRUCTIVE_MIGRATION_TESTS") != "true":
+        pytest.skip(
+            "requires an isolated disposable database; set "
+            "S3MP_ALLOW_DESTRUCTIVE_MIGRATION_TESTS=true explicitly"
+        )
     config = migration_config()
 
     command.upgrade(config, "head")
@@ -144,4 +154,4 @@ def test_upgrade_downgrade_upgrade_cycle() -> None:
     assert _get_version() is None
 
     command.upgrade(config, "head")
-    assert _get_version() == "0029_backfill_space_bindings"
+    assert _get_version() == "0034_reconciliation_idempotency"

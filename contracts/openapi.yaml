@@ -428,7 +428,8 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie 和可读的账户 CSRF Cookie，并返回当前账户真实的 platform_permissions；但不会自动选择租户。
+      description: 校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie 和可读的账户 CSRF Cookie，同时清除浏览器中已有的租户会话 Cookie；并返回当前账户真实的
+        platform_permissions；但不会自动选择租户。
   /api/v1/auth/me:
     get:
       tags:
@@ -454,7 +455,7 @@ paths:
     post:
       tags:
       - Account authentication
-      summary: 撤销当前账户会话并清除账户 Cookie
+      summary: 撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie
       operationId: account_logout
       parameters:
       - name: X-S3MP-CSRF
@@ -476,7 +477,8 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 撤销当前账户会话并清除账户 Cookie；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。
+      description: 撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF
+        请求头。
   /api/v1/auth/tenant-sessions:
     post:
       tags:
@@ -789,7 +791,7 @@ paths:
         schema:
           anyOf:
           - type: string
-            minLength: 1
+            minLength: 8
             maxLength: 320
           - type: 'null'
           title: Query
@@ -1179,7 +1181,7 @@ paths:
     get:
       tags:
       - Platform control plane
-      summary: 分页检索平台控制面审计事件，可按动作筛选。
+      summary: 分页检索平台控制面审计事件，可按动作、资源类型和资源标识筛选。
       operationId: list_platform_audit_events
       parameters:
       - name: cursor
@@ -1211,6 +1213,26 @@ paths:
           - type: 'null'
           title: Action
         description: “action”字段；具体取值和约束见当前资源说明。
+      - name: resource_type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 80
+          - type: 'null'
+          title: Resource Type
+        description: “resource_type”字段；具体取值和约束见当前资源说明。
+      - name: resource_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 120
+          - type: 'null'
+          title: Resource Id
+        description: “resource_id”字段；具体取值和约束见当前资源说明。
       responses:
         '200':
           description: Successful Response
@@ -1225,7 +1247,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 分页检索平台控制面审计事件，可按动作筛选。
+      description: 分页检索平台控制面审计事件，可按动作、资源类型和资源标识筛选。
       x-permission: platform.audit.read
   /api/v1/platform/audit-events/{event_id}:
     get:
@@ -1670,7 +1692,7 @@ paths:
     get:
       tags:
       - Authorization
-      summary: 列出当前租户的角色绑定，可按主体筛选。
+      summary: 列出当前租户的角色绑定，可按主体和逻辑存储空间筛选。
       operationId: list_role_bindings
       parameters:
       - name: principal_id
@@ -1683,6 +1705,17 @@ paths:
           - type: 'null'
           title: Principal Id
         description: 租户主体的服务端唯一标识。
+      - name: storage_space_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          description: 按逻辑存储空间标识筛选绑定。
+          title: Storage Space Id
+        description: 逻辑存储空间的服务端唯一标识。
       - name: cursor
         in: query
         required: false
@@ -1706,7 +1739,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 列出当前租户的角色绑定，可按主体筛选。
+      description: 列出当前租户的角色绑定，可按主体和逻辑存储空间筛选。
       x-permission: role_bindings.read
     post:
       tags:
@@ -2456,7 +2489,7 @@ paths:
     get:
       tags:
       - Storage
-      summary: 列出当前租户的逻辑存储空间。
+      summary: 列出当前租户的逻辑存储空间，可按应用筛选。
       operationId: list_storage_spaces
       parameters:
       - name: cursor
@@ -2475,6 +2508,17 @@ paths:
           $ref: '#/components/schemas/StorageSpaceStatus'
           default: active
         description: 资源当前生命周期状态。
+      - name: application_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          description: 按应用的稳定标识筛选逻辑存储空间。
+          title: Application Id
+        description: 应用的服务端唯一标识。
       responses:
         '200':
           description: Successful Response
@@ -2489,7 +2533,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 列出当前租户的逻辑存储空间。
+      description: 列出当前租户的逻辑存储空间，可按应用筛选。
       x-permission: storage_spaces.read
     post:
       tags:
@@ -2780,14 +2824,47 @@ paths:
         '409': *id001
         '500': *id001
       description: 查询文件操作的状态、结果和可恢复错误。
-  /api/v1/storage_spaces/{space_id}/uploads:
+  /api/v1/ingestions/{ingestion_id}/provenance:
+    get:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: get_ingestion_provenance
+      parameters:
+      - name: ingestion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Ingestion Id
+        description: “ingestion_id”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestionProvenance'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: files.read
+  /api/v1/storage_spaces/{space_id}/direct_uploads:
     post:
       tags:
       - Files
       - Uploads
       - Multipart
-      summary: 创建受配额保护的上传会话。
-      operationId: create_upload
+      summary: 创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。
+      operationId: create_direct_upload
       parameters:
       - name: space_id
         in: path
@@ -2811,14 +2888,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UploadCreate'
+              $ref: '#/components/schemas/DirectUploadCreate'
       responses:
         '201':
           description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UploadSessionRuntime'
+                $ref: '#/components/schemas/DirectUploadSessionRuntime'
         '422': *id001
         '400': *id001
         '401': *id001
@@ -2826,16 +2903,16 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 创建受配额保护的上传会话。
+      description: 创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。
       x-permission: files.write
-  /api/v1/uploads/{upload_id}:
+  /api/v1/direct_uploads/{upload_id}:
     get:
       tags:
       - Files
       - Uploads
       - Multipart
-      summary: 查询上传会话的状态和已验证对象信息。
-      operationId: get_upload
+      summary: 查询直传会话状态并重新签发仍有效的短期 PUT URL。
+      operationId: get_direct_upload
       parameters:
       - name: upload_id
         in: path
@@ -2851,7 +2928,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UploadSessionRuntime'
+                $ref: '#/components/schemas/DirectUploadSessionRuntime'
         '422': *id001
         '400': *id001
         '401': *id001
@@ -2859,66 +2936,16 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 查询上传会话的状态和已验证对象信息。
-  /api/v1/uploads/{upload_id}/content:
-    put:
-      tags:
-      - Files
-      - Uploads
-      - Multipart
-      summary: 通过服务端代理向指定上传会话写入内容。
-      operationId: proxy_upload_content
-      parameters:
-      - name: upload_id
-        in: path
-        required: true
-        schema:
-          type: string
-          minLength: 1
-          title: Upload Id
-        description: 上传会话的服务端唯一标识。
-      - name: Content-Length
-        in: header
-        required: true
-        schema:
-          type: integer
-          title: Content-Length
-        description: “Content-Length”字段；具体取值和约束见当前资源说明。
-      - name: Content-Type
-        in: header
-        required: true
-        schema:
-          type: string
-          title: Content-Type
-        description: “Content-Type”字段；具体取值和约束见当前资源说明。
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              contentMediaType: application/octet-stream
-              title: Body
-      responses:
-        '204':
-          description: Successful Response
-        '422': *id001
-        '400': *id001
-        '401': *id001
-        '403': *id001
-        '404': *id001
-        '409': *id001
-        '500': *id001
-      description: 通过服务端代理向指定上传会话写入内容。
+      description: 查询直传会话状态并重新签发仍有效的短期 PUT URL。
       x-permission: files.write
-  /api/v1/uploads/{upload_id}/completion:
+  /api/v1/direct_uploads/{upload_id}/completion:
     post:
       tags:
       - Files
       - Uploads
       - Multipart
-      summary: 验证已上传对象的元数据并将上传会话提交为可用文件。
-      operationId: complete_upload
+      summary: 校验直传对象的元数据并将直传会话提交为可用文件。
+      operationId: complete_direct_upload
       parameters:
       - name: upload_id
         in: path
@@ -2957,7 +2984,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 验证已上传对象的元数据并将上传会话提交为可用文件。
+      description: 校验直传对象的元数据并将直传会话提交为可用文件。
       x-permission: files.write
   /api/v1/storage_spaces/{space_id}/presigned_downloads:
     post:
@@ -3045,7 +3072,7 @@ paths:
         '409': *id001
         '500': *id001
       description: 创建受配额和授权保护的分段上传会话。
-      x-permission: multipart.manage
+      x-permission: files.write
   /api/v1/multipart_uploads/{multipart_id}:
     get:
       tags:
@@ -3078,6 +3105,7 @@ paths:
         '409': *id001
         '500': *id001
       description: 查询分段上传会话状态。
+      x-permission: files.write
     delete:
       tags:
       - Files
@@ -3114,7 +3142,7 @@ paths:
         '409': *id001
         '500': *id001
       description: 中止分段上传并释放相关保留资源。
-      x-permission: multipart.manage
+      x-permission: files.write
   /api/v1/multipart_uploads/{multipart_id}/parts:
     get:
       tags:
@@ -3150,61 +3178,15 @@ paths:
         '409': *id001
         '500': *id001
       description: 列出已确认的分段上传分片。
-    post:
-      tags:
-      - Files
-      - Uploads
-      - Multipart
-      summary: 为分段上传创建一个待上传分片。
-      operationId: create_multipart_part
-      parameters:
-      - name: multipart_id
-        in: path
-        required: true
-        schema:
-          type: string
-          minLength: 1
-          title: Multipart Id
-        description: 分段上传会话的服务端唯一标识。
-      - name: Idempotency-Key
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Idempotency-Key
-        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MultipartPartCreate'
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                title: Response Create Multipart Part
-        '422': *id001
-        '400': *id001
-        '401': *id001
-        '403': *id001
-        '404': *id001
-        '409': *id001
-        '500': *id001
-      description: 为分段上传创建一个待上传分片。
-      x-permission: multipart.manage
+      x-permission: files.write
   /api/v1/multipart_uploads/{multipart_id}/parts/{part_number}:
     put:
       tags:
       - Files
       - Uploads
       - Multipart
-      summary: 确认已上传分片的 ETag 和实际内容长度。
-      operationId: confirm_multipart_part
+      summary: 接收一个分片二进制并由服务端写入对象存储，同时保存 provider 返回的 ETag。
+      operationId: upload_multipart_part
       parameters:
       - name: multipart_id
         in: path
@@ -3223,6 +3205,13 @@ paths:
           minimum: 1
           title: Part Number
         description: 分段上传中从 1 开始的分片序号。
+      - name: Content-Length
+        in: header
+        required: true
+        schema:
+          type: integer
+          title: Content-Length
+        description: “Content-Length”字段；具体取值和约束见当前资源说明。
       - name: Idempotency-Key
         in: header
         required: false
@@ -3235,16 +3224,18 @@ paths:
       requestBody:
         required: true
         content:
-          application/json:
+          application/octet-stream:
             schema:
-              $ref: '#/components/schemas/MultipartPartConfirm'
+              type: string
+              contentMediaType: application/octet-stream
+              title: Body
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                title: Response Confirm Multipart Part
+                $ref: '#/components/schemas/MultipartPartRuntime'
         '422': *id001
         '400': *id001
         '401': *id001
@@ -3252,8 +3243,8 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 确认已上传分片的 ETag 和实际内容长度。
-      x-permission: multipart.manage
+      description: 接收一个分片二进制并由服务端写入对象存储，同时保存 provider 返回的 ETag。
+      x-permission: files.write
   /api/v1/multipart_uploads/{multipart_id}/completion:
     post:
       tags:
@@ -3292,7 +3283,7 @@ paths:
           content:
             application/json:
               schema:
-                title: Response Complete Multipart Upload
+                $ref: '#/components/schemas/MultipartCompleteRuntime'
         '422': *id001
         '400': *id001
         '401': *id001
@@ -3301,7 +3292,7 @@ paths:
         '409': *id001
         '500': *id001
       description: 按已确认分片完成分段上传并验证最终对象。
-      x-permission: multipart.manage
+      x-permission: files.write
   /api/v1/quotas:
     get:
       tags:
@@ -3431,6 +3422,76 @@ paths:
         '500': *id001
       description: 更新配额上限；需要当前 ETag 以防并发覆盖。
       x-permission: quotas.manage
+  /api/v1/quotas/reconciliation:
+    post:
+      tags:
+      - Quotas
+      - Audit
+      summary: 执行该公开 API 操作
+      operationId: start_quota_reconciliation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuotaReconciliationRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaReconciliationResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: quotas.read
+  /api/v1/quotas/reconciliation/{run_id}:
+    get:
+      tags:
+      - Quotas
+      - Audit
+      summary: 执行该公开 API 操作
+      operationId: get_quota_reconciliation
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Run Id
+        description: “run_id”字段；具体取值和约束见当前资源说明。
+      - name: difference_kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/ReconciliationDifference'
+          - type: 'null'
+          title: Difference Kind
+        description: “difference_kind”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaReconciliationResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: quotas.read
   /api/v1/audit_events:
     get:
       tags:
@@ -4382,6 +4443,113 @@ components:
       - effect
       - reason_code
       title: DecisionSource
+    DirectUploadCreate:
+      properties:
+        object_key:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Object Key
+          description: 逻辑存储空间内的规范相对对象路径。
+        content_length:
+          type: integer
+          minimum: 0.0
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        content_type:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Content Type
+          description: 对象的媒体类型。
+        checksum:
+          anyOf:
+          - type: string
+            maxLength: 512
+          - type: 'null'
+          title: Checksum
+          description: 内容校验和，用于验证上传数据的完整性。
+      additionalProperties: false
+      type: object
+      required:
+      - object_key
+      - content_length
+      - content_type
+      title: DirectUploadCreate
+    DirectUploadSessionRuntime:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        storage_space_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Storage Space Id
+          description: 逻辑存储空间的服务端唯一标识。
+        object_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Key
+          description: 逻辑存储空间内的规范相对对象路径。
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        content_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Content Type
+          description: 对象的媒体类型。
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+          description: 资源当前生命周期状态。
+        expires_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+        ingestion_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ingestion Id
+          description: “ingestion_id”字段；具体取值和约束见当前资源说明。
+        mode:
+          type: string
+          title: Mode
+          default: direct
+          description: 上传会话模式；当前为 direct 或 multipart。
+        method:
+          type: string
+          title: Method
+          default: PUT
+          description: 应用向短期上传 URL 发起请求时使用的 HTTP 方法。
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+          description: 由平台签发的短期上传 URL；仅用于当前上传会话，不应持久化。
+        headers:
+          additionalProperties:
+            type: string
+          type: object
+          title: Headers
+          description: 调用短期上传 URL 时必须携带的安全请求头集合。
+      type: object
+      required:
+      - id
+      title: DirectUploadSessionRuntime
     EffectivePermission:
       properties:
         permission:
@@ -4505,6 +4673,7 @@ components:
       enum:
       - available
       - deleting
+      - deleted
       - delete_failed
       - quarantined
       title: FileObjectStatus
@@ -4744,6 +4913,120 @@ components:
       - id
       title: IngestionCommitResult
       description: 上传提交结果；`file_object` 存在时表示文件元数据已写入系统。
+    IngestionProvenance:
+      properties:
+        ingestion:
+          additionalProperties: true
+          type: object
+          title: Ingestion
+          description: “ingestion”字段；具体取值和约束见当前资源说明。
+        events:
+          items:
+            $ref: '#/components/schemas/IngestionProvenanceEvent'
+          type: array
+          title: Events
+          description: “events”字段；具体取值和约束见当前资源说明。
+        file_object:
+          anyOf:
+          - $ref: '#/components/schemas/IngestionProvenanceFile'
+          - type: 'null'
+          description: “file_object”字段；具体取值和约束见当前资源说明。
+        quota_adjustments:
+          items:
+            $ref: '#/components/schemas/IngestionProvenanceAdjustment'
+          type: array
+          title: Quota Adjustments
+          description: “quota_adjustments”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - ingestion
+      - events
+      - quota_adjustments
+      title: IngestionProvenance
+    IngestionProvenanceAdjustment:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        quota_id:
+          type: string
+          title: Quota Id
+          description: 配额记录的服务端唯一标识。
+        delta_bytes:
+          type: integer
+          title: Delta Bytes
+          description: “delta_bytes”字段；具体取值和约束见当前资源说明。
+        reason:
+          type: string
+          title: Reason
+          description: 执行该敏感操作的业务原因。
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+      type: object
+      required:
+      - id
+      - quota_id
+      - delta_bytes
+      - reason
+      title: IngestionProvenanceAdjustment
+    IngestionProvenanceEvent:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        event_type:
+          type: string
+          title: Event Type
+          description: “event_type”字段；具体取值和约束见当前资源说明。
+        occurred_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Occurred At
+          description: “occurred_at”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - id
+      - event_type
+      title: IngestionProvenanceEvent
+    IngestionProvenanceFile:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        status:
+          type: string
+          title: Status
+          description: 资源当前生命周期状态。
+        content_length:
+          type: integer
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        created_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+        deleted_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Deleted At
+          description: “deleted_at”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - id
+      - status
+      - content_length
+      title: IngestionProvenanceFile
     LifecycleRequest:
       properties:
         reason:
@@ -5049,6 +5332,58 @@ components:
       - part_number
       - etag
       title: MultipartCompletePart
+    MultipartCompleteRuntime:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+          description: 资源当前生命周期状态。
+        storage_space_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Storage Space Id
+          description: 逻辑存储空间的服务端唯一标识。
+        object_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Key
+          description: 逻辑存储空间内的规范相对对象路径。
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        content_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Content Type
+          description: 对象的媒体类型。
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+        file_object:
+          anyOf:
+          - $ref: '#/components/schemas/FileObjectRuntime'
+          - type: 'null'
+          description: “file_object”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - id
+      title: MultipartCompleteRuntime
+      description: 分片合并结果；成功后可选返回已入库的文件元数据。
     MultipartCreate:
       properties:
         object_key:
@@ -5075,38 +5410,6 @@ components:
       - content_length
       - content_type
       title: MultipartCreate
-    MultipartPartConfirm:
-      properties:
-        etag:
-          type: string
-          maxLength: 512
-          minLength: 1
-          title: Etag
-          description: 资源当前版本标识，用于并发控制。
-        content_length:
-          type: integer
-          minimum: 0.0
-          title: Content Length
-          description: 对象实际内容长度，单位为字节。
-      additionalProperties: false
-      type: object
-      required:
-      - etag
-      - content_length
-      title: MultipartPartConfirm
-    MultipartPartCreate:
-      properties:
-        part_number:
-          type: integer
-          maximum: 10000.0
-          minimum: 1.0
-          title: Part Number
-          description: 分段上传中从 1 开始的分片序号。
-      additionalProperties: false
-      type: object
-      required:
-      - part_number
-      title: MultipartPartCreate
     MultipartPartRuntime:
       properties:
         id:
@@ -5181,6 +5484,17 @@ components:
           - type: 'null'
           title: Ingestion Id
           description: “ingestion_id”字段；具体取值和约束见当前资源说明。
+        mode:
+          type: string
+          title: Mode
+          default: multipart
+          description: 上传会话模式；当前为 direct 或 multipart。
+        part_size:
+          type: integer
+          minimum: 1.0
+          title: Part Size
+          default: 8388608
+          description: 建议的分片大小，单位为字节。
       type: object
       required:
       - id
@@ -5641,6 +5955,121 @@ components:
       required:
       - items
       title: QuotaPage
+    QuotaReconciliationDifference:
+      properties:
+        kind:
+          $ref: '#/components/schemas/ReconciliationDifference'
+          description: “kind”字段；具体取值和约束见当前资源说明。
+        recorded_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Recorded Bytes
+          description: “recorded_bytes”字段；具体取值和约束见当前资源说明。
+        observed_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Observed Bytes
+          description: “observed_bytes”字段；具体取值和约束见当前资源说明。
+        physical_key_fingerprint:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Physical Key Fingerprint
+          description: 物理对象键的 SHA-256 指纹，不返回完整物理路径。
+      type: object
+      required:
+      - kind
+      title: QuotaReconciliationDifference
+    QuotaReconciliationMode:
+      type: string
+      enum:
+      - audit
+      - apply
+      title: QuotaReconciliationMode
+    QuotaReconciliationRequest:
+      properties:
+        mode:
+          $ref: '#/components/schemas/QuotaReconciliationMode'
+          description: 运行模式：audit 只读检查，apply 应用可信匹配结果。
+          default: audit
+        application_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Application Id
+          description: 可选的应用稳定标识，用于缩小对账范围。
+        storage_space_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Storage Space Id
+          description: 可选的逻辑存储空间稳定标识，用于缩小对账范围。
+        idempotency_key:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 128
+          - type: 'null'
+          title: Idempotency Key
+          description: apply 重试使用的幂等键；同一租户重复使用时返回同一对账运行结果。
+      additionalProperties: false
+      type: object
+      title: QuotaReconciliationRequest
+      description: 配额对账请求；audit 只检查，apply 才会写入用量投影。
+    QuotaReconciliationResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        mode:
+          $ref: '#/components/schemas/QuotaReconciliationMode'
+          description: 上传会话模式；当前为 direct 或 multipart。
+        status:
+          $ref: '#/components/schemas/QuotaReconciliationStatus'
+          description: 资源当前生命周期状态。
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Counts
+          description: “counts”字段；具体取值和约束见当前资源说明。
+        matched_files:
+          type: integer
+          title: Matched Files
+          default: 0
+          description: “matched_files”字段；具体取值和约束见当前资源说明。
+        provider_objects:
+          type: integer
+          title: Provider Objects
+          default: 0
+          description: “provider_objects”字段；具体取值和约束见当前资源说明。
+        summary:
+          additionalProperties: true
+          type: object
+          title: Summary
+          description: “summary”字段；具体取值和约束见当前资源说明。
+        differences:
+          items:
+            $ref: '#/components/schemas/QuotaReconciliationDifference'
+          type: array
+          title: Differences
+          description: “differences”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - id
+      - mode
+      - status
+      title: QuotaReconciliationResponse
+    QuotaReconciliationStatus:
+      type: string
+      enum:
+      - running
+      - completed
+      - failed
+      title: QuotaReconciliationStatus
     QuotaResponse:
       properties:
         id:
@@ -5701,7 +6130,24 @@ components:
           - type: string
           - type: 'null'
           title: Scope Type
-          description: 配额范围：tenant 表示租户总量，application 表示单个应用。
+          description: 配额范围：tenant 表示租户总量，application 表示单个应用，storage_space 表示逻辑存储空间。
+        consistency_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Consistency Status
+          description: 统计一致性：realtime 表示事务计数，reconciled 表示已对账，drift_detected 表示存在待处理差异。
+        drift_summary:
+          additionalProperties: true
+          type: object
+          title: Drift Summary
+          description: 非敏感的对账差异摘要。
+        last_reconciliation_run_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Reconciliation Run Id
+          description: 最近一次对账运行的稳定标识。
         updated_at:
           anyOf:
           - type: string
@@ -5719,6 +6165,7 @@ components:
       enum:
       - tenant
       - application
+      - storage_space
       title: QuotaScope
     QuotaUpdate:
       properties:
@@ -5732,6 +6179,16 @@ components:
       required:
       - limit_bytes
       title: QuotaUpdate
+    ReconciliationDifference:
+      type: string
+      enum:
+      - matched
+      - provider_missing
+      - db_missing
+      - size_mismatch
+      - duplicate_mapping
+      - orphan_object
+      title: ReconciliationDifference
     RegisterRequest:
       properties:
         email:
@@ -6541,97 +6998,6 @@ components:
       additionalProperties: false
       type: object
       title: UploadComplete
-    UploadCreate:
-      properties:
-        object_key:
-          type: string
-          maxLength: 1024
-          minLength: 1
-          title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
-        content_length:
-          type: integer
-          minimum: 0.0
-          title: Content Length
-          description: 对象实际内容长度，单位为字节。
-        content_type:
-          type: string
-          maxLength: 255
-          minLength: 1
-          title: Content Type
-          description: 对象的媒体类型。
-        checksum:
-          anyOf:
-          - type: string
-            maxLength: 512
-          - type: 'null'
-          title: Checksum
-          description: 内容校验和，用于验证上传数据的完整性。
-        direct_requested:
-          type: boolean
-          title: Direct Requested
-          default: false
-          description: 是否直接请求对象存储访问，而非通过服务端代理。
-      additionalProperties: false
-      type: object
-      required:
-      - object_key
-      - content_length
-      - content_type
-      title: UploadCreate
-    UploadSessionRuntime:
-      properties:
-        id:
-          type: string
-          title: Id
-          description: 资源的服务端唯一标识。
-        storage_space_id:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
-        object_key:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
-        content_length:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Content Length
-          description: 对象实际内容长度，单位为字节。
-        content_type:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Content Type
-          description: 对象的媒体类型。
-        status:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Status
-          description: 资源当前生命周期状态。
-        expires_at:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
-        ingestion_id:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Ingestion Id
-          description: “ingestion_id”字段；具体取值和约束见当前资源说明。
-      type: object
-      required:
-      - id
-      title: UploadSessionRuntime
-      description: 上传会话响应，`id` 用于后续内容上传和完成确认。
     UserPage:
       properties:
         items:
@@ -6803,6 +7169,7 @@ components:
       - available
       - deleting
       - delete_failed
+      - deleted
       - quarantined
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataUploadStatus:
@@ -6881,6 +7248,7 @@ components:
       - reserved
       - settled
       - released
+      - quarantined
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataAuthorizationScope:
       type: string
@@ -6913,6 +7281,7 @@ components:
       enum:
       - tenant
       - application
+      - storage_space
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataStorageAddressing:
       type: string

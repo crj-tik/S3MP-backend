@@ -10,11 +10,13 @@ class ReservationStatus(StrEnum):
     RESERVED = "reserved"
     SETTLED = "settled"
     RELEASED = "released"
+    QUARANTINED = "quarantined"
 
 
 class QuotaScope(StrEnum):
     TENANT = "tenant"
     APPLICATION = "application"
+    STORAGE_SPACE = "storage_space"
 
 
 class QuotaExceededError(ValueError):
