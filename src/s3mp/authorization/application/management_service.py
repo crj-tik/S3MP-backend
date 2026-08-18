@@ -98,14 +98,21 @@ class AuthorizationManagementService:
         return _found(result, "Role")
 
     async def list_role_bindings(
-        self, context: PrincipalContext, principal_id: UUID | None = None, **page: Any
+        self,
+        context: PrincipalContext,
+        principal_id: UUID | None = None,
+        *,
+        storage_space_id: UUID | None = None,
+        **page: Any,
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         if (
             principal_id is not None
             and await self.store.get_principal(context.tenant_id, principal_id) is None
         ):
             raise ApiError("resource_not_found", "Principal not found", status_code=404)
-        return await self.store.list_role_bindings(context.tenant_id, principal_id, **page)
+        return await self.store.list_role_bindings(
+            context.tenant_id, principal_id, storage_space_id=storage_space_id, **page
+        )
 
     async def create_role_binding(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
         role = await self.store.get_role(context.tenant_id, body.role_id)

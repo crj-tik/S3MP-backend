@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -43,7 +44,7 @@ class FileObjectModel(Base):
     provider_target_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="0"
     )
-    content_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     etag: Mapped[str | None] = mapped_column(String(512))
     checksum: Mapped[str | None] = mapped_column(String(512))
@@ -53,6 +54,7 @@ class FileObjectModel(Base):
     )
     deletion_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deletion_failure_reason: Mapped[str | None] = mapped_column(String(128))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deletion_principal_id: Mapped[UUID | None] = mapped_column()
     deletion_authorization_version: Mapped[int | None] = mapped_column()
     deletion_authorization_evidence: Mapped[dict[str, object] | None] = mapped_column(JSON)
@@ -91,7 +93,7 @@ class UploadSessionModel(Base):
     provider_target_version: Mapped[int] = mapped_column(
         nullable=False, default=1, server_default="0"
     )
-    declared_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    declared_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     checksum: Mapped[str | None] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -126,7 +128,7 @@ class MultipartSessionModel(Base):
         nullable=False, default=1, server_default="0"
     )
     provider_upload_id: Mapped[str | None] = mapped_column(String(512))
-    declared_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    declared_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     quota_reservation_id: Mapped[UUID] = mapped_column(nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -150,7 +152,9 @@ class MultipartPartModel(Base):
     multipart_session_id: Mapped[UUID] = mapped_column(nullable=False)
     part_number: Mapped[int] = mapped_column(Integer, nullable=False)
     etag: Mapped[str] = mapped_column(String(512), nullable=False)
-    content_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
 
 
 class FileOperationModel(Base):

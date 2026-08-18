@@ -166,7 +166,7 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 create = await client.post(
-                    f"/api/v1/storage_spaces/{space_id}/uploads",
+                    f"/api/v1/storage_spaces/{space_id}/direct_uploads",
                     json={
                         "object_key": "e2e/test.txt",
                         "content_length": 42,
@@ -175,7 +175,7 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
                     headers={"Idempotency-Key": "e2e-upload-create-1"},
                 )
                 replay = await client.post(
-                    f"/api/v1/storage_spaces/{space_id}/uploads",
+                    f"/api/v1/storage_spaces/{space_id}/direct_uploads",
                     json={
                         "object_key": "e2e/test.txt",
                         "content_length": 42,
@@ -184,7 +184,7 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
                     headers={"Idempotency-Key": "e2e-upload-create-1"},
                 )
                 upload_id = create.json()["id"]
-                fetched = await client.get(f"/api/v1/uploads/{upload_id}")
+                fetched = await client.get(f"/api/v1/direct_uploads/{upload_id}")
 
             assert create.status_code == 201
             assert replay.status_code == 201

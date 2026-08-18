@@ -18,7 +18,9 @@ class FakeFileService:
     def __init__(self, *, cross_tenant_file: bool = False) -> None:
         self.cross_tenant_file = cross_tenant_file
 
-    async def list_files(self, tenant_id: Any, space_id: str, prefix: str) -> list[dict[str, Any]]:
+    async def list_files(
+        self, tenant_id: Any, space_id: str, prefix: str, status: Any = None
+    ) -> list[dict[str, Any]]:
         return [{"id": str(uuid4()), "object_key": "docs/readme.txt", "etag": "abc"}]
 
     async def get_file(self, tenant_id: Any, space_id: str, file_id: str) -> dict[str, Any]:
@@ -47,20 +49,37 @@ class FakeFileService:
     async def get_file_operation(self, tenant_id: Any, operation_id: str) -> dict[str, Any]:
         return {"id": operation_id, "status": "pending"}
 
-    async def create_upload(
+    async def create_direct_upload(
         self,
         ctx: PrincipalContext,
         space_id: str,
         body: Any,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return {"id": str(uuid4()), "object_key": body.object_key, "status": "pending"}
+        return {
+            "id": str(uuid4()),
+            "object_key": body.object_key,
+            "status": "pending",
+            "content_length": body.content_length,
+            "content_type": body.content_type,
+            "mode": "direct",
+            "method": "PUT",
+            "url": "https://s3.example.com/upload",
+            "headers": {"Content-Type": body.content_type},
+        }
 
-    async def get_upload(self, tenant_id: Any, upload_id: str) -> dict[str, Any]:
-        return {"id": upload_id, "status": "pending"}
+    async def get_direct_upload(self, ctx: PrincipalContext, upload_id: str) -> dict[str, Any]:
+        return {
+            "id": upload_id,
+            "status": "pending",
+            "mode": "direct",
+            "method": "PUT",
+            "url": "https://s3.example.com/upload",
+            "headers": {"Content-Type": "text/plain"},
+        }
 
-    async def complete_upload(
-        self, tenant_id: Any, upload_id: str, body: Any, **kwargs: Any
+    async def complete_direct_upload(
+        self, ctx: PrincipalContext, upload_id: str, body: Any, **kwargs: Any
     ) -> dict[str, Any]:
         return {"id": upload_id, "status": "completed", "etag": "abc"}
 
@@ -89,15 +108,21 @@ class FakeFileService:
     async def list_multipart_parts(self, tenant_id: Any, multipart_id: str) -> list[dict[str, Any]]:
         return [{"part_number": 1, "etag": "p1", "content_length": 100}]
 
-    async def create_multipart_part(
-        self, tenant_id: Any, multipart_id: str, body: Any
+    async def upload_multipart_part(
+        self,
+        ctx: PrincipalContext,
+        multipart_id: str,
+        part_number: int,
+        body: bytes,
+        content_length: int,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        return {"multipart_id": multipart_id, "part_number": body.part_number}
-
-    async def confirm_multipart_part(
-        self, tenant_id: Any, multipart_id: str, part_number: int, body: Any, **kwargs: Any
-    ) -> dict[str, Any]:
-        return {"multipart_id": multipart_id, "part_number": part_number, "etag": body.etag}
+        return {
+            "id": str(uuid4()),
+            "part_number": part_number,
+            "etag": "part-1",
+            "content_length": content_length,
+        }
 
     async def complete_multipart_upload(
         self, tenant_id: Any, multipart_id: str, body: Any, **kwargs: Any
@@ -120,11 +145,11 @@ async def test_list_files_returns_200() -> None:
     assert response.json()[0]["etag"] == "abc"
 
 
-async def test_create_upload_returns_201() -> None:
+async def test_create_direct_upload_returns_201() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            f"/api/v1/storage_spaces/{uuid4()}/uploads",
+            f"/api/v1/storage_spaces/{uuid4()}/direct_uploads",
             json={
                 "object_key": "docs/readme.txt",
                 "content_length": 100,
@@ -135,6 +160,8 @@ async def test_create_upload_returns_201() -> None:
 
     assert response.status_code == 201
     assert response.json()["status"] == "pending"
+    assert response.json()["mode"] == "direct"
+    assert response.json()["url"].startswith("https://")
 
 
 async def test_create_file_operation_returns_202() -> None:
@@ -192,11 +219,11 @@ async def test_operation_http_response_has_no_internal_fields() -> None:
     }.intersection(response.json())
 
 
-async def test_complete_upload_returns_etag() -> None:
+async def test_complete_direct_upload_returns_etag() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            f"/api/v1/uploads/{uuid4()}/completion",
+            f"/api/v1/direct_uploads/{uuid4()}/completion",
             json={"checksum": "sha256:abc"},
             headers={"Idempotency-Key": "upload-complete-1"},
         )
@@ -255,27 +282,33 @@ async def test_etag_mismatch_returns_412() -> None:
     assert response.json()["code"] == "etag_mismatch"
 
 
-async def test_multipart_part_confirmation_forwards_idempotency_key() -> None:
+async def test_multipart_part_upload_forwards_idempotency_key() -> None:
     class CapturingService(FakeFileService):
         key: str | None = None
 
-        async def confirm_multipart_part(
+        async def upload_multipart_part(
             self,
-            tenant_id: Any,
+            ctx: PrincipalContext,
             multipart_id: str,
             part_number: int,
-            body: Any,
+            body: bytes,
+            content_length: int,
             **kwargs: Any,
         ) -> dict[str, Any]:
             self.key = kwargs.get("idempotency_key")
-            return {"multipart_id": multipart_id, "part_number": part_number}
+            return {
+                "id": str(uuid4()),
+                "part_number": part_number,
+                "etag": "part-1",
+                "content_length": content_length,
+            }
 
     service = CapturingService()
     app = make_app({"file_service": service}, context=_ctx())
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.put(
             f"/api/v1/multipart_uploads/{uuid4()}/parts/1",
-            json={"etag": "part-1", "content_length": 1},
+            content=b"x",
             headers={"Idempotency-Key": "part-confirm-1"},
         )
 
@@ -287,7 +320,7 @@ async def test_file_mutation_rejects_missing_idempotency_key_before_service() ->
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
-            f"/api/v1/storage_spaces/{uuid4()}/uploads",
+            f"/api/v1/storage_spaces/{uuid4()}/direct_uploads",
             json={
                 "object_key": "docs/readme.txt",
                 "content_length": 100,

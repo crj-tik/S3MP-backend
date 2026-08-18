@@ -24,13 +24,12 @@ class FileOperationCreate(BaseModel):
     keys: list[str] | None = Field(default=None)
 
 
-class UploadCreate(BaseModel):
+class DirectUploadCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     object_key: str = Field(min_length=1, max_length=1024)
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
     checksum: str | None = Field(default=None, max_length=512)
-    direct_requested: bool = False
 
 
 class UploadComplete(BaseModel):
@@ -49,17 +48,6 @@ class MultipartCreate(BaseModel):
     object_key: str = Field(min_length=1, max_length=1024)
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
-
-
-class MultipartPartCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    part_number: int = Field(ge=1, le=10000)
-
-
-class MultipartPartConfirm(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    etag: str = Field(min_length=1, max_length=512)
-    content_length: int = Field(ge=0)
 
 
 class MultipartPartRuntime(BaseModel):
@@ -97,8 +85,16 @@ class UploadSessionRuntime(BaseModel):
     ingestion_id: str | None = None
 
 
+class DirectUploadSessionRuntime(UploadSessionRuntime):
+    mode: str = "direct"
+    method: str = "PUT"
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
 class MultipartUploadRuntime(UploadSessionRuntime):
-    pass
+    mode: str = "multipart"
+    part_size: int = Field(default=8 * 1024 * 1024, ge=1)
 
 
 class FileOperationRuntime(BaseModel):
@@ -125,6 +121,19 @@ class IngestionCommitResult(BaseModel):
     etag: str | None = None
 
 
+class MultipartCompleteRuntime(BaseModel):
+    """分片合并结果；成功后可选返回已入库的文件元数据。"""
+
+    id: str
+    status: str | None = None
+    storage_space_id: str | None = None
+    object_key: str | None = None
+    content_length: int | None = None
+    content_type: str | None = None
+    etag: str | None = None
+    file_object: FileObjectRuntime | None = None
+
+
 class MultipartCompletePart(BaseModel):
     model_config = ConfigDict(extra="forbid")
     part_number: int = Field(ge=1, le=10000)
@@ -134,6 +143,35 @@ class MultipartCompletePart(BaseModel):
 class MultipartComplete(BaseModel):
     model_config = ConfigDict(extra="forbid")
     parts: list[MultipartCompletePart] = Field(min_length=1)
+
+
+class IngestionProvenanceEvent(BaseModel):
+    id: str
+    event_type: str
+    occurred_at: str | None = None
+
+
+class IngestionProvenanceFile(BaseModel):
+    id: str
+    status: str
+    content_length: int
+    created_at: str | None = None
+    deleted_at: str | None = None
+
+
+class IngestionProvenanceAdjustment(BaseModel):
+    id: str
+    quota_id: str
+    delta_bytes: int
+    reason: str
+    created_at: str | None = None
+
+
+class IngestionProvenance(BaseModel):
+    ingestion: dict[str, Any]
+    events: list[IngestionProvenanceEvent]
+    file_object: IngestionProvenanceFile | None = None
+    quota_adjustments: list[IngestionProvenanceAdjustment]
 
 
 # ── Dependencies ──────────────────────────────────────────────────────────────
@@ -253,61 +291,66 @@ async def get_file_operation(
 # ── Uploads ───────────────────────────────────────────────────────────────────
 
 
-@router.post(
-    "/storage_spaces/{space_id}/uploads",
-    status_code=201,
-    response_model=UploadSessionRuntime,
-    operation_id="create_upload",
+@router.get(
+    "/ingestions/{ingestion_id}/provenance",
+    response_model=IngestionProvenance,
+    operation_id="get_ingestion_provenance",
 )
-async def create_upload(
+async def get_ingestion_provenance(
     request: Request,
-    body: UploadCreate,
+    ingestion_id: str = Path(min_length=1),
+) -> IngestionProvenance:
+    return IngestionProvenance.model_validate(
+        await _file_svc(request).get_ingestion_provenance(_context(request), ingestion_id)
+    )
+
+
+@router.post(
+    "/storage_spaces/{space_id}/direct_uploads",
+    status_code=201,
+    response_model=DirectUploadSessionRuntime,
+    operation_id="create_direct_upload",
+)
+async def create_direct_upload(
+    request: Request,
+    body: DirectUploadCreate,
     space_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> UploadSessionRuntime:
-    return UploadSessionRuntime.model_validate(
-        await _file_svc(request).create_upload(
+) -> DirectUploadSessionRuntime:
+    return DirectUploadSessionRuntime.model_validate(
+        await _file_svc(request).create_direct_upload(
             _context(request), space_id, body, idempotency_key=_idempotency_key(idempotency_key)
         )
     )
 
 
-@router.get("/uploads/{upload_id}", response_model=UploadSessionRuntime, operation_id="get_upload")
-async def get_upload(
+@router.get(
+    "/direct_uploads/{upload_id}",
+    response_model=DirectUploadSessionRuntime,
+    operation_id="get_direct_upload",
+)
+async def get_direct_upload(
     request: Request,
     upload_id: str = Path(min_length=1),
-) -> UploadSessionRuntime:
-    return UploadSessionRuntime.model_validate(
-        await _file_svc(request).get_upload(_context(request), upload_id)
-    )
-
-
-@router.put("/uploads/{upload_id}/content", status_code=204, operation_id="proxy_upload_content")
-async def proxy_upload_content(
-    request: Request,
-    upload_id: str = Path(min_length=1),
-    content_length: int = Header(alias="Content-Length"),
-    content_type: str = Header(alias="Content-Type"),
-    body: bytes = Body(..., media_type="application/octet-stream"),
-) -> None:
-    await _file_svc(request).proxy_upload_content(
-        _context(request), upload_id, body, content_length, content_type
+) -> DirectUploadSessionRuntime:
+    return DirectUploadSessionRuntime.model_validate(
+        await _file_svc(request).get_direct_upload(_context(request), upload_id)
     )
 
 
 @router.post(
-    "/uploads/{upload_id}/completion",
+    "/direct_uploads/{upload_id}/completion",
     response_model=IngestionCommitResult,
-    operation_id="complete_upload",
+    operation_id="complete_direct_upload",
 )
-async def complete_upload(
+async def complete_direct_upload(
     request: Request,
     body: UploadComplete,
     upload_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> IngestionCommitResult:
     return IngestionCommitResult.model_validate(
-        await _file_svc(request).complete_upload(
+        await _file_svc(request).complete_direct_upload(
             _context(request), upload_id, body, idempotency_key=_idempotency_key(idempotency_key)
         )
     )
@@ -390,48 +433,44 @@ async def list_multipart_parts(
     )
 
 
-@router.post(
-    "/multipart_uploads/{multipart_id}/parts", status_code=201, operation_id="create_multipart_part"
-)
-async def create_multipart_part(
-    request: Request,
-    body: MultipartPartCreate,
-    multipart_id: str = Path(min_length=1),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).create_multipart_part(
-        _context(request), multipart_id, body, idempotency_key=_idempotency_key(idempotency_key)
-    )
-
-
 @router.put(
-    "/multipart_uploads/{multipart_id}/parts/{part_number}", operation_id="confirm_multipart_part"
+    "/multipart_uploads/{multipart_id}/parts/{part_number}",
+    response_model=MultipartPartRuntime,
+    operation_id="upload_multipart_part",
 )
-async def confirm_multipart_part(
+async def upload_multipart_part(
     request: Request,
-    body: MultipartPartConfirm,
     multipart_id: str = Path(min_length=1),
     part_number: int = Path(ge=1, le=10000),
+    content_length: int = Header(alias="Content-Length"),
+    body: bytes = Body(..., media_type="application/octet-stream"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).confirm_multipart_part(
-        _context(request),
-        multipart_id,
-        part_number,
-        body,
-        idempotency_key=_idempotency_key(idempotency_key),
+) -> MultipartPartRuntime:
+    return MultipartPartRuntime.model_validate(
+        await _file_svc(request).upload_multipart_part(
+            _context(request),
+            multipart_id,
+            part_number,
+            body,
+            content_length,
+            idempotency_key=_idempotency_key(idempotency_key),
+        )
     )
 
 
 @router.post(
-    "/multipart_uploads/{multipart_id}/completion", operation_id="complete_multipart_upload"
+    "/multipart_uploads/{multipart_id}/completion",
+    response_model=MultipartCompleteRuntime,
+    operation_id="complete_multipart_upload",
 )
 async def complete_multipart_upload(
     request: Request,
     body: MultipartComplete,
     multipart_id: str = Path(min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-) -> Any:
-    return await _file_svc(request).complete_multipart_upload(
-        _context(request), multipart_id, body, idempotency_key=_idempotency_key(idempotency_key)
+) -> MultipartCompleteRuntime:
+    return MultipartCompleteRuntime.model_validate(
+        await _file_svc(request).complete_multipart_upload(
+            _context(request), multipart_id, body, idempotency_key=_idempotency_key(idempotency_key)
+        )
     )

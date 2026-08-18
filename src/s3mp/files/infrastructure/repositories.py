@@ -17,6 +17,7 @@ from s3mp.files.infrastructure.models import (
     MultipartSessionModel,
     UploadSessionModel,
 )
+from s3mp.governance.infrastructure.models import QuotaAdjustmentModel, QuotaModel
 from s3mp.storage.infrastructure.models import StorageSpaceModel
 from s3mp.tenant.infrastructure.models import TenantModel
 
@@ -177,8 +178,95 @@ class SqlAlchemyFileStore:
                 )
                 .with_for_update()
             )
-            if row is not None:
+            if row is None:
+                return
+
+            quota_filters = [
+                (QuotaModel.application_id == row.application_id)
+                if row.application_id is not None
+                else (QuotaModel.storage_space_id == row.storage_space_id),
+                ((QuotaModel.application_id.is_(None)) & (QuotaModel.storage_space_id.is_(None))),
+            ]
+            quotas = (
+                await session.scalars(
+                    select(QuotaModel)
+                    .where(
+                        QuotaModel.tenant_id == tenant_id,
+                        or_(*quota_filters),
+                    )
+                    .order_by(QuotaModel.id)
+                    .with_for_update()
+                )
+            ).all()
+            for quota in quotas:
+                idempotency_key = f"file-delete:{row.id}:{quota.id}"
+                adjustment = await session.scalar(
+                    select(QuotaAdjustmentModel).where(
+                        QuotaAdjustmentModel.idempotency_key == idempotency_key
+                    )
+                )
+                if adjustment is not None:
+                    continue
+                released = min(max(quota.used_bytes, 0), max(row.content_length, 0))
+                quota.used_bytes -= released
+                quota.measured_at = datetime.now(UTC)
+                quota.consistency_status = "realtime"
+                session.add(
+                    QuotaAdjustmentModel(
+                        tenant_id=tenant_id,
+                        quota_id=quota.id,
+                        file_object_id=row.id,
+                        delta_bytes=-released,
+                        reason="file_deleted",
+                        idempotency_key=idempotency_key,
+                        details={"content_length": row.content_length},
+                    )
+                )
+                session.add(
+                    AuditEventModel(
+                        tenant_id=tenant_id,
+                        actor_principal_id=row.deletion_principal_id,
+                        action="quota.usage_released",
+                        resource_type="quota",
+                        resource_id=str(quota.id),
+                        details={
+                            "file_object_id": str(row.id),
+                            "delta_bytes": -released,
+                            "reason": "file_deleted",
+                        },
+                    )
+                )
+            row.status = "deleted"
+            row.deleted_at = datetime.now(UTC)
+
+    async def purge_deleted_files(self, retention_days: int, limit: int = 100) -> int:
+        """Remove only retained tombstones whose quota release is evidenced.
+
+        Provider objects are deliberately not touched here.  The deletion
+        worker has already removed them before the tombstone was finalized;
+        provider-only objects remain reconciliation evidence instead.
+        """
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        async with self._sf.begin() as session:
+            rows = (
+                await session.scalars(
+                    select(FileObjectModel)
+                    .where(
+                        FileObjectModel.status == "deleted",
+                        FileObjectModel.deleted_at.is_not(None),
+                        FileObjectModel.deleted_at <= cutoff,
+                        ~select(QuotaAdjustmentModel.id)
+                        .where(QuotaAdjustmentModel.file_object_id == FileObjectModel.id)
+                        .exists(),
+                    )
+                    .order_by(FileObjectModel.deleted_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(limit)
+                )
+            ).all()
+            for row in rows:
                 await session.delete(row)
+            return len(rows)
 
     async def create_operation(
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
@@ -366,12 +454,19 @@ class SqlAlchemyFileStore:
                 principal_id=UUID(data["principal_id"]),
                 membership_id=UUID(data["membership_id"]) if data.get("membership_id") else None,
                 storage_space_id=space_id,
+                application_id=(
+                    UUID(str(data["application_id"]))
+                    if data.get("application_id")
+                    else space.application_id
+                ),
+                storage_namespace=data.get("storage_namespace") or space.storage_namespace,
+                profile_version=int(data.get("profile_version", space.profile_version)),
                 object_key=data["object_key"],
                 provider_target_version=int(data.get("provider_target_version", 1)),
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 checksum=data.get("checksum"),
-                expires_at=datetime.now(UTC).replace(hour=23, minute=59, second=59),
+                expires_at=data.get("expires_at") or (datetime.now(UTC) + timedelta(hours=24)),
                 status="pending",
             )
             session.add(model)
@@ -469,12 +564,19 @@ class SqlAlchemyFileStore:
                 principal_id=UUID(data["principal_id"]),
                 membership_id=UUID(data["membership_id"]) if data.get("membership_id") else None,
                 storage_space_id=space_id,
+                application_id=(
+                    UUID(str(data["application_id"]))
+                    if data.get("application_id")
+                    else space.application_id
+                ),
+                storage_namespace=data.get("storage_namespace") or space.storage_namespace,
+                profile_version=int(data.get("profile_version", space.profile_version)),
                 object_key=data["object_key"],
                 provider_target_version=int(data.get("provider_target_version", 1)),
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 quota_reservation_id=uuid4(),
-                expires_at=datetime.now(UTC).replace(hour=23, minute=59, second=59),
+                expires_at=data.get("expires_at") or (datetime.now(UTC) + timedelta(hours=24)),
                 status="pending",
             )
             session.add(model)
@@ -559,22 +661,7 @@ class SqlAlchemyFileStore:
             )
             return [_part_dict(r) for r in rows]
 
-    async def create_multipart_part(
-        self, tenant_id: UUID, mp_id: UUID, data: dict[str, Any]
-    ) -> dict[str, Any]:
-        async with self._sf.begin() as session:
-            model = MultipartPartModel(
-                tenant_id=tenant_id,
-                multipart_session_id=mp_id,
-                part_number=data["part_number"],
-                etag="pending",
-                content_length=0,
-            )
-            session.add(model)
-            await session.flush()
-            return _part_dict(model)
-
-    async def confirm_multipart_part(
+    async def record_multipart_part(
         self, tenant_id: UUID, mp_id: UUID, part_number: int, data: dict[str, Any]
     ) -> dict[str, Any]:
         async with self._sf.begin() as session:
@@ -588,9 +675,21 @@ class SqlAlchemyFileStore:
                 .with_for_update()
             )
             if row is None:
-                raise ValueError("part not found")
-            row.etag = data["etag"]
-            row.content_length = data["content_length"]
+                row = MultipartPartModel(
+                    tenant_id=tenant_id,
+                    multipart_session_id=mp_id,
+                    part_number=part_number,
+                    etag=data["etag"],
+                    content_length=data["content_length"],
+                    idempotency_key=data.get("idempotency_key"),
+                    content_sha256=data.get("content_sha256"),
+                )
+                session.add(row)
+            else:
+                row.etag = data["etag"]
+                row.content_length = data["content_length"]
+                row.idempotency_key = data.get("idempotency_key")
+                row.content_sha256 = data.get("content_sha256")
             await session.flush()
             return _part_dict(row)
 
@@ -609,8 +708,24 @@ class SqlAlchemyFileStore:
             if row is None:
                 raise ValueError("multipart not found")
             row.status = "completed"
+            file_obj = FileObjectModel(
+                tenant_id=tenant_id,
+                storage_space_id=row.storage_space_id,
+                application_id=row.application_id,
+                storage_namespace=row.storage_namespace,
+                profile_version=row.profile_version,
+                object_key=row.object_key,
+                provider_target_version=row.provider_target_version,
+                content_length=data["content_length"],
+                content_type=data["content_type"],
+                checksum=data.get("checksum"),
+                etag=data.get("etag"),
+            )
+            session.add(file_obj)
             await session.flush()
-            return _mp_dict(row)
+            result = _mp_dict(row)
+            result["file_object"] = _file_dict(file_obj)
+            return result
 
 
 def _file_dict(m: FileObjectModel) -> dict[str, Any]:
@@ -682,6 +797,8 @@ def _part_dict(m: MultipartPartModel) -> dict[str, Any]:
         "part_number": m.part_number,
         "etag": m.etag,
         "content_length": m.content_length,
+        "idempotency_key": m.idempotency_key,
+        "content_sha256": m.content_sha256,
     }
 
 

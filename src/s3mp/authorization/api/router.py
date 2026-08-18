@@ -180,7 +180,9 @@ def get_permission_catalog(
 ) -> PermissionCatalogResponse:
     """Return the server-owned permission catalog used by role forms."""
     del context
-    catalog_path = Path(__file__).resolve().parents[3] / "contracts" / "permission-catalog.yaml"
+    # router.py lives under src/s3mp/authorization/api; the container copies
+    # the contract directory to /app/contracts alongside /app/src.
+    catalog_path = Path(__file__).resolve().parents[4] / "contracts" / "permission-catalog.yaml"
     with catalog_path.open(encoding="utf-8") as stream:
         catalog = yaml.safe_load(stream) or {}
     return PermissionCatalogResponse.model_validate(catalog)
@@ -317,14 +319,19 @@ async def list_role_bindings(
     context: Annotated[PrincipalContext, management_permission("list_role_bindings")],
     service: Annotated[AuthorizationManagementService, authorization_service],
     principal_id: UUID | None = None,
+    storage_space_id: Annotated[
+        UUID | None, Query(description="按逻辑存储空间标识筛选绑定。")
+    ] = None,
     cursor: str | None = Query(default=None),
 ) -> object:
+    query = f"role_bindings:{principal_id or ''}:{storage_space_id or ''}"
     items, position = await service.list_role_bindings(
         context,
         principal_id,
-        cursor=_cursor(cursor, context, query=f"role_bindings:{principal_id or ''}"),
+        storage_space_id=storage_space_id,
+        cursor=_cursor(cursor, context, query=query),
     )
-    return _page(items, position, context, query=f"role_bindings:{principal_id or ''}")
+    return _page(items, position, context, query=query)
 
 
 @router.post(

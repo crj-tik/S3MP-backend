@@ -209,10 +209,16 @@ async def list_storage_spaces(
     context: Annotated[PrincipalContext, management_permission("list_storage_spaces")],
     cursor: str | None = Query(default=None),
     status: Annotated[StorageSpaceStatus, Query()] = StorageSpaceStatus.ACTIVE,
+    application_id: Annotated[
+        UUID | None, Query(description="按应用的稳定标识筛选逻辑存储空间。")
+    ] = None,
 ) -> StorageSpacePage:
-    query = f"storage_spaces:{status.value}"
+    query = f"storage_spaces:{status.value}:{application_id or ''}"
     items, position = await _svc(request).list_spaces(
-        context, cursor=_cursor(cursor, context, query=query), status=status
+        context,
+        cursor=_cursor(cursor, context, query=query),
+        status=status,
+        application_id=application_id,
     )
     return StorageSpacePage.model_validate(_page(items, position, context, query=query))
 

@@ -5,43 +5,42 @@ semantics:
   storage_scope_required_for_file_permissions: true
   direct_binding_requires_reason_and_expiry: true
 permissions:
-  - {name: platform.accounts.read, resource_type: platform_account, delegable: false, description: View safe platform account summaries.}
-  - {name: platform.tenants.read, resource_type: platform_tenant, delegable: false, description: View platform tenant lifecycle summaries.}
-  - {name: platform.tenants.manage, resource_type: platform_tenant, delegable: false, description: Create and update platform tenants.}
-  - {name: platform.roles.read, resource_type: platform_role, delegable: false, description: View platform roles and bindings.}
-  - {name: platform.roles.manage, resource_type: platform_role, delegable: false, description: Grant and revoke platform roles.}
-  - {name: platform.support.read, resource_type: platform_support, delegable: false, description: View support access requests.}
-  - {name: platform.support.manage, resource_type: platform_support, delegable: false, description: Request, approve and revoke support access.}
-  - {name: platform.audit.read, resource_type: platform_audit, delegable: false, description: View platform audit events.}
-  - {name: tenant.read, resource_type: tenant, delegable: true, description: View tenant metadata.}
-  - {name: members.read, resource_type: membership, delegable: true, description: List and view tenant members.}
-  - {name: members.manage, resource_type: membership, delegable: true, description: Invite, suspend, reactivate and remove members.}
-  - {name: groups.read, resource_type: group, delegable: true, description: View groups and membership.}
-  - {name: groups.manage, resource_type: group, delegable: true, description: Create groups and manage group membership.}
-  - {name: roles.read, resource_type: role, delegable: true, description: View roles and their permissions.}
-  - {name: roles.manage, resource_type: role, delegable: true, description: Create and update custom roles.}
-  - {name: role_bindings.read, resource_type: role_binding, delegable: true, description: View scoped role bindings.}
-  - {name: role_bindings.manage, resource_type: role_binding, delegable: true, description: Grant or revoke authority within the delegator subset.}
-  - {name: authorization.explain, resource_type: authorization, delegable: false, description: Inspect effective permission sources and stable reasons.}
-  - {name: authorization.simulate, resource_type: authorization, delegable: false, description: Perform a non-mutating access simulation.}
-  - {name: applications.read, resource_type: application, delegable: true, description: View applications and owners.}
-  - {name: applications.manage, resource_type: application, delegable: true, description: Create, update, disable and take over applications.}
-  - {name: api_keys.read, resource_type: api_key, delegable: true, description: View key metadata but never key secrets.}
-  - {name: api_keys.manage, resource_type: api_key, delegable: true, description: Issue, rotate, disable and revoke application keys.}
-  - {name: storage_connections.read, resource_type: storage_connection, delegable: false, description: View redacted connection status and capabilities.}
-  - {name: storage_connections.manage, resource_type: storage_connection, delegable: false, description: Configure and probe storage connections without exposing credentials.}
-  - {name: storage_spaces.read, resource_type: storage_space, delegable: true, description: View logical storage spaces.}
-  - {name: storage_spaces.manage, resource_type: storage_space, delegable: true, description: Manage bucket/root-prefix mappings.}
-  - {name: files.list, resource_type: storage_prefix, delegable: true, description: List objects under the bound canonical prefix.}
-  - {name: files.read, resource_type: storage_object, delegable: true, description: Read metadata or issue an exact-object download.}
-  - {name: files.write, resource_type: storage_object, delegable: true, description: Proxy-upload or issue an exact-object upload.}
-  - {name: files.delete, resource_type: storage_object, delegable: true, description: Delete objects under the bound canonical prefix.}
-  - {name: files.copy, resource_type: storage_object, delegable: true, description: Copy with source-read and destination-write checks.}
-  - {name: files.move, resource_type: storage_object, delegable: true, description: Move with source-read/delete and destination-write checks.}
-  - {name: multipart.manage, resource_type: storage_object, delegable: true, description: Initiate, upload parts, complete and abort multipart sessions.}
-  - {name: presigned_urls.issue, resource_type: storage_object, delegable: true, description: Issue bounded GET or PUT presigned URLs.}
-  - {name: quotas.read, resource_type: quota, delegable: true, description: View limits, usage and reservations.}
-  - {name: quotas.manage, resource_type: quota, delegable: false, description: Configure tenant or space quota.}
-  - {name: audit.read, resource_type: audit_event, delegable: false, description: Search tenant audit events.}
-  - {name: access_reviews.read, resource_type: access_review, delegable: false, description: View access review campaigns and items.}
-  - {name: access_reviews.manage, resource_type: access_review, delegable: false, description: Create and decide access reviews.}
+  - {name: platform.accounts.read, resource_type: platform_account, delegable: false, description: "View safe platform account summaries."}
+  - {name: platform.tenants.read, resource_type: platform_tenant, delegable: false, description: "View platform tenant lifecycle summaries."}
+  - {name: platform.tenants.manage, resource_type: platform_tenant, delegable: false, description: "Create and update platform tenants."}
+  - {name: platform.roles.read, resource_type: platform_role, delegable: false, description: "View platform roles and bindings."}
+  - {name: platform.roles.manage, resource_type: platform_role, delegable: false, description: "Grant and revoke platform roles."}
+  - {name: platform.support.read, resource_type: platform_support, delegable: false, description: "View support access requests."}
+  - {name: platform.support.manage, resource_type: platform_support, delegable: false, description: "Request, approve and revoke support access."}
+  - {name: platform.audit.read, resource_type: platform_audit, delegable: false, description: "View platform audit events."}
+  - {name: tenant.read, resource_type: tenant, delegable: true, description: "View tenant metadata."}
+  - {name: members.read, resource_type: membership, delegable: true, description: "List and view tenant members."}
+  - {name: members.manage, resource_type: membership, delegable: true, description: "Invite, suspend, reactivate and remove members."}
+  - {name: groups.read, resource_type: group, delegable: true, description: "View groups and membership."}
+  - {name: groups.manage, resource_type: group, delegable: true, description: "Create groups and manage group membership."}
+  - {name: roles.read, resource_type: role, delegable: true, description: "View roles and their permissions."}
+  - {name: roles.manage, resource_type: role, delegable: true, description: "Create and update custom roles."}
+  - {name: role_bindings.read, resource_type: role_binding, delegable: true, description: "View scoped role bindings."}
+  - {name: role_bindings.manage, resource_type: role_binding, delegable: true, description: "Grant or revoke authority within the delegator subset."}
+  - {name: authorization.explain, resource_type: authorization, delegable: false, description: "Inspect effective permission sources and stable reasons."}
+  - {name: authorization.simulate, resource_type: authorization, delegable: false, description: "Perform a non-mutating access simulation."}
+  - {name: applications.read, resource_type: application, delegable: true, description: "View applications and owners."}
+  - {name: applications.manage, resource_type: application, delegable: true, description: "Create, update, disable and take over applications."}
+  - {name: api_keys.read, resource_type: api_key, delegable: true, description: "View key metadata but never key secrets."}
+  - {name: api_keys.manage, resource_type: api_key, delegable: true, description: "Issue, rotate, disable and revoke application keys."}
+  - {name: storage_connections.read, resource_type: storage_connection, delegable: false, description: "View redacted connection status and capabilities."}
+  - {name: storage_connections.manage, resource_type: storage_connection, delegable: false, description: "Configure and probe storage connections without exposing credentials."}
+  - {name: storage_spaces.read, resource_type: storage_space, delegable: true, description: "View logical storage spaces."}
+  - {name: storage_spaces.manage, resource_type: storage_space, delegable: true, description: "Manage bucket/root-prefix mappings."}
+  - {name: files.list, resource_type: storage_prefix, delegable: true, description: "List objects under the bound canonical prefix."}
+  - {name: files.read, resource_type: storage_object, delegable: true, description: "Read metadata or issue an exact-object download."}
+  - {name: files.write, resource_type: storage_object, delegable: true, description: "Issue a direct upload or write a multipart part under the bound canonical prefix."}
+  - {name: files.delete, resource_type: storage_object, delegable: true, description: "Delete objects under the bound canonical prefix."}
+  - {name: files.copy, resource_type: storage_object, delegable: true, description: "Copy with source-read and destination-write checks."}
+  - {name: files.move, resource_type: storage_object, delegable: true, description: "Move with source-read/delete and destination-write checks."}
+  - {name: presigned_urls.issue, resource_type: storage_object, delegable: true, description: "Issue bounded GET or PUT presigned URLs."}
+  - {name: quotas.read, resource_type: quota, delegable: true, description: "View limits, usage and reservations."}
+  - {name: quotas.manage, resource_type: quota, delegable: false, description: "Configure tenant or space quota."}
+  - {name: audit.read, resource_type: audit_event, delegable: false, description: "Search tenant audit events."}
+  - {name: access_reviews.read, resource_type: access_review, delegable: false, description: "View access review campaigns and items."}
+  - {name: access_reviews.manage, resource_type: access_review, delegable: false, description: "Create and decide access reviews."}

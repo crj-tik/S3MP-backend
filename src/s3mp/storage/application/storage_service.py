@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
+
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.connection import S3ConnectionConfig
@@ -31,6 +33,7 @@ class StorageStore(Protocol):
         limit: int,
         cursor: str | None,
         status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
+        application_id: UUID | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any] | None: ...
     async def create_space(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
@@ -112,9 +115,12 @@ class StorageService:
         limit: int = 50,
         cursor: str | None = None,
         status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
+        application_id: UUID | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "storage_spaces.read")
-        return await self.store.list_spaces(context.tenant_id, min(limit, 200), cursor, status)
+        return await self.store.list_spaces(
+            context.tenant_id, min(limit, 200), cursor, status, application_id
+        )
 
     async def get_space(self, context: PrincipalContext, space_id: str) -> dict[str, Any]:
         await self._require(context, "storage_spaces.read")
@@ -159,7 +165,20 @@ class StorageService:
             "provider_target_version": 1,
             "status": "active",
         }
-        return await self.store.create_space(context.tenant_id, data)
+        try:
+            return await self.store.create_space(context.tenant_id, data)
+        except ValueError as exc:
+            raise ApiError(
+                "application_not_active",
+                "The application is not active in this tenant",
+                status_code=422,
+            ) from exc
+        except IntegrityError as exc:
+            raise ApiError(
+                "storage_space_already_exists",
+                "This application already has a storage space with this name",
+                status_code=409,
+            ) from exc
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:

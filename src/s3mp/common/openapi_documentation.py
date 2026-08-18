@@ -20,8 +20,8 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "remove_group_member": "将成员从指定用户组移除。",
     "account_login": (
         "校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie "
-        "和可读的账户 CSRF Cookie，并返回当前账户真实的 platform_permissions；"
-        "但不会自动选择租户。"
+        "和可读的账户 CSRF Cookie，同时清除浏览器中已有的租户会话 Cookie；"
+        "并返回当前账户真实的 platform_permissions；但不会自动选择租户。"
     ),
     "register_account": (
         "注册全局平台账户；仅创建账户身份，不创建租户成员关系或平台角色；"
@@ -29,8 +29,8 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     ),
     "get_account_context": "获取当前账户及其可选择的活跃租户摘要。",
     "account_logout": (
-        "撤销当前账户会话并清除账户 Cookie；客户端必须把 s3mp_account_csrf Cookie "
-        "的值原样放入 X-S3MP-CSRF 请求头。"
+        "撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；客户端必须把 "
+        "s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。"
     ),
     "select_tenant_session": (
         "为账户选择一个活跃租户成员关系，并建立独立的租户会话；客户端必须把 "
@@ -51,7 +51,7 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "list_platform_role_bindings": "分页列出平台角色绑定及其账户、有效期和撤销状态。",
     "list_support_access": "分页列出支持访问申请及其待审批、已批准、已撤销或已过期状态。",
     "get_support_access": "获取单条支持访问申请的安全详情和授权物化记录。",
-    "list_platform_audit_events": "分页检索平台控制面审计事件，可按动作筛选。",
+    "list_platform_audit_events": "分页检索平台控制面审计事件，可按动作、资源类型和资源标识筛选。",
     "get_platform_audit_event": "获取单条平台审计事件的脱敏详情。",
     "list_groups": "列出当前租户的用户组。",
     "create_group": "创建当前租户的用户组。",
@@ -62,7 +62,7 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "create_role": "创建当前租户的自定义角色。",
     "get_role": "获取指定角色及其权限详情。",
     "update_role": "更新自定义角色；系统内置角色不可通过此接口修改。",
-    "list_role_bindings": "列出当前租户的角色绑定，可按主体筛选。",
+    "list_role_bindings": "列出当前租户的角色绑定，可按主体和逻辑存储空间筛选。",
     "create_role_binding": "在调用者可委派的权限和资源范围内创建角色绑定。",
     "get_role_binding": "获取指定角色绑定及其资源范围和有效期。",
     "revoke_role_binding": "撤销指定角色绑定并使相关授权立即失效。",
@@ -82,7 +82,7 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "list_storage_connections": "列出当前租户的对象存储连接摘要，不暴露连接凭据。",
     "get_storage_connection": "获取对象存储连接的脱敏配置和连通性状态。",
     "probe_storage_connection": "探测对象存储连接与其声明能力。",
-    "list_storage_spaces": "列出当前租户的逻辑存储空间。",
+    "list_storage_spaces": "列出当前租户的逻辑存储空间，可按应用筛选。",
     "create_storage_space": (
         "为指定应用创建逻辑存储空间；物理 S3 连接、Bucket 与对象命名空间均由平台派生。"
     ),
@@ -92,17 +92,17 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "delete_file": "提交文件删除；接口按声明的幂等与并发前置条件执行。",
     "create_file_operation": "创建文件复制、移动或其他受控异步操作。",
     "get_file_operation": "查询文件操作的状态、结果和可恢复错误。",
-    "create_upload": "创建受配额保护的上传会话。",
-    "get_upload": "查询上传会话的状态和已验证对象信息。",
-    "proxy_upload_content": "通过服务端代理向指定上传会话写入内容。",
-    "complete_upload": "验证已上传对象的元数据并将上传会话提交为可用文件。",
+    "create_direct_upload": "创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。",
+    "get_direct_upload": "查询直传会话状态并重新签发仍有效的短期 PUT URL。",
+    "complete_direct_upload": "校验直传对象的元数据并将直传会话提交为可用文件。",
     "create_presigned_download": "为已授权的单个文件签发短期下载 URL。",
     "create_multipart_upload": "创建受配额和授权保护的分段上传会话。",
     "get_multipart_upload": "查询分段上传会话状态。",
     "abort_multipart_upload": "中止分段上传并释放相关保留资源。",
     "list_multipart_parts": "列出已确认的分段上传分片。",
-    "create_multipart_part": "为分段上传创建一个待上传分片。",
-    "confirm_multipart_part": "确认已上传分片的 ETag 和实际内容长度。",
+    "upload_multipart_part": (
+        "接收一个分片二进制并由服务端写入对象存储，同时保存 provider 返回的 ETag。"
+    ),
     "complete_multipart_upload": "按已确认分片完成分段上传并验证最终对象。",
     "list_quotas": "列出当前租户或存储空间的配额与使用量。",
     "get_quota": "获取指定配额的限制、已用量和预留量。",
@@ -175,7 +175,11 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "decision": "本次授权模拟得出的允许或拒绝决定。",
     "destination_key": "文件复制或移动操作的目标规范相对对象路径。",
     "detail": "面向调用方的错误或结果补充说明。",
-    "direct_requested": "是否直接请求对象存储访问，而非通过服务端代理。",
+    "mode": "上传会话模式；当前为 direct 或 multipart。",
+    "method": "应用向短期上传 URL 发起请求时使用的 HTTP 方法。",
+    "url": "由平台签发的短期上传 URL；仅用于当前上传会话，不应持久化。",
+    "headers": "调用短期上传 URL 时必须携带的安全请求头集合。",
+    "part_size": "建议的分片大小，单位为字节。",
     "effect": "角色绑定对权限产生的允许或拒绝效果。",
     "endpoint": "对象存储服务的访问端点地址。",
     "evaluated_at": "本次权限或状态计算完成的时间，采用 UTC RFC 3339 格式。",

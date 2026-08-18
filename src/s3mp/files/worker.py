@@ -45,23 +45,32 @@ async def run_once(limit: int, *, redis: Redis | None = None) -> dict[str, int |
             application_store,
         )
         completed = await worker.run_once(os.getenv("S3MP_WORKER_ID", str(uuid4())), limit)
+        ingestion_store = SqlAlchemyIngestionStore(sessions)
         reconciler = FileApplicationService(
             file_store,
             object_storage=object_storage,
             storage_store=storage_store,
             authorization_store=authorization_store,
-            ingestion_store=SqlAlchemyIngestionStore(sessions),
+            ingestion_store=ingestion_store,
             principal_store=identity_store,
             api_key_state_store=application_store,
             reconciliation_max_attempts=settings.worker_max_attempts,
         )
         ingestions = await reconciler.reconcile_pending_ingestions()
         deletions = await reconciler.reconcile_pending_deletions()
+        reaped_reservations = await ingestion_store.reap_orphan_reservations(
+            limit=settings.worker_batch_size
+        )
+        purged_files = await file_store.purge_deleted_files(
+            settings.worker_retention_days, settings.worker_batch_size
+        )
         metrics = await file_store.operation_metrics()
         metrics.update(
             processed_operations=len(completed),
             reconciled_ingestions=len(ingestions),
             reconciled_deletions=len(deletions),
+            reaped_reservations=len(reaped_reservations),
+            purged_files=purged_files,
             redis_wakeup_available=redis is not None,
         )
         print("worker metrics: " + ", ".join(f"{key}={value}" for key, value in metrics.items()))

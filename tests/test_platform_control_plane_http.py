@@ -13,6 +13,8 @@ from s3mp.platform.domain.context import PlatformContext
 
 
 class _ControlPlaneService:
+    last_audit_filters: dict[str, Any] = {}
+
     async def list_accounts(
         self, *_args: Any, **_kwargs: Any
     ) -> tuple[list[dict[str, object]], None]:
@@ -40,6 +42,7 @@ class _ControlPlaneService:
         return None
 
     async def list_audit(self, *_args: Any, **_kwargs: Any) -> tuple[list[dict[str, object]], None]:
+        self.last_audit_filters = _kwargs
         return [], None
 
     async def get_audit(self, *_args: Any, **_kwargs: Any) -> None:
@@ -138,3 +141,29 @@ async def test_platform_list_filters_are_validated_and_cursors_are_filter_bound(
     assert mismatched_cursor.status_code == 400
     assert mismatched_cursor.json()["code"] == "invalid_cursor"
     assert invalid_support_status.status_code == 422
+
+
+async def test_platform_audit_resource_filters_are_forwarded_and_cursor_bound() -> None:
+    app = create_app(Settings())
+    service = _ControlPlaneService()
+    app.state.platform_control_plane = service
+    context = PlatformContext(uuid4(), uuid4(), frozenset({"platform.audit.read"}))
+
+    @app.middleware("http")
+    async def inject_platform_context(request: Any, call_next: Any) -> Any:
+        request.state.platform_context = context
+        return await call_next(request)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/platform/audit-events",
+            params={
+                "action": "platform.tenant_created",
+                "resource_type": "tenant",
+                "resource_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 200
+    assert service.last_audit_filters["resource_type"] == "tenant"
+    assert service.last_audit_filters["resource_id"]

@@ -29,7 +29,6 @@ class StorageUnsupportedError(StoragePolicyError):
 class StorageCapabilities:
     list_objects: bool = True
     head_object: bool = True
-    proxy_upload: bool = True
     presigned_get: bool = True
     presigned_put: bool = True
     multipart: bool = False
@@ -41,19 +40,9 @@ class StorageCapabilities:
             StorageOperation.LIST: self.list_objects,
             StorageOperation.HEAD: self.head_object,
             StorageOperation.GET: self.presigned_get,
-            StorageOperation.PUT: self.proxy_upload or self.presigned_put,
+            StorageOperation.PUT: self.presigned_put,
             StorageOperation.DELETE: self.delete_object,
         }[operation]
-
-
-def choose_upload_mode(capabilities: StorageCapabilities, *, direct_requested: bool) -> str:
-    """Select direct upload only when it is explicitly supported, otherwise proxy."""
-    if direct_requested and capabilities.presigned_put:
-        return "direct"
-    if capabilities.proxy_upload:
-        return "proxy"
-    raise StorageUnsupportedError("connection supports neither direct nor proxy upload")
-
 
 def canonical_object_key(key: str, *, allow_empty: bool = False) -> str:
     if not isinstance(key, str) or (not key and not allow_empty):

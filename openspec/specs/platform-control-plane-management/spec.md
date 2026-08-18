@@ -27,6 +27,21 @@ The system SHALL expose authorized, cursor-paginated read operations for platfor
 - **WHEN** an authorized platform role administrator lists active platform role bindings and revokes one returned binding identifier
 - **THEN** the system SHALL revoke that binding and record a platform audit event
 
+### Requirement: Platform audit events support resource filters
+The platform audit-event list SHALL support optional `resource_type` and
+`resource_id` filters in addition to the existing action filter. All supplied
+filters SHALL be combined with logical AND, and the endpoint SHALL remain
+protected by the platform audit read permission and return only the established
+safe audit projection.
+
+#### Scenario: Operator opens a tenant's audit history
+- **WHEN** an authorized operator requests audit events with the tenant resource type and identifier
+- **THEN** the API SHALL return only audit events for that exact resource
+
+#### Scenario: Resource filters are combined with action
+- **WHEN** an operator supplies `resource_type`, `resource_id`, and `action`
+- **THEN** the API SHALL return only events matching all three values
+
 ### Requirement: Support access leads to explicit bounded tenant entry
 The system SHALL require approved Support Access to materialize a temporary active Membership and time-bounded read-only tenant role. The requester SHALL obtain tenant data access only by explicitly selecting that tenant through the normal tenant-session operation; platform authority alone SHALL NOT create a tenant data context.
 

@@ -1,11 +1,9 @@
 from dataclasses import FrozenInstanceError
-from typing import cast
 from uuid import uuid4
 
 import pytest
 
 from s3mp.files.domain.service import (
-    FileConflictError,
     FileService,
     FileValidationError,
     ObjectMetadata,
@@ -62,18 +60,6 @@ class ProbeStore:
         return None
 
 
-class FakeQuota:
-    def __init__(self) -> None:
-        self.reserved: list[int] = []
-
-    async def reserve(self, byte_count: int) -> object:
-        self.reserved.append(byte_count)
-        return byte_count
-
-    async def release(self, reservation: object) -> None:
-        self.reserved.remove(cast(int, reservation))
-
-
 @pytest.fixture
 def service() -> FileService:
     adapter = S3Adapter(
@@ -112,7 +98,7 @@ async def test_probes_are_read_only_or_confined_to_test_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_file_service_authorizes_prefix_and_validates_proxy_upload(
+async def test_file_service_authorizes_prefix_and_validates_direct_upload(
     service: FileService,
 ) -> None:
     store = service._store
@@ -121,23 +107,21 @@ async def test_file_service_authorizes_prefix_and_validates_proxy_upload(
     store.objects["team2/leak.txt"] = ObjectMetadata("team2/leak.txt", 1, "text/plain")
     assert [item.key for item in await service.list_authorized("team")] == ["team/a.txt"]
     with pytest.raises(FileValidationError):
-        await service.proxy_upload("team/new", "team", b"hi", 3, "text/plain")
+        service.create_upload_session(
+            uuid4(), uuid4(), uuid4(), "team/new", "team", -1, "text/plain"
+        )
     with pytest.raises(FileValidationError):
-        await service.proxy_upload("team/new", "team", b"hi", 2, "")
-    with pytest.raises(FileConflictError):
-        await service.proxy_upload("team/a.txt", "team", b"x", 1, "text/plain")
-    uploaded = await service.proxy_upload(
-        "team/a.txt", "team", b"x", 1, "text/plain", overwrite=True
-    )
-    assert uploaded.etag == "multipart-etag-2"
+        service.create_upload_session(
+            uuid4(), uuid4(), uuid4(), "team/new", "team", 2, ""
+        )
 
 
 @pytest.mark.asyncio
-async def test_proxy_upload_reserves_quota(service: FileService) -> None:
-    quota = FakeQuota()
-    service._quota = quota
-    await service.proxy_upload("team/quota.txt", "team", b"abc", 3, "text/plain")
-    assert quota.reserved == [3]
+async def test_direct_upload_preserves_declared_metadata(service: FileService) -> None:
+    session = service.create_upload_session(
+        uuid4(), uuid4(), uuid4(), "team/quota.txt", "team", 3, "text/plain"
+    )
+    assert session.declared_length == 3
 
 
 @pytest.mark.asyncio

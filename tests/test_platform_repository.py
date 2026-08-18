@@ -174,6 +174,9 @@ async def test_platform_management_workflow_discovers_and_closes_control_plane_r
         assert await store.revoke_platform_role(
             actor_user_id=actor_id, binding_id=UUID(str(binding["id"]))
         )
+        assert await store.revoke_platform_role(
+            actor_user_id=actor_id, binding_id=UUID(str(binding["id"]))
+        )
 
         requested = await store.request_support_access(
             requester_user_id=target_id,

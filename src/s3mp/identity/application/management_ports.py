@@ -83,6 +83,7 @@ class AuthorizationManagementStore(Protocol):
         principal_id: UUID | None = None,
         limit: int = 50,
         cursor: UUID | None = None,
+        storage_space_id: UUID | None = None,
     ) -> Page: ...
     async def create_role_binding(
         self,

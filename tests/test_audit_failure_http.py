@@ -25,7 +25,9 @@ class FailCloseFileService:
     def __init__(self) -> None:
         self.storage_touched = False
 
-    async def list_files(self, tenant_id: Any, space_id: str, prefix: str) -> list[dict[str, Any]]:
+    async def list_files(
+        self, tenant_id: Any, space_id: str, prefix: str, status: Any = None
+    ) -> list[dict[str, Any]]:
         return []
 
     async def get_file(self, tenant_id: Any, space_id: str, file_id: str) -> dict[str, Any]:
@@ -57,7 +59,7 @@ class FailCloseFileService:
     async def get_file_operation(self, tenant_id: Any, op_id: str) -> dict[str, Any]:
         return {"id": op_id, "status": "pending"}
 
-    async def create_upload(
+    async def create_direct_upload(
         self,
         ctx: PrincipalContext,
         space_id: str,
@@ -66,10 +68,19 @@ class FailCloseFileService:
     ) -> dict[str, Any]:
         return {"id": str(uuid4()), "status": "pending"}
 
-    async def get_upload(self, tenant_id: Any, upload_id: str) -> dict[str, Any]:
-        return {"id": upload_id, "status": "pending"}
+    async def get_direct_upload(self, ctx: PrincipalContext, upload_id: str) -> dict[str, Any]:
+        return {
+            "id": upload_id,
+            "status": "pending",
+            "mode": "direct",
+            "url": "https://x",
+            "method": "PUT",
+            "headers": {},
+        }
 
-    async def complete_upload(self, tenant_id: Any, upload_id: str, body: Any) -> dict[str, Any]:
+    async def complete_direct_upload(
+        self, ctx: PrincipalContext, upload_id: str, body: Any
+    ) -> dict[str, Any]:
         return {"id": upload_id, "status": "completed"}
 
     async def create_presigned_download(
@@ -95,13 +106,20 @@ class FailCloseFileService:
     async def list_multipart_parts(self, tenant_id: Any, mp_id: str) -> list[dict[str, Any]]:
         return []
 
-    async def create_multipart_part(self, tenant_id: Any, mp_id: str, body: Any) -> dict[str, Any]:
-        return {"part_number": body.part_number}
-
-    async def confirm_multipart_part(
-        self, tenant_id: Any, mp_id: str, part_number: int, body: Any
+    async def upload_multipart_part(
+        self,
+        ctx: PrincipalContext,
+        mp_id: str,
+        part_number: int,
+        body: bytes,
+        content_length: int,
     ) -> dict[str, Any]:
-        return {"part_number": part_number, "etag": body.etag}
+        return {
+            "id": str(uuid4()),
+            "part_number": part_number,
+            "etag": "p1",
+            "content_length": content_length,
+        }
 
     async def complete_multipart_upload(
         self, tenant_id: Any, mp_id: str, body: Any

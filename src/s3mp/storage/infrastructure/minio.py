@@ -8,9 +8,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, cast
 
-import boto3  # type: ignore[import-untyped]
-from botocore.config import Config  # type: ignore[import-untyped]
-from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-untyped]
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 
 from s3mp.common.config import Settings
 from s3mp.storage.domain.policy import ProviderTarget
@@ -111,6 +111,43 @@ class MinioObjectStorageAdapter:
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 object delete failed") from exc
 
+    async def list_objects(
+        self,
+        prefix: str = "",
+        *,
+        continuation_token: str | None = None,
+        max_keys: int = 1000,
+    ) -> tuple[list[ObjectMetadata], str | None]:
+        """List objects only inside the configured shared bucket.
+
+        The caller supplies a server-derived namespace prefix; bucket selection
+        and credentials remain owned by this adapter.
+        """
+        params: dict[str, Any] = {
+            "Bucket": self._bucket,
+            "Prefix": prefix,
+            "MaxKeys": max(1, min(max_keys, 1000)),
+        }
+        if continuation_token:
+            params["ContinuationToken"] = continuation_token
+        try:
+            response: dict[str, Any] = await asyncio.to_thread(
+                self._client.list_objects_v2, **params
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStorageUnavailable("S3 object listing failed") from exc
+        objects = [
+            ObjectMetadata(
+                key=str(item["Key"]),
+                content_length=int(item.get("Size", 0)),
+                etag=str(item.get("ETag", "")).strip('"') or None,
+                content_type=None,
+                version_id=None,
+            )
+            for item in response.get("Contents", [])
+        ]
+        return objects, response.get("NextContinuationToken")
+
     async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> ObjectMetadata:
         self._assert_shared_bucket(source)
         self._assert_shared_bucket(destination)
@@ -140,6 +177,28 @@ class MinioObjectStorageAdapter:
             return cast(str, signed_url)
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 signing failed") from exc
+
+    async def presign_put(
+        self, target: ProviderTarget, content_type: str, expires_in: int
+    ) -> str:
+        """Create a short-lived PUT URL for one server-derived object target."""
+        self._assert_shared_bucket(target)
+        if not content_type or content_type.strip() != content_type:
+            raise ValueError("content type is required for a presigned PUT")
+        try:
+            signed_url = await asyncio.to_thread(
+                self._client.generate_presigned_url,
+                "put_object",
+                Params={
+                    "Bucket": target.bucket,
+                    "Key": target.key,
+                    "ContentType": content_type,
+                },
+                ExpiresIn=expires_in,
+            )
+            return cast(str, signed_url)
+        except (BotoCoreError, ClientError) as exc:
+            raise ObjectStorageUnavailable("S3 PUT signing failed") from exc
 
     # ── Multipart ──────────────────────────────────────────────────────────
 

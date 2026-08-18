@@ -1,9 +1,7 @@
 ## Purpose
 
 实现受租户和目录授权保护的文件数据面，并封装公司 S3 协议子集、预签名、multipart、对象变更状态机、配额及审计，使调用方获得稳定且可验证的文件服务行为。
-
 ## Requirements
-
 ### Requirement: S3 兼容连接
 每个存储连接 SHALL 显式配置 endpoint、region、SigV4 和 path-style；未声明的 AWS S3 能力 SHALL 默认返回 unsupported，AK/SK MUST 仅由服务端秘密来源注入。
 
@@ -60,11 +58,16 @@ Multipart 会话 SHALL 绑定租户、主体、storage space、canonical key、�
 - **THEN** 系统 SHALL 保存可恢复的部分失败状态
 
 ### Requirement: 配额和审计
-上传前 SHALL 预留容量，完成后 SHALL 按实际对象状态结算；文件、预签名、删除和失败 SHALL 生成不含凭证或完整 URL 的租户审计。
+上传前 SHALL 预留应用和租户容量，完成后 SHALL 按实际对象状态结算；文件、预签名、删除、失败和配额拒绝 SHALL 生成不含凭证或完整 URL 的租户审计，并 SHALL 能按应用聚合使用量。
+
+#### Scenario: Actual size exceeds application quota
+- **WHEN** 上传对象实际大小导致应用或租户配额超限
+- **THEN** 系统 SHALL 隔离或受控清理对象而不标记可用，并 SHALL 释放或结算 reservation
 
 #### Scenario: 实际大小导致超额
 - **WHEN** 上传对象实际大小超过声明并导致配额超限
 - **THEN** 系统 SHALL 隔离或受控清理对象而不标记可用
+
 ### Requirement: Executable file and governance lifecycle API
 The service SHALL expose contract-declared storage, file, upload, multipart, object-operation, quota, and audit operations through authenticated tenant-scoped HTTP endpoints while preserving authorization, object-state, quota, and audit requirements. Every operation with a declared permission SHALL enforce that permission before its application service performs a read or mutation; API Key credentials SHALL be rejected from management operations before handler execution.
 
@@ -90,3 +93,15 @@ File query, upload, multipart, object-operation, quota, and audit use cases SHAL
 #### Scenario: Same-tenant caller queries another principal's operation
 - **WHEN** an authenticated caller requests a file operation created by a different principal without current delegated authorization for its affected paths
 - **THEN** the service SHALL return `403 permission_denied` without returning operation metadata
+
+### Requirement: File operation enum filters
+文件列表和文件操作查询 SHALL 使用目录中的 file、upload、multipart 和 file-operation 状态枚举；`GET /files` SHALL 支持 `status`，文件操作查询 SHALL 使用强类型状态。服务层 SHALL 校验状态与所属应用命名空间的关联，仓储层 SHALL 执行状态条件并排除软删除或隔离记录。
+
+#### Scenario: File list is filtered by status
+- **WHEN** 调用方按目录中的文件状态查询应用内文件
+- **THEN** 系统 SHALL 只返回当前应用命名空间内匹配且可用的记录
+
+#### Scenario: Isolated file is queried by status
+- **WHEN** 调用方尝试通过状态筛选读取 quarantined 或已删除文件
+- **THEN** 系统 SHALL 按文件可见性规则排除该记录，不得因筛选参数绕过隔离
+

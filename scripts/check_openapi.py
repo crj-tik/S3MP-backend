@@ -16,6 +16,15 @@ HTTP_METHODS = frozenset({"get", "put", "post", "delete", "options", "head", "pa
 # FastAPI auto-generates 422 for any endpoint with validation (path/query/body params).
 # It is not a meaningful contract difference — exclude it from comparison.
 IGNORED_RESPONSE_STATUSES = frozenset({"422"})
+REMOVED_UPLOAD_MARKERS = frozenset(
+    {
+        "proxy_upload_content",
+        "create_multipart_part",
+        "confirm_multipart_part",
+        "direct_requested",
+        "/api/v1/uploads/",
+    }
+)
 
 
 def operation_signatures(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -186,6 +195,15 @@ def main() -> int:
     if not isinstance(baseline, dict):
         print("contracts/openapi.yaml must contain an object", file=sys.stderr)
         return 1
+
+    # These names belonged to the deleted proxy/metadata-only upload protocol.
+    # Keep the check deliberately negative so a future route or schema cannot be
+    # reintroduced in the published contract by regeneration drift.
+    baseline_text = BASELINE.read_text(encoding="utf-8")
+    for marker in sorted(REMOVED_UPLOAD_MARKERS):
+        if marker in baseline_text:
+            print(f"Removed upload contract marker is still published: {marker}", file=sys.stderr)
+            return 1
 
     runtime = app.openapi()
     runtime_operations = operation_signatures(runtime)

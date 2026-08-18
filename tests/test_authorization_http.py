@@ -17,6 +17,7 @@ def _ctx() -> PrincipalContext:
 class FakeAuthorizationManagement:
     def __init__(self, *, cross_tenant_principal: bool = False) -> None:
         self.cross_tenant_principal = cross_tenant_principal
+        self.last_storage_space_id: Any = None
 
     async def require_permission(self, _ctx: PrincipalContext, _permission: str) -> None:
         return None
@@ -97,8 +98,9 @@ class FakeAuthorizationManagement:
 
     async def list_role_bindings(
         self, _ctx: PrincipalContext, principal_id: Any = None, **_page: Any
-    ) -> tuple[list[dict[str, Any]], None]:
-        return ([self._binding(_ctx)], None)
+    ) -> tuple[list[dict[str, Any]], Any]:
+        self.last_storage_space_id = _page.get("storage_space_id")
+        return ([self._binding(_ctx)], uuid4() if self.last_storage_space_id else None)
 
     async def create_role_binding(self, _ctx: PrincipalContext, body: Any) -> dict[str, Any]:
         return self._binding(_ctx, "b-new")
@@ -188,6 +190,38 @@ async def test_list_groups_returns_200() -> None:
 
     assert response.status_code == 200
     assert response.json()["items"][0]["name"] == "engineers"
+
+
+async def test_permission_catalog_reads_project_contract() -> None:
+    app = make_app({"authorization_management": FakeAuthorizationManagement()}, context=_ctx())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/v1/permission_catalog")
+
+    assert response.status_code == 200
+    assert response.json()["permissions"]
+
+
+async def test_list_role_bindings_forwards_storage_space_filter() -> None:
+    ctx = _ctx()
+    service = FakeAuthorizationManagement()
+    app = make_app({"authorization_management": service}, context=ctx)
+    storage_space_id = uuid4()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/role_bindings", params={"storage_space_id": str(storage_space_id)}
+        )
+
+    assert response.status_code == 200
+    assert service.last_storage_space_id == storage_space_id
+    cursor = response.json()["next_cursor"]
+    assert cursor
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        mismatched = await client.get(
+            "/api/v1/role_bindings",
+            params={"storage_space_id": str(uuid4()), "cursor": cursor},
+        )
+    assert mismatched.status_code == 400
+    assert mismatched.json()["code"] == "invalid_cursor"
 
 
 async def test_create_role_binding_returns_201() -> None:

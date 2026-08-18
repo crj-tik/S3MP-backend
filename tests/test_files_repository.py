@@ -13,6 +13,7 @@ from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
 from s3mp.files.infrastructure.models import FileObjectModel, FileOperationModel
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
+from s3mp.governance.infrastructure.models import QuotaModel
 from s3mp.identity.infrastructure.models import PrincipalModel, PrincipalType
 from s3mp.storage.infrastructure.models import StorageConnectionModel, StorageSpaceModel
 
@@ -186,6 +187,21 @@ async def test_delete_queues_recoverable_intent_only_after_etag_match(engine: As
     try:
         async with factory() as session:
             space_id, _ = await _seed_space(session, tenant_id)
+            session.add_all(
+                [
+                    QuotaModel(
+                        tenant_id=tenant_id,
+                        limit_bytes=1000,
+                        used_bytes=100,
+                    ),
+                    QuotaModel(
+                        tenant_id=tenant_id,
+                        storage_space_id=space_id,
+                        limit_bytes=500,
+                        used_bytes=100,
+                    ),
+                ]
+            )
             session.add(
                 PrincipalModel(
                     id=principal_id,
@@ -238,6 +254,27 @@ async def test_delete_queues_recoverable_intent_only_after_etag_match(engine: As
         assert not [
             row for row in await store.list_pending_deletions() if row["id"] == str(file_obj.id)
         ]
+        async with factory() as session:
+            quotas = list(
+                await session.scalars(
+                    select(QuotaModel)
+                    .where(QuotaModel.tenant_id == tenant_id)
+                    .order_by(QuotaModel.storage_space_id)
+                )
+            )
+            deleted = await session.get(FileObjectModel, file_obj.id)
+        assert [quota.used_bytes for quota in quotas] == [99, 99]
+        assert deleted is not None and deleted.status == "deleted"
+        await store.finalize_file_delete(tenant_id, file_obj.id)
+        async with factory() as session:
+            quotas_after_retry = list(
+                await session.scalars(
+                    select(QuotaModel)
+                    .where(QuotaModel.tenant_id == tenant_id)
+                    .order_by(QuotaModel.storage_space_id)
+                )
+            )
+        assert [quota.used_bytes for quota in quotas_after_retry] == [99, 99]
     finally:
         await delete_tenant(engine, tenant_id)
 

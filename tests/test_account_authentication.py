@@ -40,6 +40,9 @@ class AccountStore:
     async def revoke_account_session(self, _session_id: UUID) -> None:
         return None
 
+    async def revoke_tenant_sessions(self, _user_id: UUID) -> None:
+        return None
+
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None:
         return {"account": {"id": str(user_id)}, "tenants": []}
 

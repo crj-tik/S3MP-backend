@@ -73,6 +73,15 @@ SELECT id, tenant_id, application_id, limit_bytes,
  ORDER BY tenant_id, id
 """
 
+MIGRATION_AUDIT_QUERY = """
+SELECT
+  (SELECT COUNT(*) FROM file_object WHERE status = 'deleting') AS deleting_files,
+  (SELECT COUNT(*) FROM quota_reservation WHERE status = 'reserved') AS reserved_reservations,
+  (SELECT COUNT(*) FROM file_object f
+    LEFT JOIN storage_space s ON s.tenant_id = f.tenant_id AND s.id = f.storage_space_id
+   WHERE f.status = 'available' AND (s.id IS NULL OR s.status <> 'active')) AS missing_namespaces
+"""
+
 
 async def reconcile(apply: bool) -> list[dict[str, Any]]:
     url = _database_url()
@@ -83,6 +92,9 @@ async def reconcile(apply: bool) -> list[dict[str, Any]]:
     engine = create_engine(url)
     try:
         async with engine.begin() as connection:
+            migration_audit = dict(
+                (await connection.execute(text(MIGRATION_AUDIT_QUERY))).mappings().one()
+            )
             rows = [dict(row) for row in (await connection.execute(text(USAGE_QUERY))).mappings()]
             for row in rows:
                 row["usage_delta"] = int(row["calculated_used_bytes"]) - int(
@@ -94,9 +106,27 @@ async def reconcile(apply: bool) -> list[dict[str, Any]]:
             if apply:
                 for row in rows:
                     await connection.execute(
-                        text("UPDATE quota SET used_bytes = :used WHERE id = :id"),
-                        {"used": row["calculated_used_bytes"], "id": row["id"]},
+                        text(
+                            "UPDATE quota "
+                            "SET used_bytes = :used, "
+                            "consistency_status = 'reconciled', "
+                            "measured_at = CURRENT_TIMESTAMP, "
+                            "drift_summary = :summary "
+                            "WHERE id = :id"
+                        ),
+                        {
+                            "used": row["calculated_used_bytes"],
+                            "id": row["id"],
+                            "summary": json.dumps(
+                                {
+                                    "usage_delta": row["usage_delta"],
+                                    "source": "database_file_projection",
+                                }
+                            ),
+                        },
                     )
+        for row in rows:
+            row["migration_audit"] = migration_audit
         return rows
     finally:
         await engine.dispose()

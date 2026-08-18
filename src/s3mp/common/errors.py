@@ -1,5 +1,6 @@
 """Stable API error types and handlers."""
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -8,6 +9,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
@@ -63,7 +66,16 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(status_code=exc.status_code, content=_body(request, code, message))
 
     @app.exception_handler(Exception)
-    async def unhandled_error(request: Request, _exc: Exception) -> JSONResponse:
+    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        # Keep the public response generic, but retain the request id and full
+        # traceback in server logs so production 500s are diagnosable.
+        logger.exception(
+            "Unhandled API exception request_id=%s method=%s path=%s",
+            request.state.request_id,
+            request.method,
+            request.url.path,
+            exc_info=exc,
+        )
         return JSONResponse(
             status_code=500,
             content=_body(request, "internal_error", "An internal error occurred"),

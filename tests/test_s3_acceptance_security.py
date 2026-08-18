@@ -13,10 +13,8 @@ from s3mp.authorization.domain.evaluator import (
     Decision,
     evaluate,
 )
-from s3mp.files.domain.multipart import (
-    MultipartService,
-    MultipartSession,
-    MultipartStatus,
+from s3mp.files.domain.file_operations import (
+    ObjectMutationService,
     ObjectOperation,
     OperationStatus,
 )
@@ -43,7 +41,6 @@ from s3mp.storage.domain.policy import (
     acceptance_prefix_round_trip,
     build_authorized_request,
     canonical_object_key,
-    choose_upload_mode,
     read_probe,
 )
 
@@ -175,7 +172,6 @@ class TestS3Capabilities:
             list_objects=True,
             head_object=True,
             presigned_get=True,
-            proxy_upload=False,
             presigned_put=False,
             multipart=False,
             copy_object=False,
@@ -192,18 +188,6 @@ class TestS3Capabilities:
         cmd = AuthorizedCommand(uuid4(), uuid4(), StorageOperation.DELETE, "bucket", "deleteme.txt")
         with pytest.raises(StorageUnsupportedError, match="disabled"):
             build_authorized_request(_adapter(), cmd, caps)
-
-    def test_choose_upload_mode_direct_vs_proxy(self) -> None:
-        proxy_only = StorageCapabilities(proxy_upload=True, presigned_put=False)
-        assert choose_upload_mode(proxy_only, direct_requested=True) == "proxy"
-
-        direct_ok = StorageCapabilities(proxy_upload=True, presigned_put=True)
-        assert choose_upload_mode(direct_ok, direct_requested=True) == "direct"
-        assert choose_upload_mode(direct_ok, direct_requested=False) == "proxy"
-
-        neither = StorageCapabilities(proxy_upload=False, presigned_put=False)
-        with pytest.raises(StorageUnsupportedError):
-            choose_upload_mode(neither, direct_requested=True)
 
     def test_read_probe_is_non_destructive(self) -> None:
         class FailingProbe:
@@ -340,167 +324,6 @@ class TestFileOperations:
         head_result = ObjectMetadata("team/file.txt", 200, "text/plain")
         with pytest.raises(FileValidationError, match="metadata"):
             asyncio.run(svc.complete_upload(session))
-
-
-class TestMultipartLifecycle:
-    """Multipart session creation, part upload, completion, abort, and cleanup."""
-
-    def test_multipart_session_is_principal_bound(self) -> None:
-        store_calls: list[str] = []
-
-        class RecordingStore:
-            async def create_multipart(self, key: str, content_type: str) -> str:
-                store_calls.append("create")
-                return "upload-1"
-
-            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
-                return None
-
-            async def list_parts(self, upload_id: str) -> list[Any]:
-                return []
-
-            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
-                return ObjectMetadata("key", 100, "text/plain")
-
-            async def abort_multipart(self, upload_id: str) -> None:
-                store_calls.append("abort")
-
-            async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
-                return ObjectMetadata(destination_key, 100, "text/plain")
-
-            async def delete(self, key: str) -> None:
-                return None
-
-        svc = MultipartService(RecordingStore())
-        session = MultipartSession(
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            "team/file.bin",
-            100,
-            "application/octet-stream",
-            uuid4(),
-            datetime.now(UTC) + timedelta(hours=1),
-        )
-
-        async def run() -> None:
-            created = await svc.create(session)
-            assert created.provider_upload_id == "upload-1"
-            # Cross-principal access rejected
-            with pytest.raises(FileValidationError, match="different principal"):
-                await svc.add_part(created, uuid4(), 1, b"x" * 100)
-            # Correct principal
-            with pytest.raises(FileValidationError, match="invalid multipart part"):
-                await svc.add_part(created, session.principal_id, 0, b"x" * 100)
-            # Abort
-            aborted = await svc.abort(created, session.principal_id)
-            assert aborted.status is MultipartStatus.ABORTED
-
-        asyncio.run(run())
-
-    def test_cleanup_expired_sessions(self) -> None:
-        aborted: list[str] = []
-
-        class CleanupStore:
-            async def create_multipart(self, key: str, content_type: str) -> str:
-                return "upload-1"
-
-            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
-                return None
-
-            async def list_parts(self, upload_id: str) -> list[Any]:
-                return []
-
-            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
-                return ObjectMetadata("key", 100, "text/plain")
-
-            async def abort_multipart(self, upload_id: str) -> None:
-                aborted.append(upload_id)
-
-            async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
-                return ObjectMetadata(destination_key, 100, "text/plain")
-
-            async def delete(self, key: str) -> None:
-                return None
-
-        svc = MultipartService(CleanupStore())
-        expired = MultipartSession(
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            "old.bin",
-            100,
-            "text/plain",
-            uuid4(),
-            _now() - timedelta(hours=1),
-            provider_upload_id="upload-old",
-        )
-        active = MultipartSession(
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            uuid4(),
-            "new.bin",
-            100,
-            "text/plain",
-            uuid4(),
-            _now() + timedelta(hours=1),
-            provider_upload_id="upload-new",
-        )
-
-        async def run() -> None:
-            cleaned = await svc.cleanup_expired([expired, active], _now())
-            assert len(cleaned) == 1
-            assert cleaned[0].status is MultipartStatus.EXPIRED
-            assert "upload-old" in aborted
-            assert "upload-new" not in aborted
-
-        asyncio.run(run())
-
-    def test_move_partial_failure_and_batch_delete_confirmation(self) -> None:
-        delete_called: list[str] = []
-
-        class MoveStore:
-            async def create_multipart(self, key: str, content_type: str) -> str:
-                return "upload-1"
-
-            async def upload_part(self, upload_id: str, number: int, body: bytes) -> Any:
-                return None
-
-            async def list_parts(self, upload_id: str) -> list[Any]:
-                return []
-
-            async def complete_multipart(self, upload_id: str, parts: list[Any]) -> ObjectMetadata:
-                return ObjectMetadata("key", 100, "text/plain")
-
-            async def abort_multipart(self, upload_id: str) -> None:
-                pass
-
-            async def copy(self, source_key: str, destination_key: str) -> ObjectMetadata:
-                return ObjectMetadata(destination_key, 100, "text/plain")
-
-            async def delete(self, key: str) -> None:
-                delete_called.append(key)
-
-        svc = MultipartService(MoveStore())
-
-        async def run() -> None:
-            # Successful move
-            op = ObjectOperation(uuid4(), uuid4(), uuid4(), "move", "src/a.txt", "dst/a.txt")
-            result = await svc.move(op)
-            assert result.status is OperationStatus.COMPLETED
-            assert "src/a.txt" in delete_called
-
-            # Batch delete with mismatch
-            op_id = uuid4()
-            with pytest.raises(FileValidationError, match="confirmation"):
-                await svc.delete_batch(
-                    ["a.txt", "b.txt"], ["a.txt"], op_id, tenant_id=uuid4(), principal_id=uuid4()
-                )
-
-        asyncio.run(run())
 
 
 # ── 10.4: Multi-tenant Security Drills ───────────────────────────────────────
@@ -676,7 +499,7 @@ class TestFailureScenarios:
                 if delete_fails:
                     raise RuntimeError("delete failed")
 
-        svc = MultipartService(FailingDeleteStore())
+        svc = ObjectMutationService(FailingDeleteStore())
 
         async def run() -> None:
             op = ObjectOperation(uuid4(), uuid4(), uuid4(), "move", "src/a.txt", "dst/a.txt")
@@ -711,7 +534,7 @@ class TestFailureScenarios:
             async def delete(self, key: str) -> None:
                 raise AssertionError("batch confirmation must precede storage access")
 
-        svc = MultipartService(UnusedStore())
+        svc = ObjectMutationService(UnusedStore())
         op_id = uuid4()
 
         async def run() -> None:

@@ -17,6 +17,7 @@ def _ctx() -> PrincipalContext:
 class FakeStorageService:
     def __init__(self) -> None:
         self.calls = 0
+        self.last_application_id: Any = None
 
     async def list_connections(
         self, tenant_id: Any, cursor: str | None = None, **_: Any
@@ -43,6 +44,7 @@ class FakeStorageService:
     async def list_spaces(
         self, context: Any, cursor: str | None = None, **_: Any
     ) -> tuple[list[dict[str, Any]], str | None]:
+        self.last_application_id = _.get("application_id")
         return (
             [
                 {
@@ -57,7 +59,7 @@ class FakeStorageService:
                     "created_at": datetime.now(UTC).isoformat(),
                 }
             ],
-            None,
+            str(uuid4()) if self.last_application_id is not None else None,
         )
 
     async def get_space(self, tenant_id: Any, space_id: str) -> dict[str, Any]:
@@ -108,6 +110,28 @@ async def test_list_storage_connections_returns_200() -> None:
 
     assert response.status_code == 200
     assert response.json()["items"][0]["name"] == "primary"
+
+
+async def test_list_storage_spaces_forwards_application_filter() -> None:
+    service = FakeStorageService()
+    app = make_app({"storage_service": service}, context=_ctx())
+    application_id = uuid4()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/storage_spaces", params={"application_id": str(application_id)}
+        )
+
+    assert response.status_code == 200
+    assert service.last_application_id == application_id
+    cursor = response.json()["next_cursor"]
+    assert cursor
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        mismatched = await client.get(
+            "/api/v1/storage_spaces",
+            params={"application_id": str(uuid4()), "cursor": cursor},
+        )
+    assert mismatched.status_code == 400
+    assert mismatched.json()["code"] == "invalid_cursor"
 
 
 async def test_create_storage_connection_is_removed_after_shared_profile_cutover() -> None:
@@ -173,6 +197,28 @@ async def test_create_storage_space_rejects_legacy_physical_target_fields() -> N
         )
 
     assert response.status_code == 422
+
+
+async def test_create_storage_space_reports_inactive_application() -> None:
+    class InvalidApplicationService(FakeStorageService):
+        async def create_space(self, _context: Any, _body: Any) -> dict[str, Any]:
+            from s3mp.common.errors import ApiError
+
+            raise ApiError(
+                "application_not_active",
+                "The application is not active in this tenant",
+                status_code=422,
+            )
+
+    app = make_app({"storage_service": InvalidApplicationService()}, context=_ctx())
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/storage_spaces",
+            json={"name": "应用存储", "application_id": str(uuid4())},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "application_not_active"
 
 
 async def test_unauthenticated_request_returns_401() -> None:

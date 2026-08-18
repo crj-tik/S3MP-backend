@@ -51,6 +51,7 @@ class AccountService:
     async def logout(self, _context: PlatformContext) -> None:
         return None
 
+
     async def select_tenant(self, _context: PlatformContext, _tenant_id: object) -> tuple[str, str]:
         return "tenant-opaque", "tenant-csrf"
 
@@ -170,10 +171,45 @@ async def test_logout_with_csrf_revokes_account_session_and_clears_cookies() -> 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         client.cookies.set("s3mp_account_session", "opaque")
         client.cookies.set("s3mp_account_csrf", "csrf")
+        client.cookies.set("s3mp_session", "tenant-opaque")
+        client.cookies.set("s3mp_csrf", "tenant-csrf")
         response = await client.post("/api/v1/auth/logout", headers={"X-S3MP-CSRF": "csrf"})
 
     assert response.status_code == 204
-    assert "Max-Age=0" in response.headers["set-cookie"]
+    set_cookie = response.headers["set-cookie"]
+    assert set_cookie.count("Max-Age=0") == 4
+
+
+@pytest.mark.asyncio
+async def test_login_clears_stale_tenant_cookies() -> None:
+    app = app_with_account_context()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set("s3mp_session", "revoked-tenant")
+        client.cookies.set("s3mp_csrf", "old-csrf")
+        response = await client.post(
+            "/api/v1/auth/login", json={"email": "known@test", "password": "valid"}
+        )
+
+    set_cookie = response.headers["set-cookie"]
+    assert 's3mp_session=""' in set_cookie and "Max-Age=0" in set_cookie
+    assert 's3mp_csrf=""' in set_cookie and "Max-Age=0" in set_cookie
+
+
+@pytest.mark.asyncio
+async def test_account_endpoint_ignores_stale_revoked_tenant_cookie() -> None:
+    app = app_with_account_context()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        client.cookies.set("s3mp_account_session", "account-opaque")
+        client.cookies.set("s3mp_account_csrf", "account-csrf")
+        client.cookies.set("s3mp_session", "revoked-tenant")
+        client.cookies.set("s3mp_csrf", "tenant-csrf")
+        response = await client.post(
+            "/api/v1/auth/tenant-sessions",
+            json={"tenant_id": str(uuid4())},
+            headers={"X-S3MP-CSRF": "account-csrf"},
+        )
+
+    assert response.status_code == 204
 
 
 @pytest.mark.asyncio
