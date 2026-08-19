@@ -15,7 +15,12 @@ from s3mp.applications.infrastructure.models import (
     ApplicationStatus,
 )
 from s3mp.audit.infrastructure.models import AuditEventModel
-from s3mp.identity.infrastructure.models import MembershipModel, PrincipalModel, PrincipalType
+from s3mp.identity.infrastructure.models import (
+    MembershipModel,
+    PrincipalModel,
+    PrincipalType,
+    UserModel,
+)
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
@@ -163,10 +168,17 @@ class SqlAlchemyApplicationStore:
             if membership_id is not None:
                 membership = await session.scalar(
                     select(MembershipModel)
+                    .join(
+                        PrincipalModel,
+                        (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                        & (PrincipalModel.id == MembershipModel.principal_id),
+                    )
+                    .join(UserModel, UserModel.id == MembershipModel.user_id)
                     .where(
                         MembershipModel.tenant_id == tenant_id,
                         MembershipModel.id == membership_id,
                     )
+                    .where(PrincipalModel.enabled.is_(True), UserModel.status == "active")
                     .with_for_update()
                 )
                 if membership is None:
@@ -225,6 +237,7 @@ class SqlAlchemyApplicationStore:
         app_id: UUID,
         membership_id: UUID,
         actor_principal_id: UUID,
+        expected_application_version: int | None = None,
     ) -> dict[str, object]:
         from datetime import UTC
 
@@ -241,11 +254,23 @@ class SqlAlchemyApplicationStore:
             )
             membership = await session.scalar(
                 select(MembershipModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                    & (PrincipalModel.id == MembershipModel.principal_id),
+                )
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
                 .where(MembershipModel.tenant_id == tenant_id, MembershipModel.id == membership_id)
+                .where(PrincipalModel.enabled.is_(True), UserModel.status == "active")
                 .with_for_update()
             )
             if app is None:
                 raise ValueError("application_not_found")
+            if (
+                expected_application_version is not None
+                and app.authorization_version != expected_application_version
+            ):
+                raise ValueError("authorization_version_conflict")
             if membership is None:
                 raise ValueError("membership_not_found")
             if str(membership.status) != "active":

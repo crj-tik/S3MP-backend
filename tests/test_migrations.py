@@ -101,7 +101,7 @@ def test_migration_history_has_single_head() -> None:
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(migration_config())
-    assert scripts.get_heads() == ["0038_unique_tenant_total"]
+    assert scripts.get_heads() == ["0039_application_membership_binding"]
 
 
 def test_lifecycle_migration_exposes_soft_delete_metadata_and_partial_indexes() -> None:

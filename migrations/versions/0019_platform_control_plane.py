@@ -7,7 +7,7 @@ Revises: 0018_provider_manifest_locations
 from uuid import UUID
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "0019_platform_control_plane"
 down_revision: str | None = "0018_provider_manifest_locations"
@@ -35,9 +35,10 @@ def upgrade() -> None:
         sa.column("permissions", sa.JSON),
         sa.column("built_in", sa.Boolean),
     )
-    op.bulk_insert(
-        platform_role,
-        [
+    if not context.is_offline_mode():
+        op.bulk_insert(
+            platform_role,
+            [
             {
                 "id": UUID("94084979-5f08-5e50-b1d9-8d97486b9575"),
                 "name": "platform_admin",
@@ -61,8 +62,8 @@ def upgrade() -> None:
                 "permissions": ["platform.audit.read", "platform.tenants.read"],
                 "built_in": True,
             },
-        ],
-    )
+            ],
+        )
     op.create_table(
         "platform_role_binding",
         sa.Column("id", sa.Uuid(), primary_key=True),

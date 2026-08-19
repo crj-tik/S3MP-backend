@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from inspect import Parameter, signature
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -89,7 +90,12 @@ class ApplicationStore(Protocol):
         self, tenant_id: UUID, app_id: UUID
     ) -> dict[str, Any] | None: ...
     async def bind_membership(
-        self, tenant_id: UUID, app_id: UUID, membership_id: UUID, actor_principal_id: UUID
+        self,
+        tenant_id: UUID,
+        app_id: UUID,
+        membership_id: UUID,
+        actor_principal_id: UUID,
+        expected_application_version: int | None = None,
     ) -> dict[str, Any]: ...
     async def revoke_membership_binding(
         self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID
@@ -170,24 +176,32 @@ class ApplicationService:
     ) -> dict[str, Any]:
         await self._require(context, "applications.manage")
         if context.subject_kind == "application":
-            raise ApiError("permission_denied", "API keys cannot create applications", status_code=403)
+            raise ApiError(
+                "permission_denied", "API keys cannot create applications", status_code=403
+            )
         representative_id = membership_id or context.membership_id
         try:
-            try:
+            create_app = self.store.create_app
+            parameters = signature(create_app).parameters
+            accepts_membership = "membership_id" in parameters or any(
+                parameter.kind == Parameter.VAR_POSITIONAL
+                for parameter in parameters.values()
+            )
+            if accepts_membership:
                 created = await self.store.create_app(
                     context.tenant_id, name, context.principal_id, representative_id
                 )
-            except TypeError as exc:
+            else:
                 # Keep lightweight/in-memory stores from older integrations usable
                 # while the SQLAlchemy store adopts the representative argument.
-                if "positional" not in str(exc) and "argument" not in str(exc):
-                    raise
                 created = await self.store.create_app(
                     context.tenant_id, name, context.principal_id
                 )
         except ValueError as exc:
             if str(exc) == "membership_not_found":
-                raise ApiError("resource_not_found", "Membership not found", status_code=404) from exc
+                raise ApiError(
+                    "resource_not_found", "Membership not found", status_code=404
+                ) from exc
             if str(exc) == "membership_not_active":
                 raise ApiError("conflict", "Membership is not active", status_code=409) from exc
             raise
@@ -203,37 +217,67 @@ class ApplicationService:
         await self._require_owner_or_permission(context, app_id, "applications.read")
         binding = await self.store.get_membership_binding(context.tenant_id, app_id)
         if binding is None:
-            raise ApiError("resource_not_found", "Application membership binding not found", status_code=404)
+            raise ApiError(
+                "resource_not_found",
+                "Application membership binding not found",
+                status_code=404,
+            )
         return binding
 
     async def bind_membership(
-        self, context: PrincipalContext, app_id: UUID, membership_id: UUID
+        self,
+        context: PrincipalContext,
+        app_id: UUID,
+        membership_id: UUID,
+        expected_application_version: int | None = None,
     ) -> dict[str, Any]:
         if context.subject_kind == "application":
-            raise ApiError("permission_denied", "API keys cannot manage representatives", status_code=403)
+            raise ApiError(
+                "permission_denied", "API keys cannot manage representatives", status_code=403
+            )
         await self._require_owner_or_permission(context, app_id, "applications.manage")
         try:
             return await self.store.bind_membership(
-                context.tenant_id, app_id, membership_id, context.principal_id
+                context.tenant_id,
+                app_id,
+                membership_id,
+                context.principal_id,
+                expected_application_version,
             )
         except ValueError as exc:
             if str(exc) in {"application_not_found", "membership_not_found"}:
-                raise ApiError("resource_not_found", "Application or membership not found", status_code=404) from exc
+                raise ApiError(
+                    "resource_not_found",
+                    "Application or membership not found",
+                    status_code=404,
+                ) from exc
             if str(exc) == "membership_not_active":
                 raise ApiError("conflict", "Membership is not active", status_code=409) from exc
+            if str(exc) == "authorization_version_conflict":
+                raise ApiError(
+                    "conflict",
+                    "Application authorization version has changed",
+                    status_code=409,
+                ) from exc
             raise
 
     async def revoke_membership_binding(
         self, context: PrincipalContext, app_id: UUID
     ) -> dict[str, Any]:
         if context.subject_kind == "application":
-            raise ApiError("permission_denied", "API keys cannot manage representatives", status_code=403)
+            raise ApiError(
+                "permission_denied", "API keys cannot manage representatives", status_code=403
+            )
         await self._require_owner_or_permission(context, app_id, "applications.manage")
         binding = await self.store.revoke_membership_binding(
             context.tenant_id, app_id, context.principal_id
         )
         if binding is None:
-            raise ApiError("resource_not_found", "Application membership binding not found", status_code=404)
+            raise ApiError(
+                "resource_not_found",
+                "Application membership binding not found",
+                status_code=404,
+            )
         return binding
 
     async def update_app(

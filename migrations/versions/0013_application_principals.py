@@ -7,7 +7,7 @@ Revises: 0012_file_delete_outbox
 from uuid import uuid4
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "0013_application_principals"
 down_revision: str | None = "0012_file_delete_outbox"
@@ -25,6 +25,12 @@ def upgrade() -> None:
         "application",
         "authorization_version >= 1",
     )
+
+    # The backfill below needs result rows and therefore cannot be rendered
+    # by Alembic's offline SQL generator.  Keep schema DDL available for
+    # review; the data backfill still runs normally in online migrations.
+    if context.is_offline_mode():
+        return
 
     connection = op.get_bind()
     applications = connection.execute(

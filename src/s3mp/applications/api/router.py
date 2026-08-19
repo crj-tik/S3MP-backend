@@ -86,6 +86,7 @@ class ApplicationResponse(BaseModel):
 class ApplicationMembershipBindingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     membership_id: UUID
+    expected_application_version: int | None = Field(default=None, ge=1)
 
 
 class ApiKeyResponse(BaseModel):
@@ -240,7 +241,10 @@ async def bind_application_authorization_representative(
     application_id: UUID,
 ) -> dict[str, Any]:
     return await _app_service(request).bind_membership(
-        context, application_id, body.membership_id
+        context,
+        application_id,
+        body.membership_id,
+        body.expected_application_version,
     )
 
 

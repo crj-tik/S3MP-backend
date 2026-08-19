@@ -1,7 +1,7 @@
 """Add soft-deletion lifecycle metadata and reusable deleted account identities."""
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "0022_resource_lifecycle"
 down_revision: str | None = "0021_platform_account_identity"
@@ -64,7 +64,8 @@ def upgrade() -> None:
         "status IN ('active', 'suspended', 'deleted')",
     )
 
-    _assert_no_active_identity_duplicates()
+    if not context.is_offline_mode():
+        _assert_no_active_identity_duplicates()
     op.drop_constraint("uq_user_account_normalized_email", "user_account", type_="unique")
     op.drop_constraint(
         "uq_user_account_normalized_employee_number", "user_account", type_="unique"
