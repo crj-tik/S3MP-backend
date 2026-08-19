@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0039_application_membership_binding"
-down_revision: str | None = "0038_unique_tenant_total_quota"
+down_revision: str | None = "0038_unique_tenant_total"
 branch_labels: str | None = None
 depends_on: str | None = None
 

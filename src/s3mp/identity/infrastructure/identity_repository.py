@@ -7,7 +7,11 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from s3mp.applications.infrastructure.models import ApplicationModel, ApplicationOwnerModel
+from s3mp.applications.infrastructure.models import (
+    ApplicationMembershipBindingModel,
+    ApplicationModel,
+    ApplicationOwnerModel,
+)
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.authorization.infrastructure.models import (
     GroupMemberModel,
@@ -77,25 +81,33 @@ class SqlAlchemyIdentityAdminStore:
     ) -> dict[str, Any] | None:
         """Internal, time-typed membership state for delayed-work validation."""
         async with self._sf() as session:
-            row = await session.scalar(
-                select(MembershipModel).where(
+            result = await session.execute(
+                select(MembershipModel, PrincipalModel, UserModel, TenantModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                    & (PrincipalModel.id == MembershipModel.principal_id),
+                )
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(
                     MembershipModel.tenant_id == tenant_id,
                     MembershipModel.id == membership_id,
                 )
             )
+            row = result.one_or_none()
             if row is None:
                 return None
+            membership, principal, user, tenant = row
             return {
-                "id": str(row.id),
-                "principal_id": str(row.principal_id),
-                "status": _enum_value(row.status),
-                "authorization_version": row.authorization_version,
-                "expires_at": row.expires_at,
-                "tenant_status": _enum_value(
-                    await session.scalar(
-                        select(TenantModel.status).where(TenantModel.id == tenant_id)
-                    )
-                ),
+                "id": str(membership.id),
+                "principal_id": str(membership.principal_id),
+                "status": _enum_value(membership.status),
+                "authorization_version": membership.authorization_version,
+                "expires_at": membership.expires_at,
+                "tenant_status": _enum_value(tenant.status),
+                "principal_enabled": principal.enabled,
+                "user_status": _enum_value(user.status),
             }
 
     async def get_principal(self, tenant_id: UUID, principal_id: UUID) -> dict[str, Any] | None:
@@ -719,6 +731,49 @@ class SqlAlchemyIdentityAdminStore:
     ) -> list[dict[str, Any]]:
         now = datetime.now(UTC)
         async with self._sf() as session:
+            principal_type = await session.scalar(
+                select(PrincipalModel.type).where(
+                    PrincipalModel.tenant_id == tenant_id,
+                    PrincipalModel.id == principal_id,
+                )
+            )
+            subject_principals = (
+                [] if principal_type == PrincipalType.APPLICATION else [principal_id]
+            )
+            representative_principal = await session.scalar(
+                select(MembershipModel.principal_id)
+                .join(
+                    ApplicationMembershipBindingModel,
+                    (ApplicationMembershipBindingModel.tenant_id == MembershipModel.tenant_id)
+                    & (ApplicationMembershipBindingModel.membership_id == MembershipModel.id),
+                )
+                .join(
+                    ApplicationModel,
+                    (ApplicationModel.tenant_id == ApplicationMembershipBindingModel.tenant_id)
+                    & (ApplicationModel.id == ApplicationMembershipBindingModel.application_id),
+                )
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == MembershipModel.tenant_id)
+                    & (PrincipalModel.id == MembershipModel.principal_id),
+                )
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.principal_id == principal_id,
+                    ApplicationModel.status == "active",
+                    ApplicationMembershipBindingModel.status == "active",
+                    MembershipModel.status == "active",
+                    MembershipModel.expires_at.is_(None)
+                    | (MembershipModel.expires_at > now),
+                    PrincipalModel.enabled.is_(True),
+                    UserModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+            if representative_principal is not None:
+                subject_principals.append(representative_principal)
             group_principals = (
                 await session.scalars(
                     select(GroupModel.principal_id)
@@ -727,17 +782,18 @@ class SqlAlchemyIdentityAdminStore:
                         GroupModel.tenant_id == tenant_id,
                         GroupModel.enabled.is_(True),
                         GroupMemberModel.tenant_id == tenant_id,
-                        GroupMemberModel.principal_id == principal_id,
+                        GroupMemberModel.principal_id.in_(subject_principals),
                     )
                 )
             ).all()
+            subject_principals.extend(group_principals)
             rows = await session.execute(
                 select(RoleBindingModel, PermissionModel.name)
                 .join(RolePermissionModel, RolePermissionModel.role_id == RoleBindingModel.role_id)
                 .join(PermissionModel, PermissionModel.id == RolePermissionModel.permission_id)
                 .where(
                     RoleBindingModel.tenant_id == tenant_id,
-                    RoleBindingModel.principal_id.in_([principal_id, *group_principals]),
+                    RoleBindingModel.principal_id.in_(subject_principals),
                     RoleBindingModel.revoked_at.is_(None),
                     RoleBindingModel.starts_at <= now,
                     RoleBindingModel.expires_at > now,
@@ -910,6 +966,32 @@ class SqlAlchemyIdentityAdminStore:
             .values(revoked_at=datetime.now(UTC))
         )
 
+    async def _bump_bound_application_versions(
+        self, session: AsyncSession, tenant_id: UUID, principal_id: UUID
+    ) -> None:
+        """Invalidate applications delegated through this tenant membership."""
+        bound_apps = (
+            select(ApplicationMembershipBindingModel.application_id)
+            .join(
+                MembershipModel,
+                (MembershipModel.tenant_id == ApplicationMembershipBindingModel.tenant_id)
+                & (MembershipModel.id == ApplicationMembershipBindingModel.membership_id),
+            )
+            .where(
+                ApplicationMembershipBindingModel.tenant_id == tenant_id,
+                ApplicationMembershipBindingModel.status == "active",
+                MembershipModel.principal_id == principal_id,
+            )
+        )
+        await session.execute(
+            update(ApplicationModel)
+            .where(
+                ApplicationModel.tenant_id == tenant_id,
+                ApplicationModel.id.in_(bound_apps),
+            )
+            .values(authorization_version=ApplicationModel.authorization_version + 1)
+        )
+
     async def _bump_bound_principals(
         self, session: AsyncSession, tenant_id: UUID, role_id: UUID
     ) -> None:
@@ -938,6 +1020,7 @@ class SqlAlchemyIdentityAdminStore:
             return
         if principal.type != PrincipalType.GROUP:
             await self._bump_membership_version(session, tenant_id, principal_id)
+            await self._bump_bound_application_versions(session, tenant_id, principal_id)
             await session.execute(
                 update(ApplicationModel)
                 .where(
@@ -963,6 +1046,7 @@ class SqlAlchemyIdentityAdminStore:
         ).all()
         for member_principal_id in members:
             await self._bump_membership_version(session, tenant_id, member_principal_id)
+            await self._bump_bound_application_versions(session, tenant_id, member_principal_id)
             await session.execute(
                 update(ApplicationModel)
                 .where(

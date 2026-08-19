@@ -4,7 +4,7 @@
 为所有租户提供平台统一的 S3 Bucket，同时以租户和应用命名空间建立可验证的文件隔离，使客户端无法通过提交 Bucket 或物理 Key 绕过应用边界。
 ## Requirements
 ### Requirement: Platform-owned shared S3 profile
-系统 SHALL 使用平台级共享 S3 配置作为所有租户文件操作的唯一存储目标，配置至少包含 endpoint、region、bucket、path-style、签名版本和服务端凭据引用。租户和第三方应用 MUST NOT 选择或覆盖这些字段。
+系统 SHALL 使用平台级共享 S3 配置作为所有租户文件操作的唯一存储目标，配置至少包含 endpoint、region、bucket、path-style、签名版本、服务端凭据引用和共享 Bucket 容量 `S3MP_S3_BUCKET_CAPACITY_GIB`。租户和第三方应用 MUST NOT 选择或覆盖这些字段。
 
 #### Scenario: Tenant creates application storage
 - **WHEN** 租户或应用请求创建逻辑存储空间
@@ -13,6 +13,10 @@
 #### Scenario: Shared profile is unavailable
 - **WHEN** 平台没有可用的 active 共享 S3 配置
 - **THEN** 文件、上传、预签名和探测操作 SHALL 失败并返回稳定的存储配置错误，不得回退到租户提交的目标
+
+#### Scenario: Bucket capacity is configured in GiB
+- **WHEN** 平台启动并加载共享 S3 配置
+- **THEN** 系统 SHALL 将 `S3MP_S3_BUCKET_CAPACITY_GIB` 精确转换为内部 bytes，并以该值限制租户总配额
 
 ### Requirement: Application-owned storage namespace
 每个 active 应用 SHALL 拥有一个租户内唯一且稳定的逻辑存储命名空间。命名空间 SHALL 绑定 tenant_id 和 application_id，并 SHALL 在应用生命周期内保持稳定；应用重命名不得隐式改变已存在对象的物理 Key。
@@ -64,4 +68,3 @@
 #### Scenario: Caller submits a status not in the catalog
 - **WHEN** 请求携带未知 storage 或 lifecycle status
 - **THEN** 系统 SHALL 返回 `422 validation_failed`，不得执行无条件列表查询
-

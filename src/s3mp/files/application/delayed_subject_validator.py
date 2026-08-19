@@ -18,6 +18,10 @@ class PrincipalState(Protocol):
 class ApiKeyState(Protocol):
     async def get_key_state(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any] | None: ...
 
+    async def get_membership_binding(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> dict[str, Any] | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class DelayedSubject:
@@ -50,6 +54,15 @@ async def validate_delayed_subject(
         if (
             membership is None
             or membership.get("status") != "active"
+            or (
+                "tenant_status" in membership
+                and membership.get("tenant_status") != "active"
+            )
+            or (
+                "principal_enabled" in membership
+                and not membership.get("principal_enabled", False)
+            )
+            or ("user_status" in membership and membership.get("user_status") != "active")
             or membership.get("principal_id") != str(principal_id)
             or membership.get("expires_at") is not None
             and membership["expires_at"] <= datetime.now(UTC)
@@ -75,5 +88,29 @@ async def validate_delayed_subject(
         return None
     scopes = frozenset(str(scope) for scope in key.get("scopes") or ())
     if required_permission and required_permission not in scopes:
+        return None
+    binding_reader = getattr(api_key_store, "get_membership_binding", None)
+    membership_reader = getattr(principal_store, "get_membership_state", None)
+    if binding_reader is None or membership_reader is None:
+        return None
+    binding = await binding_reader(tenant_id, UUID(str(evidence.get("application_id"))))
+    if binding is None or binding.get("status") != "active":
+        return None
+    membership = await membership_reader(tenant_id, UUID(str(binding["membership_id"])))
+    if (
+        membership is None
+        or membership.get("status") != "active"
+        or (
+            "tenant_status" in membership
+            and membership.get("tenant_status") != "active"
+        )
+        or (
+            "principal_enabled" in membership
+            and not membership.get("principal_enabled", False)
+        )
+        or ("user_status" in membership and membership.get("user_status") != "active")
+        or membership.get("expires_at") is not None
+        and membership["expires_at"] <= datetime.now(UTC)
+    ):
         return None
     return DelayedSubject("application", scopes)
