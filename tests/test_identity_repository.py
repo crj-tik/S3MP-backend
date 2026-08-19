@@ -145,6 +145,7 @@ async def test_admin_member_projection_excludes_internal_tenant_state(engine: As
         context, _ = await seed_identity(session, uuid4())
 
     store = SqlAlchemyIdentityAdminStore(async_sessionmaker(engine, expire_on_commit=False))
+    assert context.membership_id is not None
     result = await store.get_member(context.tenant_id, context.membership_id)
 
     assert result is not None

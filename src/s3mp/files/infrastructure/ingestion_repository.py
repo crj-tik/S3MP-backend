@@ -29,6 +29,7 @@ from s3mp.files.infrastructure.models import (
     UploadSessionModel,
 )
 from s3mp.files.infrastructure.repositories import _mp_dict, _upload_dict
+from s3mp.governance.domain.allocation import build_snapshot
 from s3mp.governance.infrastructure.models import (
     QuotaAdjustmentModel,
     QuotaModel,
@@ -799,29 +800,87 @@ async def _reserve_quota(
             QuotaModel.tenant_id == tenant_id,
             QuotaModel.application_id.is_(None),
             QuotaModel.storage_space_id.is_(None),
+            QuotaModel.status == "active",
         )
         .with_for_update()
     )
-    scoped_filter = (
-        QuotaModel.application_id == space.application_id
-        if space.application_id is not None
-        else QuotaModel.storage_space_id == storage_space_id
-    )
-    scoped_quota = await session.scalar(
-        select(QuotaModel).where(QuotaModel.tenant_id == tenant_id, scoped_filter).with_for_update()
-    )
-    if tenant_quota is None and scoped_quota is None:
-        return None
     if requested_bytes < 0:
         raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
-    for quota in (tenant_quota, scoped_quota):
+    if tenant_quota is None:
+        # Transitional compatibility for rows created before tenant/application
+        # allocation was introduced. New writes must use a tenant total.
+        legacy_quota = await session.scalar(
+            select(QuotaModel)
+            .where(
+                QuotaModel.tenant_id == tenant_id,
+                QuotaModel.storage_space_id == storage_space_id,
+                QuotaModel.application_id.is_(None),
+                QuotaModel.status.in_(("active", "legacy")),
+            )
+            .with_for_update()
+        )
+        if legacy_quota is not None:
+            if (
+                legacy_quota.used_bytes + legacy_quota.reserved_bytes + requested_bytes
+                > legacy_quota.limit_bytes
+            ):
+                raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
+            reservation = QuotaReservationModel(
+                tenant_id=tenant_id,
+                quota_id=legacy_quota.id,
+                allocation_mode="storage_space_legacy",
+                requested_bytes=requested_bytes,
+                status="reserved",
+            )
+            legacy_quota.reserved_bytes += requested_bytes
+            session.add(reservation)
+            await session.flush()
+            return reservation.id
+        raise ApiError(
+            "quota_not_configured",
+            "Tenant storage quota has not been configured",
+            status_code=409,
+        )
+    scoped_quota = None
+    if space.application_id is not None:
+        scoped_quota = await session.scalar(
+            select(QuotaModel)
+            .where(
+                QuotaModel.tenant_id == tenant_id,
+                QuotaModel.application_id == space.application_id,
+                QuotaModel.status == "active",
+            )
+            .with_for_update()
+        )
+    if scoped_quota is not None:
         if (
-            quota is not None
-            and quota.used_bytes + quota.reserved_bytes + requested_bytes > quota.limit_bytes
+            scoped_quota.used_bytes + scoped_quota.reserved_bytes + requested_bytes
+            > scoped_quota.limit_bytes
+            or tenant_quota.used_bytes + tenant_quota.reserved_bytes + requested_bytes
+            > tenant_quota.limit_bytes
         ):
             raise ApiError("quota_exceeded", "Quota capacity exceeded", status_code=409)
+        allocation_mode = "application_reserved"
+    else:
+        applications = list(
+            (
+                await session.scalars(
+                    select(QuotaModel)
+                    .where(
+                        QuotaModel.tenant_id == tenant_id,
+                        QuotaModel.application_id.is_not(None),
+                        QuotaModel.status == "active",
+                    )
+                    .order_by(QuotaModel.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        snapshot = build_snapshot(tenant_quota, applications)
+        if snapshot.shared_pool_available < requested_bytes:
+            raise ApiError("quota_exceeded", "Shared quota capacity exceeded", status_code=409)
+        allocation_mode = "shared_pool"
     selected_quota = scoped_quota or tenant_quota
-    assert selected_quota is not None
     reservation = QuotaReservationModel(
         tenant_id=tenant_id,
         quota_id=selected_quota.id,
@@ -829,6 +888,7 @@ async def _reserve_quota(
             scoped_quota.id if space.application_id is not None and scoped_quota else None
         ),
         tenant_quota_id=tenant_quota.id if tenant_quota else None,
+        allocation_mode=allocation_mode,
         requested_bytes=requested_bytes,
         status="reserved",
     )

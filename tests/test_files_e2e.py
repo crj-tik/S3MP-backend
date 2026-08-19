@@ -117,6 +117,14 @@ async def test_upload_create_and_get_round_trips_through_real_pg() -> None:
                 session.add(space)
                 await session.flush()
                 session.add(
+                    QuotaModel(
+                        tenant_id=tenant_id,
+                        limit_bytes=1024 * 1024,
+                        allocation_mode="tenant_total",
+                        status="active",
+                    )
+                )
+                session.add(
                     PrincipalModel(
                         id=principal_id,
                         tenant_id=tenant_id,
@@ -320,6 +328,14 @@ async def test_ingestion_commit_writes_redacted_audit_evidence() -> None:
             async with factory.begin() as session:
                 space_id = UUID(await _seed_space(session, tenant_id))
                 session.add(
+                    QuotaModel(
+                        tenant_id=tenant_id,
+                        limit_bytes=1024 * 1024,
+                        allocation_mode="tenant_total",
+                        status="active",
+                    )
+                )
+                session.add(
                     PrincipalModel(
                         id=principal_id,
                         tenant_id=tenant_id,
@@ -474,6 +490,14 @@ async def test_ingestion_rejects_conflicting_idempotency_reuse() -> None:
     try:
         async with factory.begin() as session:
             space_id = UUID(await _seed_space(session, tenant_id))
+            session.add(
+                QuotaModel(
+                    tenant_id=tenant_id,
+                    limit_bytes=1024 * 1024,
+                    allocation_mode="tenant_total",
+                    status="active",
+                )
+            )
             session.add(
                 PrincipalModel(
                     id=principal_id,

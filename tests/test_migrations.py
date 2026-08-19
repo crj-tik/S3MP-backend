@@ -101,7 +101,7 @@ def test_migration_history_has_single_head() -> None:
     from alembic.script import ScriptDirectory
 
     scripts = ScriptDirectory.from_config(migration_config())
-    assert scripts.get_heads() == ["0034_reconciliation_idempotency"]
+    assert scripts.get_heads() == ["0038_unique_tenant_total"]
 
 
 def test_lifecycle_migration_exposes_soft_delete_metadata_and_partial_indexes() -> None:
@@ -119,8 +119,9 @@ def test_lifecycle_migration_exposes_soft_delete_metadata_and_partial_indexes() 
                 )
                 indexes = await conn.run_sync(
                     lambda c: {
-                        index["name"]
+                        str(index["name"])
                         for index in inspect(c).get_indexes("user_account")
+                        if index["name"] is not None
                     }
                 )
             return columns, indexes
@@ -154,4 +155,4 @@ def test_upgrade_downgrade_upgrade_cycle() -> None:
     assert _get_version() is None
 
     command.upgrade(config, "head")
-    assert _get_version() == "0034_reconciliation_idempotency"
+    assert _get_version() == "0038_unique_tenant_total"

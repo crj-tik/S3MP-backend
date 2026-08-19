@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from s3mp.applications.infrastructure.models import (
     ApiKeyModel,
     ApiKeyStatus,
+    ApplicationMembershipBindingModel,
     ApplicationModel,
     ApplicationOwnerModel,
     ApplicationStatus,
@@ -32,6 +33,33 @@ def _application(model: ApplicationModel) -> dict[str, object]:
         "deleted_at": model.deleted_at,
         "deleted_by": model.deleted_by,
         "deletion_reason": model.deletion_reason,
+    }
+
+
+def _membership_binding(
+    model: ApplicationMembershipBindingModel,
+    membership: MembershipModel | None = None,
+    principal: PrincipalModel | None = None,
+) -> dict[str, object]:
+    return {
+        "id": str(model.id),
+        "tenant_id": model.tenant_id,
+        "application_id": model.application_id,
+        "membership_id": model.membership_id,
+        "created_by_principal_id": model.created_by_principal_id,
+        "status": model.status,
+        "created_at": model.created_at,
+        "updated_at": model.updated_at,
+        "revoked_at": model.revoked_at,
+        "revoked_by": model.revoked_by,
+        "user_id": membership.user_id if membership else None,
+        "principal_id": membership.principal_id if membership else None,
+        "membership_status": str(membership.status) if membership else None,
+        "membership_authorization_version": membership.authorization_version
+        if membership
+        else None,
+        "principal_type": str(principal.type) if principal else None,
+        "principal_display_name": principal.display_name if principal else None,
     }
 
 
@@ -97,7 +125,13 @@ class SqlAlchemyApplicationStore:
             )
         return _application(model) if model else None
 
-    async def create_app(self, tenant_id: UUID, name: str, principal_id: UUID) -> dict[str, object]:
+    async def create_app(
+        self,
+        tenant_id: UUID,
+        name: str,
+        principal_id: UUID,
+        membership_id: UUID | None = None,
+    ) -> dict[str, object]:
         async with self._sessions.begin() as session:
             application_principal = PrincipalModel(
                 tenant_id=tenant_id,
@@ -126,8 +160,171 @@ class SqlAlchemyApplicationStore:
                     tenant_id=tenant_id, application_id=model.id, owner_principal_id=principal_id
                 )
             )
+            if membership_id is not None:
+                membership = await session.scalar(
+                    select(MembershipModel)
+                    .where(
+                        MembershipModel.tenant_id == tenant_id,
+                        MembershipModel.id == membership_id,
+                    )
+                    .with_for_update()
+                )
+                if membership is None:
+                    raise ValueError("membership_not_found")
+                if str(membership.status) != "active":
+                    raise ValueError("membership_not_active")
+                session.add(
+                    ApplicationMembershipBindingModel(
+                        tenant_id=tenant_id,
+                        application_id=model.id,
+                        membership_id=membership_id,
+                        created_by_principal_id=principal_id,
+                    )
+                )
             await session.flush()
             return _application(model)
+
+    async def get_membership_binding(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> dict[str, object] | None:
+        async with self._sessions() as session:
+            row = await session.execute(
+                select(
+                    ApplicationMembershipBindingModel,
+                    MembershipModel,
+                    PrincipalModel,
+                )
+                .outerjoin(
+                    MembershipModel,
+                    and_(
+                        MembershipModel.tenant_id == ApplicationMembershipBindingModel.tenant_id,
+                        MembershipModel.id == ApplicationMembershipBindingModel.membership_id,
+                    ),
+                )
+                .outerjoin(
+                    PrincipalModel,
+                    and_(
+                        PrincipalModel.tenant_id == ApplicationMembershipBindingModel.tenant_id,
+                        PrincipalModel.id == MembershipModel.principal_id,
+                    ),
+                )
+                .where(
+                    ApplicationMembershipBindingModel.tenant_id == tenant_id,
+                    ApplicationMembershipBindingModel.application_id == app_id,
+                )
+            )
+            values = row.first()
+        if values is None:
+            return None
+        binding, membership, principal = values
+        return _membership_binding(binding, membership, principal)
+
+    async def bind_membership(
+        self,
+        tenant_id: UUID,
+        app_id: UUID,
+        membership_id: UUID,
+        actor_principal_id: UUID,
+    ) -> dict[str, object]:
+        from datetime import UTC
+
+        now = datetime.now(UTC)
+        async with self._sessions.begin() as session:
+            app = await session.scalar(
+                select(ApplicationModel)
+                .where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.id == app_id,
+                    ApplicationModel.status != "deleted",
+                )
+                .with_for_update()
+            )
+            membership = await session.scalar(
+                select(MembershipModel)
+                .where(MembershipModel.tenant_id == tenant_id, MembershipModel.id == membership_id)
+                .with_for_update()
+            )
+            if app is None:
+                raise ValueError("application_not_found")
+            if membership is None:
+                raise ValueError("membership_not_found")
+            if str(membership.status) != "active":
+                raise ValueError("membership_not_active")
+            binding = await session.scalar(
+                select(ApplicationMembershipBindingModel)
+                .where(
+                    ApplicationMembershipBindingModel.tenant_id == tenant_id,
+                    ApplicationMembershipBindingModel.application_id == app_id,
+                )
+                .with_for_update()
+            )
+            if binding is None:
+                binding = ApplicationMembershipBindingModel(
+                    tenant_id=tenant_id,
+                    application_id=app_id,
+                    membership_id=membership_id,
+                    created_by_principal_id=actor_principal_id,
+                )
+                session.add(binding)
+            else:
+                binding.membership_id = membership_id
+                binding.status = "active"
+                binding.revoked_at = None
+                binding.revoked_by = None
+                binding.updated_at = now
+            app.authorization_version += 1
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action="application.membership_bound",
+                    resource_type="application",
+                    resource_id=str(app_id),
+                    details={"membership_id": str(membership_id)},
+                )
+            )
+            await session.flush()
+            await session.refresh(binding)
+            return _membership_binding(binding, membership)
+
+    async def revoke_membership_binding(
+        self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID
+    ) -> dict[str, object] | None:
+        from datetime import UTC
+
+        async with self._sessions.begin() as session:
+            binding = await session.scalar(
+                select(ApplicationMembershipBindingModel)
+                .where(
+                    ApplicationMembershipBindingModel.tenant_id == tenant_id,
+                    ApplicationMembershipBindingModel.application_id == app_id,
+                )
+                .with_for_update()
+            )
+            app = await session.scalar(
+                select(ApplicationModel)
+                .where(ApplicationModel.tenant_id == tenant_id, ApplicationModel.id == app_id)
+                .with_for_update()
+            )
+            if binding is None or app is None:
+                return None
+            binding.status = "revoked"
+            binding.revoked_at = datetime.now(UTC)
+            binding.revoked_by = actor_principal_id
+            app.authorization_version += 1
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=actor_principal_id,
+                    action="application.membership_binding_revoked",
+                    resource_type="application",
+                    resource_id=str(app_id),
+                    details={"membership_id": str(binding.membership_id)},
+                )
+            )
+            await session.flush()
+            await session.refresh(binding)
+            return _membership_binding(binding)
 
     async def update_app(
         self, tenant_id: UUID, app_id: UUID, name: str | None
@@ -179,6 +376,17 @@ class SqlAlchemyApplicationStore:
             model.deleted_by = actor_principal_id
             model.deletion_reason = reason
             model.authorization_version += 1
+            from s3mp.governance.infrastructure.models import QuotaModel
+
+            await session.execute(
+                update(QuotaModel)
+                .where(
+                    QuotaModel.tenant_id == tenant_id,
+                    QuotaModel.application_id == app_id,
+                    QuotaModel.status == "active",
+                )
+                .values(status="suspended")
+            )
             await session.execute(
                 update(PrincipalModel)
                 .where(
@@ -274,6 +482,17 @@ class SqlAlchemyApplicationStore:
             model.deleted_by = None
             model.deletion_reason = None
             model.authorization_version += 1
+            from s3mp.governance.infrastructure.models import QuotaModel
+
+            await session.execute(
+                update(QuotaModel)
+                .where(
+                    QuotaModel.tenant_id == tenant_id,
+                    QuotaModel.application_id == app_id,
+                    QuotaModel.status == "suspended",
+                )
+                .values(status="active")
+            )
             await session.execute(
                 update(PrincipalModel)
                 .where(PrincipalModel.id == model.principal_id)

@@ -1,5 +1,7 @@
 """Configuration validation for S3 profiles, secret requirements, and endpoint checks."""
 
+from pathlib import Path
+
 import pytest
 
 from s3mp.common.config import Settings
@@ -17,6 +19,30 @@ class TestS3ProfileValidation:
         )
         assert s.s3_endpoint == "http://localhost:9000"
         assert s.s3_bucket == "s3mp-dev"
+
+    def test_bucket_capacity_gib_converts_to_internal_bytes(self) -> None:
+        s = Settings(
+            s3_endpoint="http://localhost:9000",
+            s3_bucket="s3mp-dev",
+            s3_access_key="key",
+            s3_secret_key="secret",
+            s3_bucket_capacity_gib=2,
+        )
+        assert s.s3_bucket_capacity_bytes == 2 * 1024**3
+
+    def test_production_s3_requires_bucket_capacity_gib(self, tmp_path: Path) -> None:
+        for secret_name in ("database_url", "redis_url", "s3_access_key", "s3_secret_key"):
+            (tmp_path / secret_name).write_text("configured", encoding="utf-8")
+        with pytest.raises(ValueError, match="s3_bucket_capacity_gib"):
+            Settings(
+                environment="production",
+                database_url_file=tmp_path / "database_url",
+                redis_url_file=tmp_path / "redis_url",
+                s3_endpoint="https://s3.example.test",
+                s3_bucket="shared",
+                s3_access_key_file=tmp_path / "s3_access_key",
+                s3_secret_key_file=tmp_path / "s3_secret_key",
+            )
 
     def test_s3_endpoint_requires_bucket(self) -> None:
         with pytest.raises(ValueError, match="s3_bucket"):

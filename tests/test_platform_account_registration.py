@@ -71,6 +71,9 @@ class RegistrationStore:
     async def revoke_account_session(self, _session_id: UUID) -> None:
         return None
 
+    async def revoke_tenant_sessions(self, _user_id: UUID) -> None:
+        return None
+
     async def create_tenant_session(
         self,
         _user_id: UUID,

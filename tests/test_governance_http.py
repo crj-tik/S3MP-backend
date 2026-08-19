@@ -26,8 +26,8 @@ class FakeQuotaService:
     async def get_quota(self, tenant_id: Any, quota_id: Any) -> dict[str, Any]:
         return {"id": str(quota_id), "limit_bytes": 1073741824, "used_bytes": 0}
 
-    async def update_quota(self, tenant_id: Any, quota_id: Any, limit_bytes: int) -> dict[str, Any]:
-        return {"id": str(quota_id), "limit_bytes": limit_bytes, "used_bytes": 0}
+    async def update_quota(self, tenant_id: Any, quota_id: Any, limit_gib: int) -> dict[str, Any]:
+        return {"id": str(quota_id), "limit_bytes": limit_gib * 1073741824, "used_bytes": 0}
 
 
 class FakeAuditService:
@@ -99,7 +99,7 @@ async def test_list_quotas_returns_200() -> None:
 async def test_update_quota_returns_200() -> None:
     app = _app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.patch(f"/api/v1/quotas/{uuid4()}", json={"limit_bytes": 2147483648})
+        response = await client.patch(f"/api/v1/quotas/{uuid4()}", json={"limit_gib": 2})
 
     assert response.status_code == 200
     assert response.json()["limit_bytes"] == 2147483648

@@ -11,7 +11,7 @@ from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
 from s3mp.governance.application.quota_reconciliation import ReconciliationDifference
-from s3mp.governance.domain.quota import QuotaScope
+from s3mp.governance.domain.quota import QuotaAllocationMode, QuotaLifecycleStatus, QuotaScope
 from s3mp.identity.domain.context import PrincipalContext
 
 router = APIRouter(prefix="/api/v1", tags=["Quotas", "Audit"])
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/v1", tags=["Quotas", "Audit"])
 
 class QuotaUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    limit_bytes: int = Field(ge=0)
+    limit_gib: int = Field(ge=0, description="新的配额上限，单位为 GiB。")
 
 
 class QuotaResponse(BaseModel):
@@ -74,6 +74,38 @@ class QuotaResponse(BaseModel):
         default=None, description="最近一次对账运行的稳定标识。"
     )
     updated_at: datetime | None = Field(default=None, description="配额记录最后更新的时间。")
+    allocation_mode: str = Field(default="tenant_total", description="配额分配模式。")
+    status: str = Field(default="active", description="配额生命周期状态。")
+    allocated_bytes: int = Field(default=0, description="该配额已用量与预留量的合计。")
+    tenant_limit_bytes: int | None = None
+    tenant_used_bytes: int | None = None
+    tenant_reserved_bytes: int | None = None
+    tenant_available_bytes: int | None = None
+    allocated_application_limit_bytes: int | None = None
+    allocated_application_used_bytes: int | None = None
+    allocated_application_reserved_bytes: int | None = None
+    shared_pool_limit_bytes: int | None = None
+    shared_pool_used_bytes: int | None = None
+    shared_pool_reserved_bytes: int | None = None
+    shared_pool_available_bytes: int | None = None
+    limit_gib: float | None = Field(default=None, description="配额上限，单位为 GiB。")
+    used_gib: float | None = Field(default=None, description="已确认使用量，单位为 GiB。")
+    reserved_gib: float | None = Field(default=None, description="进行中预留量，单位为 GiB。")
+    available_gib: float | None = Field(default=None, description="当前可用量，单位为 GiB。")
+    allocated_gib: float | None = Field(
+        default=None, description="已用量与预留量合计，单位为 GiB。"
+    )
+    tenant_limit_gib: float | None = None
+    tenant_used_gib: float | None = None
+    tenant_reserved_gib: float | None = None
+    tenant_available_gib: float | None = None
+    allocated_application_limit_gib: float | None = None
+    allocated_application_used_gib: float | None = None
+    allocated_application_reserved_gib: float | None = None
+    shared_pool_limit_gib: float | None = None
+    shared_pool_used_gib: float | None = None
+    shared_pool_reserved_gib: float | None = None
+    shared_pool_available_gib: float | None = None
 
 
 class AuditActor(BaseModel):
@@ -125,6 +157,7 @@ class QuotaReconciliationDifference(BaseModel):
     physical_key_fingerprint: str | None = Field(
         default=None, description="物理对象键的 SHA-256 指纹，不返回完整物理路径。"
     )
+    details: dict[str, Any] = Field(default_factory=dict, description="非敏感的差异上下文。")
 
 
 class QuotaReconciliationRequest(BaseModel):
@@ -224,8 +257,13 @@ async def list_quotas(
     application_id: str | None = None,
     cursor: str | None = Query(default=None),
     scope: Annotated[QuotaScope | None, Query()] = None,
+    status: Annotated[QuotaLifecycleStatus | None, Query()] = QuotaLifecycleStatus.ACTIVE,
+    allocation_mode: Annotated[QuotaAllocationMode | None, Query()] = None,
 ) -> QuotaPage:
-    query = f"quotas:{storage_space_id or 'all'}:{application_id or 'all'}:{scope or 'all'}"
+    query = (
+        f"quotas:{storage_space_id or 'all'}:{application_id or 'all'}:"
+        f"{scope or 'all'}:{status}:{allocation_mode or 'all'}"
+    )
     quota_kwargs: dict[str, Any] = {
         "cursor": _cursor(cursor, context, query=query),
     }
@@ -233,6 +271,10 @@ async def list_quotas(
         quota_kwargs["application_id"] = application_id
     if scope is not None:
         quota_kwargs["scope"] = scope
+    if status != "active":
+        quota_kwargs["status"] = status
+    if allocation_mode is not None:
+        quota_kwargs["allocation_mode"] = allocation_mode
     items, position = await _quota_svc(request).list_quotas(
         context, storage_space_id, **quota_kwargs
     )
@@ -256,7 +298,7 @@ async def update_quota(
     quota_id: str = Path(min_length=1),
 ) -> QuotaResponse:
     return QuotaResponse.model_validate(
-        await _quota_svc(request).update_quota(context, quota_id, body.limit_bytes)
+        await _quota_svc(request).update_quota(context, quota_id, body.limit_gib)
     )
 
 

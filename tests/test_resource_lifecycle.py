@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from s3mp.applications.application.application_service import ApplicationService
+from s3mp.applications.infrastructure.models import ApplicationStatus
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 
@@ -15,6 +16,28 @@ class LifecycleStore:
         self.deleted: tuple[UUID, str] | None = None
         self.restored = False
         self.restore_error: ValueError | None = None
+
+    async def list_apps(
+        self,
+        _tenant_id: UUID,
+        _limit: int,
+        _cursor: str | None,
+        _status: ApplicationStatus = ApplicationStatus.ACTIVE,
+    ) -> tuple[list[dict[str, object]], str | None]:
+        return [], None
+
+    async def get_app(self, _tenant_id: UUID, _app_id: UUID) -> dict[str, object] | None:
+        return None
+
+    async def create_app(
+        self, _tenant_id: UUID, name: str, principal_id: UUID
+    ) -> dict[str, object]:
+        return {"id": str(self.application_id), "name": name, "principal_id": str(principal_id)}
+
+    async def update_app(
+        self, _tenant_id: UUID, _app_id: UUID, _name: str | None
+    ) -> dict[str, object] | None:
+        return None
 
     async def list_active_owners(self, _tenant_id: UUID, _app_id: UUID) -> list[UUID]:
         return [self.principal_id]
@@ -37,6 +60,22 @@ class LifecycleStore:
             raise self.restore_error
         self.restored = True
         return {"id": str(self.application_id), "status": "active"}
+
+    async def takeover_app(
+        self, _tenant_id: UUID, _app_id: UUID, _owner_principal_id: UUID, _reason: str
+    ) -> dict[str, object] | None:
+        return {"id": str(self.application_id), "status": "active"}
+
+    async def list_owners(self, _tenant_id: UUID, _app_id: UUID) -> list[UUID]:
+        return []
+
+    async def recompute_owner_state_for_principal(
+        self, _tenant_id: UUID, _owner_principal_id: UUID
+    ) -> int:
+        return 0
+
+    async def scan_ownerless_applications(self, _tenant_id: UUID) -> int:
+        return 0
 
     def __post_init__(self) -> None:
         self.principal_id = uuid4()

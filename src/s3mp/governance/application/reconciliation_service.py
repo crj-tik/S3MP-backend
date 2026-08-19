@@ -7,9 +7,10 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
 from s3mp.files.infrastructure.models import FileObjectModel
@@ -141,9 +142,21 @@ class QuotaReconciliationService:
 
                 spaces = (
                     await session.scalars(
-                        select(StorageSpaceModel).where(
+                        select(StorageSpaceModel)
+                        .outerjoin(
+                            ApplicationModel,
+                            and_(
+                                ApplicationModel.tenant_id == StorageSpaceModel.tenant_id,
+                                ApplicationModel.id == StorageSpaceModel.application_id,
+                            ),
+                        )
+                        .where(
                             StorageSpaceModel.tenant_id == tenant_id,
                             StorageSpaceModel.status == "active",
+                            or_(
+                                StorageSpaceModel.application_id.is_(None),
+                                ApplicationModel.status == "active",
+                            ),
                         )
                     )
                 ).all()
@@ -225,6 +238,21 @@ class QuotaReconciliationService:
                             details={"mode": mode},
                         )
                     )
+                allocation_drift = await self._allocation_drift(session, tenant_id)
+                if allocation_drift is not None:
+                    counts[ReconciliationDifference.ALLOCATION_DRIFT.value] = 1
+                    session.add(
+                        QuotaReconciliationDifferenceModel(
+                            run_id=run.id,
+                            tenant_id=tenant_id,
+                            application_id=app_id,
+                            storage_space_id=space_id,
+                            kind=ReconciliationDifference.ALLOCATION_DRIFT.value,
+                            recorded_bytes=allocation_drift["tenant_limit_bytes"],
+                            observed_bytes=allocation_drift["allocated_application_limit_bytes"],
+                            details=allocation_drift,
+                        )
+                    )
                 if mode == "apply":
                     await self._apply_projection(
                         session,
@@ -241,6 +269,7 @@ class QuotaReconciliationService:
                     "counts": counts,
                     "matched_files": len(matched_files),
                     "provider_objects": len(provider_objects),
+                    "allocation_drift": allocation_drift,
                 }
                 run.completed_at = datetime.now(UTC)
                 session.add(
@@ -350,6 +379,7 @@ class QuotaReconciliationService:
                         "recorded_bytes": row.recorded_bytes,
                         "observed_bytes": row.observed_bytes,
                         "physical_key_fingerprint": row.physical_key_fingerprint,
+                        "details": dict(row.details or {}),
                     }
                     for row in differences
                 ],
@@ -373,7 +403,10 @@ class QuotaReconciliationService:
                 totals[(row.application_id, row.storage_space_id)] = (
                     totals.get((row.application_id, row.storage_space_id), 0) + row.content_length
                 )
-        quota_stmt = select(QuotaModel).where(QuotaModel.tenant_id == tenant_id)
+        quota_stmt = select(QuotaModel).where(
+            QuotaModel.tenant_id == tenant_id,
+            QuotaModel.status == "active",
+        )
         if scope_limited:
             predicates = []
             if application_id is not None:
@@ -398,6 +431,37 @@ class QuotaReconciliationService:
             quota.measured_at = datetime.now(UTC)
             quota.last_reconciliation_run_id = run_id
             quota.drift_summary = {"source": "shared_s3_inventory", "used_bytes": value}
+
+    async def _allocation_drift(
+        self, session: AsyncSession, tenant_id: UUID
+    ) -> dict[str, int] | None:
+        tenant_quota = await session.scalar(
+            select(QuotaModel).where(
+                QuotaModel.tenant_id == tenant_id,
+                QuotaModel.application_id.is_(None),
+                QuotaModel.storage_space_id.is_(None),
+                QuotaModel.status == "active",
+            )
+        )
+        if tenant_quota is None:
+            return None
+        allocated = int(
+            await session.scalar(
+                select(func.coalesce(func.sum(QuotaModel.limit_bytes), 0)).where(
+                    QuotaModel.tenant_id == tenant_id,
+                    QuotaModel.application_id.is_not(None),
+                    QuotaModel.status == "active",
+                )
+            )
+            or 0
+        )
+        if allocated <= tenant_quota.limit_bytes:
+            return None
+        return {
+            "tenant_limit_bytes": tenant_quota.limit_bytes,
+            "allocated_application_limit_bytes": allocated,
+            "excess_bytes": allocated - tenant_quota.limit_bytes,
+        }
 
 
 def _fingerprint(value: str) -> str:

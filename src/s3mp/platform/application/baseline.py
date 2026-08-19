@@ -19,19 +19,23 @@ PLATFORM_ROLES: dict[str, tuple[str, ...]] = {
         "platform.roles.manage",
         "platform.support.read",
         "platform.support.manage",
+        "platform.quotas.read",
         "platform.audit.read",
+        "platform.quotas.manage",
     ),
     "platform_operator": (
         "platform.accounts.read",
         "platform.tenants.read",
         "platform.support.read",
         "platform.support.manage",
+        "platform.quotas.read",
     ),
     "platform_auditor": (
         "platform.tenants.read",
         "platform.roles.read",
         "platform.support.read",
         "platform.audit.read",
+        "platform.quotas.read",
     ),
 }
 

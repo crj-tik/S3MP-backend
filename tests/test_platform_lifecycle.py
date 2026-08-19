@@ -31,6 +31,16 @@ class TenantStore:
     async def update_platform_tenant(self, **kwargs: object) -> dict[str, object] | None:
         return kwargs
 
+    async def delete_platform_tenant(
+        self, *, tenant_id: UUID, actor_user_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        return {"id": str(tenant_id), "actor_user_id": str(actor_user_id), "reason": reason}
+
+    async def restore_platform_tenant(
+        self, *, tenant_id: UUID, actor_user_id: UUID, reason: str
+    ) -> dict[str, object] | None:
+        return {"id": str(tenant_id), "actor_user_id": str(actor_user_id), "reason": reason}
+
     async def list_platform_accounts(
         self, **_kwargs: object
     ) -> tuple[list[dict[str, object]], None]:

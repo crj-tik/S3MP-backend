@@ -668,6 +668,19 @@ class SqlAlchemyPlatformStore:
                 tenant.name = name
             if status is not None:
                 tenant.status = TenantLifecycleStatus(status)
+                from s3mp.governance.infrastructure.models import QuotaModel
+
+                quota_status = (
+                    "active" if tenant.status == TenantLifecycleStatus.ACTIVE else "suspended"
+                )
+                await session.execute(
+                    update(QuotaModel)
+                    .where(
+                        QuotaModel.tenant_id == tenant_id,
+                        QuotaModel.status.in_(("active", "suspended")),
+                    )
+                    .values(status=quota_status)
+                )
             session.add(
                 PlatformAuditEventModel(
                     actor_user_id=actor_user_id,
@@ -689,6 +702,7 @@ class SqlAlchemyPlatformStore:
             MultipartSessionModel,
             UploadSessionModel,
         )
+        from s3mp.governance.infrastructure.models import QuotaModel
         from s3mp.storage.infrastructure.models import StorageConnectionModel, StorageSpaceModel
 
         now = datetime.now(UTC)
@@ -702,6 +716,14 @@ class SqlAlchemyPlatformStore:
             tenant.deleted_at = now
             tenant.deleted_by = actor_user_id
             tenant.deletion_reason = reason
+            await session.execute(
+                update(QuotaModel)
+                .where(
+                    QuotaModel.tenant_id == tenant_id,
+                    QuotaModel.status.in_(("active", "suspended")),
+                )
+                .values(status="suspended")
+            )
             await session.execute(
                 update(SessionModel)
                 .where(SessionModel.tenant_id == tenant_id, SessionModel.revoked_at.is_(None))
@@ -816,6 +838,16 @@ class SqlAlchemyPlatformStore:
             tenant.deleted_at = None
             tenant.deleted_by = None
             tenant.deletion_reason = None
+            from s3mp.governance.infrastructure.models import QuotaModel
+
+            await session.execute(
+                update(QuotaModel)
+                .where(
+                    QuotaModel.tenant_id == tenant_id,
+                    QuotaModel.status == "suspended",
+                )
+                .values(status="active")
+            )
             session.add(
                 PlatformAuditEventModel(
                     actor_user_id=actor_user_id,

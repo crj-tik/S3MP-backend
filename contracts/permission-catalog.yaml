@@ -13,6 +13,8 @@ permissions:
   - {name: platform.support.read, resource_type: platform_support, delegable: false, description: "View support access requests."}
   - {name: platform.support.manage, resource_type: platform_support, delegable: false, description: "Request, approve and revoke support access."}
   - {name: platform.audit.read, resource_type: platform_audit, delegable: false, description: "View platform audit events."}
+  - {name: platform.quotas.read, resource_type: platform_quota, delegable: false, description: "View quota allocations across tenants."}
+  - {name: platform.quotas.manage, resource_type: platform_quota, delegable: false, description: "Allocate and revoke tenant and application quotas."}
   - {name: tenant.read, resource_type: tenant, delegable: true, description: "View tenant metadata."}
   - {name: members.read, resource_type: membership, delegable: true, description: "List and view tenant members."}
   - {name: members.manage, resource_type: membership, delegable: true, description: "Invite, suspend, reactivate and remove members."}

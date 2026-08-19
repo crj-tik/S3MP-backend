@@ -16,6 +16,7 @@ from s3mp.identity.infrastructure.models import (
     UserModel,
     UserStatus,
 )
+from s3mp.platform.domain.support_access import SupportAccessStatus
 from s3mp.platform.infrastructure.models import (
     PlatformAuditEventModel,
     PlatformBootstrapStateModel,
@@ -293,12 +294,12 @@ async def test_platform_inventory_and_support_pages_filter_before_limiting(
         assert roles[0]["id"] == role_ids[2]
 
         pending, next_cursor = await store.list_support_access(
-            limit=1, cursor=None, status="pending"
+            limit=1, cursor=None, status=SupportAccessStatus.PENDING
         )
         assert [item["id"] for item in pending] == [request_ids[1]]
         assert next_cursor == request_ids[1]
         pending, next_cursor = await store.list_support_access(
-            limit=1, cursor=next_cursor, status="pending"
+            limit=1, cursor=next_cursor, status=SupportAccessStatus.PENDING
         )
         assert [item["id"] for item in pending] == [request_ids[2]]
     finally:

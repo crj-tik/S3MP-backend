@@ -791,7 +791,7 @@ paths:
         schema:
           anyOf:
           - type: string
-            minLength: 8
+            minLength: 1
             maxLength: 320
           - type: 'null'
           title: Query
@@ -3337,6 +3337,25 @@ paths:
           - type: 'null'
           title: Scope
         description: 授权、查询或操作生效的资源范围。
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/QuotaLifecycleStatus'
+          - type: 'null'
+          default: active
+          title: Status
+        description: 资源当前生命周期状态。
+      - name: allocation_mode
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/QuotaAllocationMode'
+          - type: 'null'
+          title: Allocation Mode
+        description: 配额分配模式：tenant_total 租户总量，application_reserved 应用独立划分，storage_space_legacy 历史兼容模式。
       responses:
         '200':
           description: Successful Response
@@ -3593,6 +3612,181 @@ paths:
         '500': *id001
       description: 获取单条脱敏审计事件详情。
       x-permission: audit.read
+  /api/v1/platform/quotas:
+    get:
+      tags:
+      - Platform quotas
+      summary: 列出平台可管理的租户总配额和应用独立配额。
+      operationId: list_platform_quotas
+      parameters:
+      - name: tenant_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Tenant Id
+        description: 租户的服务端唯一标识。
+      - name: application_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/QuotaLifecycleStatus'
+          - type: 'null'
+          default: active
+          title: Status
+        description: 资源当前生命周期状态。
+      - name: allocation_mode
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/QuotaAllocationMode'
+          - type: 'null'
+          title: Allocation Mode
+        description: 配额分配模式：tenant_total 租户总量，application_reserved 应用独立划分，storage_space_legacy 历史兼容模式。
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+        description: 本页最多返回的记录数。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformQuotaPage'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 列出平台可管理的租户总配额和应用独立配额。
+      x-permission: platform.quotas.read
+    post:
+      tags:
+      - Platform quotas
+      summary: 为租户配置总容量，或从租户容量中划分应用独立容量。
+      operationId: create_platform_quota
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformQuotaCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 为租户配置总容量，或从租户容量中划分应用独立容量。
+      x-permission: platform.quotas.manage
+  /api/v1/platform/quotas/{quota_id}:
+    patch:
+      tags:
+      - Platform quotas
+      summary: 调整租户总配额或应用独立配额，并校验使用量和子配额边界。
+      operationId: update_platform_quota
+      parameters:
+      - name: quota_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Quota Id
+        description: 配额记录的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformQuotaUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 调整租户总配额或应用独立配额，并校验使用量和子配额边界。
+      x-permission: platform.quotas.manage
+    delete:
+      tags:
+      - Platform quotas
+      summary: 撤销没有使用量和进行中预留的应用独立配额，使容量回到共享池。
+      operationId: revoke_platform_quota
+      parameters:
+      - name: quota_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Quota Id
+        description: 配额记录的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 撤销没有使用量和进行中预留的应用独立配额，使容量回到共享池。
+      x-permission: platform.quotas.manage
 components:
   schemas:
     Account:
@@ -5267,6 +5461,12 @@ components:
           type: array
           title: Quota Scopes
           description: 配额统计范围目录。
+        quota_allocation_modes:
+          items:
+            $ref: '#/components/schemas/CatalogItem'
+          type: array
+          title: Quota Allocation Modes
+          description: 配额分配模式目录。
         storage_addressing:
           items:
             $ref: '#/components/schemas/CatalogItem'
@@ -5293,6 +5493,7 @@ components:
       - effects
       - operations
       - quota_scopes
+      - quota_allocation_modes
       - storage_addressing
       - domains
       - catalog
@@ -5619,6 +5820,62 @@ components:
       - details
       - created_at
       title: PlatformAuditEventResponse
+    PlatformQuotaCreate:
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+        application_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Application Id
+          description: 应用的服务端唯一标识。
+        limit_gib:
+          type: integer
+          minimum: 0.0
+          title: Limit Gib
+          description: 可使用容量的最大值，单位为 GiB；管理员配置时使用该字段。
+      additionalProperties: false
+      type: object
+      required:
+      - tenant_id
+      - limit_gib
+      title: PlatformQuotaCreate
+    PlatformQuotaPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/QuotaResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      title: PlatformQuotaPage
+    PlatformQuotaUpdate:
+      properties:
+        limit_gib:
+          type: integer
+          minimum: 0.0
+          title: Limit Gib
+          description: 可使用容量的最大值，单位为 GiB；管理员配置时使用该字段。
+      additionalProperties: false
+      type: object
+      required:
+      - limit_gib
+      title: PlatformQuotaUpdate
     PlatformRoleBindingPage:
       properties:
         items:
@@ -5937,6 +6194,21 @@ components:
       - writable
       - checked_at
       title: ProbeResult
+    QuotaAllocationMode:
+      type: string
+      enum:
+      - tenant_total
+      - application_reserved
+      - storage_space_legacy
+      title: QuotaAllocationMode
+    QuotaLifecycleStatus:
+      type: string
+      enum:
+      - active
+      - suspended
+      - revoked
+      - legacy
+      title: QuotaLifecycleStatus
     QuotaPage:
       properties:
         items:
@@ -5978,6 +6250,11 @@ components:
           - type: 'null'
           title: Physical Key Fingerprint
           description: 物理对象键的 SHA-256 指纹，不返回完整物理路径。
+        details:
+          additionalProperties: true
+          type: object
+          title: Details
+          description: 非敏感的差异上下文。
       type: object
       required:
       - kind
@@ -6009,8 +6286,8 @@ components:
         idempotency_key:
           anyOf:
           - type: string
-            minLength: 1
             maxLength: 128
+            minLength: 8
           - type: 'null'
           title: Idempotency Key
           description: apply 重试使用的幂等键；同一租户重复使用时返回同一对账运行结果。
@@ -6155,6 +6432,183 @@ components:
           - type: 'null'
           title: Updated At
           description: 配额记录最后更新的时间。
+        allocation_mode:
+          type: string
+          title: Allocation Mode
+          description: 配额分配模式。
+          default: tenant_total
+        status:
+          type: string
+          title: Status
+          description: 配额生命周期状态。
+          default: active
+        allocated_bytes:
+          type: integer
+          title: Allocated Bytes
+          description: 该配额已用量与预留量的合计。
+          default: 0
+        tenant_limit_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tenant Limit Bytes
+          description: 租户总配额上限，单位为字节。
+        tenant_used_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tenant Used Bytes
+          description: 租户总配额已确认使用量，单位为字节。
+        tenant_reserved_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tenant Reserved Bytes
+          description: 租户总配额进行中预留量，单位为字节。
+        tenant_available_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tenant Available Bytes
+          description: 租户总配额当前可用量，单位为字节。
+        allocated_application_limit_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Allocated Application Limit Bytes
+          description: 所有活跃应用独立配额上限之和，单位为字节。
+        allocated_application_used_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Allocated Application Used Bytes
+          description: 应用独立配额已确认使用量之和，单位为字节。
+        allocated_application_reserved_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Allocated Application Reserved Bytes
+          description: 应用独立配额进行中预留量之和，单位为字节。
+        shared_pool_limit_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Shared Pool Limit Bytes
+          description: 未划分给应用独立配额的共享池上限，单位为字节。
+        shared_pool_used_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Shared Pool Used Bytes
+          description: 共享池应用已确认使用量，单位为字节。
+        shared_pool_reserved_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Shared Pool Reserved Bytes
+          description: 共享池应用进行中预留量，单位为字节。
+        shared_pool_available_bytes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Shared Pool Available Bytes
+          description: 共享池当前可继续预留的容量，单位为字节。
+        limit_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Limit Gib
+          description: 配额上限，单位为 GiB。
+        used_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Used Gib
+          description: 已确认使用量，单位为 GiB。
+        reserved_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Reserved Gib
+          description: 进行中预留量，单位为 GiB。
+        available_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Available Gib
+          description: 当前可用量，单位为 GiB。
+        allocated_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Allocated Gib
+          description: 已用量与预留量合计，单位为 GiB。
+        tenant_limit_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Tenant Limit Gib
+          description: 租户总配额上限，单位为 GiB。
+        tenant_used_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Tenant Used Gib
+          description: 租户总配额已确认使用量，单位为 GiB。
+        tenant_reserved_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Tenant Reserved Gib
+          description: 租户总配额进行中预留量，单位为 GiB。
+        tenant_available_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Tenant Available Gib
+          description: 租户总配额当前可用量，单位为 GiB。
+        allocated_application_limit_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Allocated Application Limit Gib
+          description: 应用独立配额上限之和，单位为 GiB。
+        allocated_application_used_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Allocated Application Used Gib
+          description: 应用独立配额已确认使用量之和，单位为 GiB。
+        allocated_application_reserved_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Allocated Application Reserved Gib
+          description: 应用独立配额预留量之和，单位为 GiB。
+        shared_pool_limit_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Shared Pool Limit Gib
+          description: 共享池上限，单位为 GiB。
+        shared_pool_used_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Shared Pool Used Gib
+          description: 共享池已确认使用量，单位为 GiB。
+        shared_pool_reserved_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Shared Pool Reserved Gib
+          description: 共享池进行中预留量，单位为 GiB。
+        shared_pool_available_gib:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Shared Pool Available Gib
+          description: 共享池当前可用量，单位为 GiB。
       type: object
       required:
       - id
@@ -6169,15 +6623,15 @@ components:
       title: QuotaScope
     QuotaUpdate:
       properties:
-        limit_bytes:
+        limit_gib:
           type: integer
           minimum: 0.0
-          title: Limit Bytes
-          description: 可使用容量的最大字节数。
+          title: Limit Gib
+          description: 新的配额上限，单位为 GiB。
       additionalProperties: false
       type: object
       required:
-      - limit_bytes
+      - limit_gib
       title: QuotaUpdate
     ReconciliationDifference:
       type: string
@@ -6188,6 +6642,7 @@ components:
       - size_mismatch
       - duplicate_mapping
       - orphan_object
+      - allocation_drift
       title: ReconciliationDifference
     RegisterRequest:
       properties:
@@ -7249,6 +7704,15 @@ components:
       - settled
       - released
       - quarantined
+      description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
+    MetadataQuotaStatus:
+      type: string
+      title: MetadataQuotaStatus
+      enum:
+      - active
+      - suspended
+      - revoked
+      - legacy
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataAuthorizationScope:
       type: string

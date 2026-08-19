@@ -90,6 +90,46 @@ class ApplicationOwnerModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ApplicationMembershipBindingModel(Base):
+    """The single tenant-local membership delegated to an application."""
+
+    __tablename__ = "application_membership_binding"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        UniqueConstraint("tenant_id", "application_id"),
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "application_id"],
+            ["application.tenant_id", "application.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "membership_id"],
+            ["membership.tenant_id", "membership.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_principal_id"],
+            ["principal.tenant_id", "principal.id"],
+            ondelete="RESTRICT",
+        ),
+        Index("ix_application_membership_binding_tenant_status", "tenant_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID] = mapped_column(nullable=False)
+    membership_id: Mapped[UUID] = mapped_column(nullable=False)
+    created_by_principal_id: Mapped[UUID] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[UUID | None] = mapped_column()
+
+
 class ApiKeyModel(Base):
     __tablename__ = "api_key"
     __table_args__ = (
