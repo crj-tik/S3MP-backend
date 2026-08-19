@@ -1,5 +1,6 @@
 """S3MP FastAPI application factory."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -39,8 +40,13 @@ from s3mp.files.infrastructure.authorization_repository import (
 from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
 from s3mp.files.infrastructure.work_signal import RedisWorkSignal
+from s3mp.governance.api.platform_router import router as platform_quota_router
 from s3mp.governance.api.router import router as governance_router
-from s3mp.governance.application.governance_service import AuditService, QuotaService
+from s3mp.governance.application.governance_service import (
+    AuditService,
+    PlatformQuotaService,
+    QuotaService,
+)
 from s3mp.governance.application.reconciliation_service import QuotaReconciliationService
 from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, SqlAlchemyQuotaStore
 from s3mp.identity.api.router import router as identity_router
@@ -88,6 +94,7 @@ def _delegable_permissions() -> frozenset[str]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or get_settings()
+    logger = logging.getLogger(__name__)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -100,6 +107,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_factory = create_session_factory(engine) if engine is not None else None
         object_storage = MinioObjectStorageAdapter(configured) if configured.s3_endpoint else None
         app.state.object_storage = object_storage
+        if configured.s3_endpoint and configured.s3_bucket_capacity_gib is None:
+            logger.warning(
+                "S3MP_S3_BUCKET_CAPACITY_GIB is unset; platform quota allocation will not "
+                "have a configured Bucket ceiling"
+            )
 
         # ── Session token service ─────────────────────────────────────
         from s3mp.identity.application.security import SessionTokenService
@@ -258,6 +270,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.quota_service = QuotaService(
             quota_store, getattr(app.state, "authorization_management", None)
         )
+        app.state.platform_quota_service = PlatformQuotaService(
+            quota_store, configured.s3_bucket_capacity_bytes
+        )
         app.state.quota_reconciliation_service = (
             QuotaReconciliationService(
                 session_factory,
@@ -311,6 +326,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(storage_router)
     app.include_router(files_router)
     app.include_router(governance_router)
+    app.include_router(platform_quota_router)
 
     def custom_openapi() -> dict[str, Any]:
         """Generate the public schema and enrich it with canonical Chinese guidance."""

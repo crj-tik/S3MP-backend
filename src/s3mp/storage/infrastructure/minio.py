@@ -8,9 +8,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, cast
 
-import boto3
-from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
+import boto3  # type: ignore[import-untyped]
+from botocore.config import Config  # type: ignore[import-untyped]
+from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-untyped]
 
 from s3mp.common.config import Settings
 from s3mp.storage.domain.policy import ProviderTarget

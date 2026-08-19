@@ -44,6 +44,7 @@ class MetadataCatalogResponse(BaseModel):
     effects: list[CatalogItem] = Field(description="授权效果目录。")
     operations: list[CatalogItem] = Field(description="文件和对象存储操作类型目录。")
     quota_scopes: list[CatalogItem] = Field(description="配额统计范围目录。")
+    quota_allocation_modes: list[CatalogItem] = Field(description="配额分配模式目录。")
     storage_addressing: list[CatalogItem] = Field(
         description="对象存储寻址方式目录；不包含端点或凭据。"
     )
@@ -208,6 +209,12 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
         _item("released", "已释放", "预留已释放回可用容量。", terminal=True),
         _item("quarantined", "已隔离", "预留关联异常，需要人工或对账处理。", terminal=True),
     ],
+    "quota": [
+        _item("active", "有效", "配额参与分配和上传授权。", ("suspended", "revoked", "legacy")),
+        _item("suspended", "已暂停", "配额暂不参与新的容量预留。", ("active", "revoked")),
+        _item("revoked", "已撤销", "应用独立配额已撤销并回收到共享池。", terminal=True),
+        _item("legacy", "历史兼容", "旧存储空间配额，仅用于迁移或审计。", terminal=True),
+    ],
 }
 
 SCOPES = [
@@ -230,6 +237,12 @@ QUOTA_SCOPES = [
     _item("tenant", "租户", "统计租户全部应用的容量。"),
     _item("application", "应用", "统计单个应用命名空间的容量。"),
     _item("storage_space", "存储空间", "统计单个逻辑存储空间命名空间的容量。"),
+]
+QUOTA_ALLOCATION_MODES = [
+    _item("tenant_total", "租户总配额", "租户在共享 Bucket 中的总容量上限。"),
+    _item("application_reserved", "应用独立配额", "从租户总配额中静态划给应用的容量。"),
+    _item("shared_pool", "共享池", "未配置独立配额的应用共同使用的剩余容量。"),
+    _item("storage_space_legacy", "历史存储空间配额", "旧模型配额，仅保留用于迁移和审计。"),
 ]
 STORAGE_ADDRESSING = [
     _item("path", "Path-style", "使用 /bucket/key 形式访问 S3 兼容服务。"),
@@ -418,8 +431,14 @@ def _catalog_descriptors() -> list[dict[str, Any]]:
             EFFECTS,
             query_parameter="effect",
         ),
-        _descriptor("file", "file_object", "status", STATUS_CATALOG["file_object"],
-                    "GET /api/v1/storage_spaces/{space_id}/files", query_parameter="status"),
+        _descriptor(
+            "file",
+            "file_object",
+            "status",
+            STATUS_CATALOG["file_object"],
+            "GET /api/v1/storage_spaces/{space_id}/files",
+            query_parameter="status",
+        ),
         _descriptor(
             "file",
             "upload",
@@ -457,6 +476,15 @@ def _catalog_descriptors() -> list[dict[str, Any]]:
         ),
         _descriptor(
             "quota", "quota", "scope", QUOTA_SCOPES, "GET /api/v1/quotas", query_parameter="scope"
+        ),
+        _descriptor(
+            "quota",
+            "quota",
+            "allocation_mode",
+            QUOTA_ALLOCATION_MODES,
+            "GET /api/v1/quotas",
+            "GET /api/v1/platform/quotas",
+            query_parameter="allocation_mode",
         ),
         _descriptor("quota", "reservation", "status", enum_items(ReservationStatus)),
         _descriptor(
@@ -537,6 +565,9 @@ def catalog_payload(domains: Sequence[str] | None = None) -> dict[str, Any]:
         "effects": [dict(item) for item in EFFECTS] if "authorization" in selected else [],
         "operations": [dict(item) for item in OPERATIONS] if "storage" in selected else [],
         "quota_scopes": [dict(item) for item in QUOTA_SCOPES] if "quota" in selected else [],
+        "quota_allocation_modes": (
+            [dict(item) for item in QUOTA_ALLOCATION_MODES] if "quota" in selected else []
+        ),
         "storage_addressing": [dict(item) for item in STORAGE_ADDRESSING]
         if "storage" in selected
         else [],

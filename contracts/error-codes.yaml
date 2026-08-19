@@ -76,6 +76,21 @@ error_codes:
   - code: quota_exceeded
     http_status: 409
     description: Required capacity cannot be reserved or actual usage exceeds the allowed quota.
+  - code: quota_not_configured
+    http_status: 409
+    description: The tenant has no active total quota and cannot accept storage writes.
+  - code: quota_allocation_exceeded
+    http_status: 422
+    description: The requested tenant or application allocation exceeds its parent capacity.
+  - code: quota_limit_too_low
+    http_status: 422
+    description: The new quota limit is below current usage, reservations or child allocations.
+  - code: quota_not_revokeable
+    http_status: 409
+    description: The addressed quota is a tenant total or otherwise cannot be revoked.
+  - code: quota_in_use
+    http_status: 409
+    description: The application quota still has usage or active reservations.
   - code: upload_verification_failed
     http_status: 409
     description: Stored object metadata does not match the declared upload contract.

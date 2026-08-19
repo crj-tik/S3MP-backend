@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     JSON,
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -35,6 +36,24 @@ class QuotaModel(Base):
             ondelete="CASCADE",
         ),
         Index("ix_quota_tenant_application", "tenant_id", "application_id"),
+        Index("ix_quota_tenant_status_mode", "tenant_id", "status", "allocation_mode"),
+        Index("ix_quota_application_status", "application_id", "status"),
+        Index(
+            "uq_quota_active_tenant_total",
+            "tenant_id",
+            unique=True,
+            postgresql_where=(
+                "application_id IS NULL AND storage_space_id IS NULL AND status = 'active'"
+            ),
+        ),
+        CheckConstraint(
+            "allocation_mode IN ('tenant_total', 'application_reserved', 'storage_space_legacy')",
+            name="ck_quota_allocation_mode",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'suspended', 'revoked', 'legacy')",
+            name="ck_quota_status",
+        ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
@@ -49,6 +68,12 @@ class QuotaModel(Base):
     measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_reconciliation_run_id: Mapped[UUID | None] = mapped_column()
     drift_summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    allocation_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="tenant_total", server_default="tenant_total"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -62,12 +87,19 @@ class QuotaReservationModel(Base):
             ["tenant_id", "quota_id"], ["quota.tenant_id", "quota.id"], ondelete="CASCADE"
         ),
         Index("ix_quota_reservation_tenant_status", "tenant_id", "status"),
+        CheckConstraint(
+            "allocation_mode IN ('shared_pool', 'application_reserved', 'storage_space_legacy')",
+            name="ck_quota_reservation_allocation_mode",
+        ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     quota_id: Mapped[UUID] = mapped_column(nullable=False)
     application_quota_id: Mapped[UUID | None] = mapped_column()
     tenant_quota_id: Mapped[UUID | None] = mapped_column()
+    allocation_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="shared_pool", server_default="shared_pool"
+    )
     requested_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     actual_bytes: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="reserved")
@@ -103,9 +135,7 @@ class QuotaReconciliationRunModel(Base):
 
 class QuotaReconciliationDifferenceModel(Base):
     __tablename__ = "quota_reconciliation_difference"
-    __table_args__ = (
-        Index("ix_quota_reconciliation_difference_run_kind", "run_id", "kind"),
-    )
+    __table_args__ = (Index("ix_quota_reconciliation_difference_run_kind", "run_id", "kind"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(nullable=False)

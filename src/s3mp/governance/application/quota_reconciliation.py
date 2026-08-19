@@ -12,6 +12,7 @@ class ReconciliationDifference(StrEnum):
     SIZE_MISMATCH = "size_mismatch"
     DUPLICATE_MAPPING = "duplicate_mapping"
     ORPHAN_OBJECT = "orphan_object"
+    ALLOCATION_DRIFT = "allocation_drift"
 
 
 @dataclass(frozen=True, slots=True)

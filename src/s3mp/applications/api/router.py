@@ -22,6 +22,10 @@ router = APIRouter(prefix="/api/v1", tags=["Applications", "API Keys"])
 class ApplicationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
+    authorization_membership_id: UUID | None = Field(
+        default=None,
+        description="同租户 active Membership 的授权代表；省略时使用当前登录成员。",
+    )
 
 
 class ApplicationUpdate(BaseModel):
@@ -75,6 +79,13 @@ class ApplicationResponse(BaseModel):
     deletion_reason: str | None = None
     owners: list[dict[str, str]] = Field(default_factory=list)
     takeover_required: bool = False
+    authorization_state: str = "authorization_unconfigured"
+    authorization_representative: dict[str, Any] | None = None
+
+
+class ApplicationMembershipBindingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    membership_id: UUID
 
 
 class ApiKeyResponse(BaseModel):
@@ -192,9 +203,58 @@ async def create_application(
     body: ApplicationCreate,
     context: Annotated[PrincipalContext, management_permission("create_application")],
 ) -> ApplicationResponse:
+    service = _app_service(request)
+    if body.authorization_membership_id is None:
+        result = await service.create_app(context, body.name)
+    else:
+        result = await service.create_app(
+            context, body.name, body.authorization_membership_id
+        )
     return ApplicationResponse.model_validate(
-        await _app_service(request).create_app(context, body.name)
+        result
     )
+
+
+@router.get(
+    "/applications/{application_id}/authorization-representative",
+    response_model=dict[str, Any],
+    operation_id="get_application_authorization_representative",
+)
+async def get_application_authorization_representative(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_application")],
+    application_id: UUID,
+) -> dict[str, Any]:
+    return await _app_service(request).get_membership_binding(context, application_id)
+
+
+@router.put(
+    "/applications/{application_id}/authorization-representative",
+    response_model=dict[str, Any],
+    operation_id="bind_application_authorization_representative",
+)
+async def bind_application_authorization_representative(
+    request: Request,
+    body: ApplicationMembershipBindingRequest,
+    context: Annotated[PrincipalContext, management_permission("update_application")],
+    application_id: UUID,
+) -> dict[str, Any]:
+    return await _app_service(request).bind_membership(
+        context, application_id, body.membership_id
+    )
+
+
+@router.delete(
+    "/applications/{application_id}/authorization-representative",
+    response_model=dict[str, Any],
+    operation_id="revoke_application_authorization_representative",
+)
+async def revoke_application_authorization_representative(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("update_application")],
+    application_id: UUID,
+) -> dict[str, Any]:
+    return await _app_service(request).revoke_membership_binding(context, application_id)
 
 
 @router.get(

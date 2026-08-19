@@ -105,6 +105,7 @@ uv run uvicorn s3mp.main:app --host 0.0.0.0 --port 8000 --reload
 
 - `S3MP_S3_ENDPOINT`：对象存储 endpoint；容器访问宿主机服务时使用 `host.docker.internal`，不要使用容器内的 `localhost`。
 - `S3MP_S3_REGION`、`S3MP_S3_BUCKET`、`S3MP_S3_PATH_STYLE`：全平台统一值；生产 S3 兼容服务需要 path-style 时保持 `true`。
+- `S3MP_S3_BUCKET_CAPACITY_GIB`：共享 Bucket 可分配容量上限，单位为 GiB；平台管理员配置租户总配额时不得超过该值。S3/MinIO 普通对象接口通常不会返回可靠的业务容量上限，因此生产环境必须由运维明确配置。
 - `S3MP_S3_ACCESS_KEY`、`S3MP_S3_SECRET_KEY`：仅由部署环境注入，不写入 API 响应或租户配置。
 
 API 启动和 `/health/ready` 会校验数据库、Redis 与共享对象存储。租户/应用只能提交应用内相对路径；完整 Bucket、物理 Key、Endpoint 和 Region 由服务端的共享 profile 与应用命名空间派生。
@@ -183,7 +184,7 @@ curl http://localhost:8000/api/v1/health/ready
 | Flag | 影响 | 降级方式 |
 |------|------|----------|
 | `storage_connection.capability_flags` | S3 操作允许列表 | 数据库设置 `multipart=false`, `delete_object=false` 等 |
-| `quota.limit_bytes` | 存储配额 | 设置为 0 阻止新上传 |
+| `quota.limit_gib` | 存储配额 | 公开配置单位为 GiB；设置为 0 阻止新上传 |
 | API Key `status` | 应用访问 | 批量 `revoke` 受影响 Key |
 | `membership.status` | 用户权限 | 设置为 `suspended` 即时回收 |
 

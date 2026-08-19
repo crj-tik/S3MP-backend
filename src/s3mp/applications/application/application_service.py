@@ -34,6 +34,16 @@ async def _application_view(store: Any, tenant_id: UUID, record: dict[str, Any])
             {"principal_id": str(owner_id), "principal_type": "unknown"} for owner_id in owner_ids
         ]
     public["takeover_required"] = public.get("status") == "pending_takeover"
+    reader = getattr(store, "get_membership_binding", None)
+    public["authorization_representative"] = (
+        await reader(tenant_id, app_id) if reader is not None else None
+    )
+    public["authorization_state"] = (
+        "configured"
+        if public["authorization_representative"]
+        and public["authorization_representative"].get("status") == "active"
+        else "authorization_unconfigured"
+    )
     return public
 
 
@@ -49,7 +59,7 @@ class ApplicationStore(Protocol):
     async def get_app(self, tenant_id: UUID, app_id: UUID) -> dict[str, Any] | None: ...
 
     async def create_app(
-        self, tenant_id: UUID, name: str, principal_id: UUID
+        self, tenant_id: UUID, name: str, principal_id: UUID, membership_id: UUID | None = None
     ) -> dict[str, Any]: ...
 
     async def update_app(
@@ -75,6 +85,15 @@ class ApplicationStore(Protocol):
         self, tenant_id: UUID, owner_principal_id: UUID
     ) -> int: ...
     async def scan_ownerless_applications(self, tenant_id: UUID) -> int: ...
+    async def get_membership_binding(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> dict[str, Any] | None: ...
+    async def bind_membership(
+        self, tenant_id: UUID, app_id: UUID, membership_id: UUID, actor_principal_id: UUID
+    ) -> dict[str, Any]: ...
+    async def revoke_membership_binding(
+        self, tenant_id: UUID, app_id: UUID, actor_principal_id: UUID
+    ) -> dict[str, Any] | None: ...
 
 
 class PermissionAuthorizer(Protocol):
@@ -146,13 +165,76 @@ class ApplicationService:
         await self._require_owner_or_permission(context, app_id, "applications.read")
         return await _application_view(self.store, context.tenant_id, result)
 
-    async def create_app(self, context: PrincipalContext, name: str) -> dict[str, Any]:
+    async def create_app(
+        self, context: PrincipalContext, name: str, membership_id: UUID | None = None
+    ) -> dict[str, Any]:
         await self._require(context, "applications.manage")
+        if context.subject_kind == "application":
+            raise ApiError("permission_denied", "API keys cannot create applications", status_code=403)
+        representative_id = membership_id or context.membership_id
+        try:
+            try:
+                created = await self.store.create_app(
+                    context.tenant_id, name, context.principal_id, representative_id
+                )
+            except TypeError as exc:
+                # Keep lightweight/in-memory stores from older integrations usable
+                # while the SQLAlchemy store adopts the representative argument.
+                if "positional" not in str(exc) and "argument" not in str(exc):
+                    raise
+                created = await self.store.create_app(
+                    context.tenant_id, name, context.principal_id
+                )
+        except ValueError as exc:
+            if str(exc) == "membership_not_found":
+                raise ApiError("resource_not_found", "Membership not found", status_code=404) from exc
+            if str(exc) == "membership_not_active":
+                raise ApiError("conflict", "Membership is not active", status_code=409) from exc
+            raise
         return await _application_view(
             self.store,
             context.tenant_id,
-            await self.store.create_app(context.tenant_id, name, context.principal_id),
+            created,
         )
+
+    async def get_membership_binding(
+        self, context: PrincipalContext, app_id: UUID
+    ) -> dict[str, Any]:
+        await self._require_owner_or_permission(context, app_id, "applications.read")
+        binding = await self.store.get_membership_binding(context.tenant_id, app_id)
+        if binding is None:
+            raise ApiError("resource_not_found", "Application membership binding not found", status_code=404)
+        return binding
+
+    async def bind_membership(
+        self, context: PrincipalContext, app_id: UUID, membership_id: UUID
+    ) -> dict[str, Any]:
+        if context.subject_kind == "application":
+            raise ApiError("permission_denied", "API keys cannot manage representatives", status_code=403)
+        await self._require_owner_or_permission(context, app_id, "applications.manage")
+        try:
+            return await self.store.bind_membership(
+                context.tenant_id, app_id, membership_id, context.principal_id
+            )
+        except ValueError as exc:
+            if str(exc) in {"application_not_found", "membership_not_found"}:
+                raise ApiError("resource_not_found", "Application or membership not found", status_code=404) from exc
+            if str(exc) == "membership_not_active":
+                raise ApiError("conflict", "Membership is not active", status_code=409) from exc
+            raise
+
+    async def revoke_membership_binding(
+        self, context: PrincipalContext, app_id: UUID
+    ) -> dict[str, Any]:
+        if context.subject_kind == "application":
+            raise ApiError("permission_denied", "API keys cannot manage representatives", status_code=403)
+        await self._require_owner_or_permission(context, app_id, "applications.manage")
+        binding = await self.store.revoke_membership_binding(
+            context.tenant_id, app_id, context.principal_id
+        )
+        if binding is None:
+            raise ApiError("resource_not_found", "Application membership binding not found", status_code=404)
+        return binding
 
     async def update_app(
         self, context: PrincipalContext, app_id: UUID, name: str | None

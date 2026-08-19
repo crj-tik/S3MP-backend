@@ -5,8 +5,10 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
-from s3mp.governance.domain.quota import QuotaScope
+from s3mp.governance.domain.quota import QuotaAllocationMode, QuotaScope
+from s3mp.governance.domain.units import gib_to_bytes
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.platform.domain.context import PlatformContext
 
 
 class QuotaStore(Protocol):
@@ -18,6 +20,8 @@ class QuotaStore(Protocol):
         cursor: str | None,
         application_id: str | None = None,
         scope: QuotaScope | None = None,
+        status: str | None = "active",
+        allocation_mode: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]: ...
     async def get_quota(self, tenant_id: UUID, quota_id: UUID) -> dict[str, Any] | None: ...
     async def update_quota(
@@ -49,6 +53,8 @@ class QuotaService:
         cursor: str | None = None,
         application_id: str | None = None,
         scope: QuotaScope | None = None,
+        status: str | None = "active",
+        allocation_mode: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         await self._require(context, "quotas.read")
         return await self.store.list_quotas(
@@ -58,6 +64,8 @@ class QuotaService:
             cursor,
             application_id=application_id,
             scope=scope,
+            status=status,
+            allocation_mode=allocation_mode,
         )
 
     async def get_quota(self, context: PrincipalContext, quota_id: str) -> dict[str, Any]:
@@ -68,9 +76,13 @@ class QuotaService:
         return result
 
     async def update_quota(
-        self, context: PrincipalContext, quota_id: str, limit_bytes: int
+        self, context: PrincipalContext, quota_id: str, limit_gib: int
     ) -> dict[str, Any]:
         await self._require(context, "quotas.manage")
+        try:
+            limit_bytes = gib_to_bytes(limit_gib)
+        except ValueError as exc:
+            raise ApiError("validation_failed", str(exc), status_code=422) from exc
         result = await self.store.update_quota(context.tenant_id, UUID(quota_id), limit_bytes)
         if result is None:
             raise ApiError("resource_not_found", "Quota not found", status_code=404)
@@ -82,6 +94,109 @@ class QuotaService:
                 "internal_error", "Authorization management is not configured", status_code=500
             )
         await self.authorizer.require_permission(context, permission)
+
+
+class PlatformQuotaStore(Protocol):
+    async def list_platform_quotas(
+        self,
+        *,
+        tenant_id: UUID | None,
+        application_id: UUID | None,
+        status: str | None,
+        allocation_mode: QuotaAllocationMode | None,
+        limit: int,
+        cursor: UUID | None,
+    ) -> tuple[list[dict[str, Any]], UUID | None]: ...
+
+    async def create_platform_quota(
+        self,
+        *,
+        actor_user_id: UUID,
+        tenant_id: UUID,
+        application_id: UUID | None,
+        limit_bytes: int,
+        bucket_capacity_bytes: int | None,
+    ) -> dict[str, Any]: ...
+
+    async def update_platform_quota(
+        self,
+        actor_user_id: UUID,
+        quota_id: UUID,
+        limit_bytes: int,
+        bucket_capacity_bytes: int | None,
+    ) -> dict[str, Any] | None: ...
+
+    async def revoke_platform_quota(
+        self, *, actor_user_id: UUID, quota_id: UUID
+    ) -> dict[str, Any] | None: ...
+
+
+@dataclass
+class PlatformQuotaService:
+    store: PlatformQuotaStore
+    bucket_capacity_bytes: int | None = None
+
+    async def list_quotas(
+        self,
+        _context: PlatformContext,
+        *,
+        tenant_id: UUID | None,
+        application_id: UUID | None,
+        status: str | None,
+        allocation_mode: QuotaAllocationMode | None,
+        limit: int,
+        cursor: UUID | None,
+    ) -> tuple[list[dict[str, Any]], UUID | None]:
+        return await self.store.list_platform_quotas(
+            tenant_id=tenant_id,
+            application_id=application_id,
+            status=status,
+            allocation_mode=allocation_mode,
+            limit=min(limit, 200),
+            cursor=cursor,
+        )
+
+    async def create_quota(
+        self,
+        context: PlatformContext,
+        *,
+        tenant_id: UUID,
+        application_id: UUID | None,
+        limit_gib: int,
+    ) -> dict[str, Any]:
+        try:
+            limit_bytes = gib_to_bytes(limit_gib)
+        except ValueError as exc:
+            raise ApiError("validation_failed", str(exc), status_code=422) from exc
+        return await self.store.create_platform_quota(
+            actor_user_id=context.user_id,
+            tenant_id=tenant_id,
+            application_id=application_id,
+            limit_bytes=limit_bytes,
+            bucket_capacity_bytes=self.bucket_capacity_bytes,
+        )
+
+    async def update_quota(
+        self, context: PlatformContext, quota_id: UUID, limit_gib: int
+    ) -> dict[str, Any]:
+        try:
+            limit_bytes = gib_to_bytes(limit_gib)
+        except ValueError as exc:
+            raise ApiError("validation_failed", str(exc), status_code=422) from exc
+        result = await self.store.update_platform_quota(
+            context.user_id, quota_id, limit_bytes, self.bucket_capacity_bytes
+        )
+        if result is None:
+            raise ApiError("resource_not_found", "Platform quota not found", 404)
+        return result
+
+    async def revoke_quota(self, context: PlatformContext, quota_id: UUID) -> dict[str, Any]:
+        result = await self.store.revoke_platform_quota(
+            actor_user_id=context.user_id, quota_id=quota_id
+        )
+        if result is None:
+            raise ApiError("resource_not_found", "Platform quota not found", 404)
+        return result
 
 
 @dataclass

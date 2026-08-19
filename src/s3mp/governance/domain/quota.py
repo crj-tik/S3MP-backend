@@ -19,6 +19,19 @@ class QuotaScope(StrEnum):
     STORAGE_SPACE = "storage_space"
 
 
+class QuotaAllocationMode(StrEnum):
+    TENANT_TOTAL = "tenant_total"
+    APPLICATION_RESERVED = "application_reserved"
+    STORAGE_SPACE_LEGACY = "storage_space_legacy"
+
+
+class QuotaLifecycleStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    REVOKED = "revoked"
+    LEGACY = "legacy"
+
+
 class QuotaExceededError(ValueError):
     code = "quota_exceeded"
 

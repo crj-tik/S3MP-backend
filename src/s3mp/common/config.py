@@ -5,8 +5,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from s3mp.governance.domain.units import gib_to_bytes
 
 
 class Settings(BaseSettings):
@@ -26,6 +28,7 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     s3_path_style: bool = True
     s3_bucket: str | None = None
+    s3_bucket_capacity_gib: int | None = Field(default=None, ge=0)
     s3_access_key: SecretStr | None = None
     s3_access_key_file: Path | None = None
     s3_secret_key: SecretStr | None = None
@@ -42,6 +45,19 @@ class Settings(BaseSettings):
     browser_origins: tuple[str, ...] = ()
     browser_session_ttl_seconds: int = Field(default=28800, ge=300, le=2592000)
     browser_cookie_secure: bool | None = None
+
+    @field_validator("s3_bucket_capacity_gib", mode="before")
+    @classmethod
+    def empty_bucket_capacity_is_unset(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @property
+    def s3_bucket_capacity_bytes(self) -> int | None:
+        return (
+            gib_to_bytes(self.s3_bucket_capacity_gib)
+            if self.s3_bucket_capacity_gib is not None
+            else None
+        )
 
     @model_validator(mode="after")
     def validate_secret_sources(self) -> Self:
@@ -61,6 +77,10 @@ class Settings(BaseSettings):
         if self.s3_endpoint is not None:
             if self.s3_bucket is None:
                 raise ValueError("s3_bucket is required when s3_endpoint is configured")
+            if self.environment.lower() == "production" and self.s3_bucket_capacity_gib is None:
+                raise ValueError(
+                    "production requires s3_bucket_capacity_gib when s3_endpoint is configured"
+                )
         if "*" in self.browser_origins:
             raise ValueError("browser_origins must not contain wildcard origins")
         if self.environment.lower() == "production" and self.browser_cookie_secure is False:
