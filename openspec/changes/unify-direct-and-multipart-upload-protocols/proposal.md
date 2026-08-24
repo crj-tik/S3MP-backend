@@ -7,6 +7,8 @@
 - 新增明确的 presigned PUT 直传会话和完成确认响应，应用通过短期 URL 直接写入共享 S3，S3MP 负责最终 HeadObject 校验和入库。
 - 将 Multipart 分片上传改为真正接收分片二进制并调用对象存储 `upload_part`，后端自动保存真实 ETag，完成时统一校验并提交。
 - 统一两种模式的应用授权、路径派生、配额预留、幂等、审计、过期清理和 ingestion provenance 语义。
+- 直传和 Multipart 创建请求必须由调用方提供带时区的 `expires_at`；服务端不得再静默补充固定 24 小时有效期。
+- 时间字段遵循统一语义：`starts_at` 可默认当前时间，安全凭证和上传会话的 `expires_at` 必须显式传入；API Key 的 `ttl_days` 默认值保持 90，单位固定为自然日。
 - 删除代理完整文件上传接口 `proxy_upload_content` 及其服务端实现。
 - 删除 `UploadCreate.direct_requested`，不再通过布尔字段隐式选择未实现的直传能力。
 - 删除只登记分片元数据的 `create_multipart_part` 和 `confirm_multipart_part` 接口；由真正的分片上传接口一次完成内容写入和分片记录。

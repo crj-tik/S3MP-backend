@@ -90,3 +90,12 @@ PUT /api/v1/multipart_uploads/{multipart_id}/parts/{part_number}
 5. 前端切换到两套新流程后部署 API；检查旧 operationId 在代码、契约、文档和生成物中全仓为零。
 
 回滚时只能回滚到新 change 的上一版本部署，不恢复已删除的公开路径作为兼容别名；如果需要兼容旧客户端，必须在发布前另行批准一个有明确截止日期的兼容 change。
+
+### 7. 时间字段注入和有效期边界
+
+- `created_at` 由数据库 `DEFAULT now()` 生成并保持 `NOT NULL`；ORM 模型同步声明 `server_default=func.now()`。
+- `updated_at` 在 ORM 更新路径使用 `onupdate=func.now()`；如果存在绕过 ORM 的写路径，另行增加数据库触发器，不把 `DEFAULT now()` 误认为更新触发器。
+- `starts_at` 是授权开始边界，可在服务层未收到值时注入当前 UTC 时间。
+- 直传和 Multipart 会话的 `expires_at` 是安全边界，必须由请求显式提供、带时区且严格晚于当前时间；服务端不得使用固定 24 小时隐式兜底。
+- `revoked_at`、`deleted_at`、`completed_at` 等事件时间只在对应状态转换发生时由代码写入，保持可空。
+- API Key 的 `ttl_days` 保持默认 90，单位是自然日；该策略不改为小时，也不改为必填 `expires_at`。

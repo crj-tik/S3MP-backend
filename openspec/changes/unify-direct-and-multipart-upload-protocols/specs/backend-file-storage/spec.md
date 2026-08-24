@@ -5,7 +5,7 @@
 
 #### Scenario: 创建直传会话
 - **WHEN** 已授权应用为 canonical relative key 创建直传会话
-- **THEN** 系统 SHALL 返回带会话标识、过期时间、上传方法、短期 presigned PUT URL 及必要请求头的明确响应，并 SHALL 不返回底层凭证或物理命名空间给应用
+- **THEN** 请求 SHALL 显式提供带时区且晚于当前时间的 `expires_at`；系统 SHALL 返回带会话标识、过期时间、上传方法、短期 presigned PUT URL 及必要请求头的明确响应，并 SHALL 不返回底层凭证或物理命名空间给应用
 
 #### Scenario: 确认直传完成
 - **WHEN** 客户端使用直传 URL 写入对象并调用完成接口
@@ -25,6 +25,8 @@
 
 ### Requirement: Multipart 生命周期
 Multipart 会话 SHALL 绑定租户、主体、storage space、canonical key、派生 physical key、大小、配额和到期时间，并使用对象提供商的 create、真实二进制 part upload、list、complete、abort 生命周期。上传分片接口 SHALL 接收分片二进制并由服务端调用 provider `upload_part`，保存真实 ETag 和长度；系统 SHALL NOT 要求客户端先登记一个空分片再通过另一个接口伪造确认。所有 session、part、完成和中止操作 SHALL 重新验证主体所有权及授权；完成 SHALL 校验 provider 上传 ID、part 编号/ETag 清单和最终对象元数据，过期会话 SHALL Abort。
+
+Multipart 创建请求 SHALL 显式提供带时区且晚于当前时间的 `expires_at`；服务端 SHALL 拒绝缺失、已过期或无法解析的值，不得自动补充固定时长。
 
 #### Scenario: 上传真实分片
 - **WHEN** 已授权应用向 `/multipart_uploads/{id}/parts/{part_number}` 发送分片二进制

@@ -4,6 +4,7 @@
 - [x] 1.2 更新上传权限操作目录，统一直传和 Multipart 的应用写入授权，并删除代理上传、空分片登记和旧 ETag 确认操作
 - [x] 1.3 为新增和保留的上传接口补齐一致的中文 operation、参数、请求体、响应体、错误和安全说明
 - [x] 1.4 在契约校验工具中增加已删除 operationId/path/schema 的负向断言，覆盖 `proxy_upload_content`、`create_multipart_part`、`confirm_multipart_part`
+- [x] 1.5 在直传和 Multipart 创建请求中加入必填带时区 `expires_at`，并在契约中固定其未来时间语义；明确 API Key `ttl_days` 默认 90 且单位为自然日
 
 ## 2. 直传端到端实现
 
@@ -12,6 +13,7 @@
 - [x] 2.3 实现直传状态查询和完成确认，复用 HeadObject、checksum、Content-Length、Content-Type、授权重验证和 FileObject 入库逻辑
 - [x] 2.4 确保直传响应只返回短期 provider instruction 和相对 object key，不返回 Bucket、physical key、provider upload ID 或凭证
 - [x] 2.5 实现直传过期、重复完成、provider 缺失、元数据不匹配和完成后数据库失败的失败状态及补偿路径
+- [x] 2.6 移除直传创建流程的固定 24 小时过期兜底，校验调用方提供的 `expires_at` 并将其纳入幂等指纹和持久化
 
 ## 3. Multipart 真实分片实现
 
@@ -21,6 +23,7 @@
 - [x] 3.4 保留分片列表查询，返回已由服务端确认的分片结果，并禁止泄露 provider upload ID
 - [x] 3.5 完善 Multipart completion：校验分片连续性、去重、总长度、数据库 ETag、provider inventory、最终对象元数据和 ingestion commit
 - [x] 3.6 完善 Multipart abort、过期清理、provider abort 失败和 reconciliation_required 状态，确保不会遗留不可追踪的 provider upload
+- [x] 3.7 移除 Multipart 创建流程的固定 24 小时过期兜底，校验并持久化调用方提供的 `expires_at`
 
 ## 4. 删除旧协议和重复实现
 
@@ -52,6 +55,7 @@
 - [x] 7.3 增加对象存储适配器测试：path-style、presigned PUT、upload_part、complete、abort、provider 错误和返回元数据校验
 - [x] 7.4 增加 ingestion、配额、审计和 reconciliation 失败场景测试，确认 provider 成功但数据库失败时不会产生可用脏文件
 - [x] 7.5 增加契约负向测试，确保全仓不存在已删除 operationId、旧路径、`direct_requested` 和旧请求 schema 引用
+- [x] 7.7 增加时间边界测试：缺失、过去、无时区的 `expires_at` 必须失败；合法 `expires_at` 必须贯穿直传、Multipart、清理和幂等流程；API Key `ttl_days=90` 按自然日计算
 - [ ] 7.6 运行全套 Ruff、Mypy、pytest、OpenAPI 覆盖率和 OpenSpec strict validation，并记录容器级 MinIO/PostgreSQL 验收结果
 
 ## 8. 发布与清理验收

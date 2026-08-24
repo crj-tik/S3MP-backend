@@ -3,6 +3,8 @@
 ### Requirement: 上传契约只发布直传和分片两种模式
 运行时 OpenAPI 与 `contracts/openapi.yaml` SHALL 只发布直传会话和 Multipart 会话两套上传协议。直传响应 SHALL 明确包含会话标识、相对 object key、上传方法、短期 URL、必要请求头和过期时间；Multipart 响应 SHALL 明确包含会话标识、相对 object key、声明大小、状态和分片上传所需信息。契约 SHALL 双向校验实现与基线，并 SHALL 对已删除 path、method、operationId、schema 和权限操作进行负向检查。
 
+`DirectUploadCreate` 和 `MultipartCreate` 请求 SHALL 包含必填的带时区 ISO 8601 `expires_at`；该值必须晚于服务端当前时间。API Key 创建请求的 `ttl_days` 默认值 SHALL 保持 90，单位 SHALL 明确为自然日。
+
 #### Scenario: 前端生成直传客户端
 - **WHEN** 前端读取发布契约
 - **THEN** 契约 SHALL 提供可生成的直传会话、直传完成和直传状态模型，不得要求前端推断 URL 或解析 unknown
