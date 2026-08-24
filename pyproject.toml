@@ -33,14 +33,16 @@ build-backend = "hatchling.build"
 packages = ["src/s3mp"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers --basetemp=.tmp/pytest"
+addopts = "-ra --strict-markers --basetemp=tests/.artifacts/pytest -o cache_dir=tests/.artifacts/pytest-cache"
 testpaths = ["tests"]
+norecursedirs = [".artifacts", "__pycache__"]
 asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py312"
 line-length = 100
 src = ["src", "tests", "scripts"]
+cache-dir = "tests/.artifacts/ruff"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
@@ -55,6 +57,7 @@ python_version = "3.12"
 strict = true
 files = ["src", "tests", "scripts"]
 plugins = ["pydantic.mypy"]
+cache_dir = "tests/.artifacts/mypy"
 
 [tool.uv]
 default-groups = ["dev"]

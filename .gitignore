@@ -15,3 +15,7 @@ htmlcov/
 .tmp/
 .tmp-*/
 pytest-of-*/
+tests/.artifacts/*
+!tests/.artifacts/.gitkeep
+tests/__pycache__/
+tests/
