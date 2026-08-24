@@ -43,6 +43,7 @@ class TenantLifecycleRequest(_Strict):
 class PlatformTenantResponse(_Strict):
     id: UUID
     slug: str
+    storage_root: str = Field(description="租户不可变的默认逻辑存储根路径。")
     name: str
     status: Literal["active", "suspended", "deleted"]
     created_at: datetime | None = None

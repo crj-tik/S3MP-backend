@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from s3mp.authorization.infrastructure.models import PermissionModel, RoleModel, RolePermissionModel
 from s3mp.platform.infrastructure.models import PlatformAuditEventModel, PlatformRoleModel
+from s3mp.tenant.infrastructure.models import TenantModel
 
 PLATFORM_ROLES: dict[str, tuple[str, ...]] = {
     "platform_admin": (
@@ -37,6 +38,10 @@ PLATFORM_ROLES: dict[str, tuple[str, ...]] = {
         "platform.audit.read",
         "platform.quotas.read",
     ),
+    # Tenant-admin is a platform-level grant.  Its tenant permissions are
+    # derived only after the request is bound to an ACTIVE Membership; it is
+    # intentionally not represented as a platform data-plane permission.
+    "tenant-admin": (),
 }
 
 TENANT_ADMIN_PERMISSIONS: tuple[str, ...] = (
@@ -48,17 +53,34 @@ TENANT_ADMIN_PERMISSIONS: tuple[str, ...] = (
     "roles.manage",
     "role_bindings.read",
     "role_bindings.manage",
+    "authorization.explain",
+    "authorization.simulate",
     "applications.read",
     "applications.manage",
     "api_keys.read",
     "api_keys.manage",
     "storage_connections.read",
     "storage_connections.manage",
-    "storage_spaces.read",
-    "storage_spaces.manage",
+    "files.list",
+    "files.read",
+    "files.write",
+    "files.delete",
+    "files.copy",
+    "files.move",
+    "presigned_urls.issue",
     "quotas.read",
     "quotas.manage",
     "audit.read",
+    "access_reviews.read",
+    "access_reviews.manage",
+)
+
+# Every active tenant member receives this small, non-destructive visibility
+# baseline.  It makes the tenant landing page, application list and quota
+# summary usable without granting management or application data access.
+TENANT_MEMBER_PERMISSIONS: tuple[str, ...] = (
+    "applications.read",
+    "quotas.read",
 )
 
 SUPPORT_ROLE_PERMISSIONS: tuple[str, ...] = (
@@ -69,7 +91,6 @@ SUPPORT_ROLE_PERMISSIONS: tuple[str, ...] = (
     "applications.read",
     "api_keys.read",
     "storage_connections.read",
-    "storage_spaces.read",
     "quotas.read",
     "audit.read",
 )
@@ -81,19 +102,68 @@ TENANT_PERMISSION_METADATA: dict[str, tuple[str, bool, str]] = {
     "groups.manage": ("group", True, "Manage groups and group membership."),
     "roles.read": ("role", True, "View tenant roles."),
     "roles.manage": ("role", True, "Manage tenant roles."),
-    "role_bindings.read": ("role_binding", True, "View scoped role bindings."),
-    "role_bindings.manage": ("role_binding", True, "Manage scoped role bindings."),
+    "role_bindings.read": ("role_binding", True, "View tenant member and group role bindings."),
+    "role_bindings.manage": (
+        "role_binding",
+        True,
+        "Manage tenant member and group role bindings.",
+    ),
+    "authorization.explain": (
+        "authorization",
+        False,
+        "Inspect effective permission sources and stable reasons.",
+    ),
+    "authorization.simulate": (
+        "authorization",
+        False,
+        "Perform a non-mutating access simulation.",
+    ),
     "applications.read": ("application", True, "View tenant applications."),
     "applications.manage": ("application", True, "Manage tenant applications."),
     "api_keys.read": ("api_key", True, "View API key metadata."),
     "api_keys.manage": ("api_key", True, "Manage application API keys."),
     "storage_connections.read": ("storage_connection", False, "View storage connections."),
     "storage_connections.manage": ("storage_connection", False, "Manage storage connections."),
-    "storage_spaces.read": ("storage_space", True, "View storage spaces."),
-    "storage_spaces.manage": ("storage_space", True, "Manage storage spaces."),
+    "files.list": (
+        "application_namespace",
+        True,
+        "List objects in the calling application namespace.",
+    ),
+    "files.read": (
+        "application_namespace",
+        True,
+        "Read metadata or issue an exact-object download in the calling application namespace.",
+    ),
+    "files.write": (
+        "application_namespace",
+        True,
+        "Issue a direct upload or write a multipart part in the calling application namespace.",
+    ),
+    "files.delete": (
+        "application_namespace",
+        True,
+        "Delete objects in the calling application namespace.",
+    ),
+    "files.copy": (
+        "application_namespace",
+        True,
+        "Copy within the calling application namespace after source and destination checks.",
+    ),
+    "files.move": (
+        "application_namespace",
+        True,
+        "Move within the calling application namespace after source and destination checks.",
+    ),
+    "presigned_urls.issue": (
+        "application_namespace",
+        True,
+        "Issue bounded GET or PUT presigned URLs in the calling application namespace.",
+    ),
     "quotas.read": ("quota", True, "View quota configuration and usage."),
     "quotas.manage": ("quota", False, "Manage quota configuration."),
     "audit.read": ("audit_event", False, "Search tenant audit events."),
+    "access_reviews.read": ("access_review", False, "View access review campaigns and items."),
+    "access_reviews.manage": ("access_review", False, "Create and decide access reviews."),
 }
 
 
@@ -149,6 +219,14 @@ async def ensure_tenant_admin_role(session: AsyncSession, tenant_id: UUID) -> Ro
         await session.flush()
     await _ensure_permissions(session, role, TENANT_ADMIN_PERMISSIONS)
     return role
+
+
+async def reconcile_tenant_admin_roles(session: AsyncSession) -> int:
+    """Idempotently upgrade every tenant-admin role to the current baseline."""
+    tenant_ids = list((await session.scalars(select(TenantModel.id))).all())
+    for tenant_id in tenant_ids:
+        await ensure_tenant_admin_role(session, tenant_id)
+    return len(tenant_ids)
 
 
 async def ensure_support_role(session: AsyncSession, tenant_id: UUID) -> RoleModel:

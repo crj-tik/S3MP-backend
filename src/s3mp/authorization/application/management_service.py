@@ -3,18 +3,20 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
+
+from sqlalchemy.exc import IntegrityError
 
 from s3mp.authorization.application.explain import explain_permissions, simulate
 from s3mp.authorization.domain.evaluator import (
     Binding,
     Decision,
     evaluate,
-    validate_canonical_prefix,
 )
 from s3mp.common.errors import ApiError
 from s3mp.identity.application.management_ports import AuthorizationManagementStore
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.platform.application.baseline import TENANT_MEMBER_PERMISSIONS
 
 
 @dataclass(slots=True)
@@ -22,9 +24,15 @@ class AuthorizationManagementService:
     store: AuthorizationManagementStore
     known_permissions: frozenset[str]
     delegable_permissions: frozenset[str] | None = None
+    tenant_admin_permissions: frozenset[str] | None = None
 
     async def require_permission(self, context: PrincipalContext, permission: str) -> None:
-        bindings = await self._bindings(context.tenant_id, context.principal_id)
+        bindings = await self._bindings(
+            context.tenant_id,
+            context.principal_id,
+            include_platform_tenant_admin=context.subject_kind == "human",
+            include_tenant_member_baseline=context.subject_kind == "human",
+        )
         if evaluate(permission, bindings).decision != Decision.ALLOW:
             raise ApiError("permission_denied", "Permission denied", status_code=403)
 
@@ -60,14 +68,25 @@ class AuthorizationManagementService:
         return await self.store.list_roles(context.tenant_id, **page)
 
     async def create_role(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
+        if body.name == "tenant-admin":
+            raise ApiError(
+                "validation_failed",
+                "tenant-admin is a platform role and cannot be created in a tenant",
+                status_code=422,
+            )
+        tenant_admin = await self._is_platform_tenant_admin(context)
         self._validate_permissions(body.permissions)
-        self._validate_delegable_permissions(body.permissions)
-        await self._require_delegable_subset(context, body.permissions, None, None)
+        self._validate_delegable_permissions(
+            body.permissions, allow_non_delegable=tenant_admin
+        )
+        await self._require_delegable_subset(
+            context, body.permissions, None, None, bypass=tenant_admin
+        )
         try:
             return await self.store.create_role(
                 context.tenant_id, body.name, body.description, body.permissions
             )
-        except ValueError as exc:
+        except IntegrityError as exc:
             raise ApiError("duplicate_resource", "Role already exists", status_code=409) from exc
 
     async def get_role(self, context: PrincipalContext, role_id: UUID) -> dict[str, Any]:
@@ -76,18 +95,33 @@ class AuthorizationManagementService:
     async def update_role(
         self, context: PrincipalContext, role_id: UUID, body: Any
     ) -> dict[str, Any]:
+        if body.name == "tenant-admin":
+            raise ApiError(
+                "validation_failed",
+                "tenant-admin is a platform role and cannot be created in a tenant",
+                status_code=422,
+            )
         role = await self.store.get_role(context.tenant_id, role_id)
         if role is not None and role.get("system"):
             raise ApiError("permission_denied", "Built-in roles are immutable", status_code=403)
         if body.permissions is not None:
+            tenant_admin = await self._is_platform_tenant_admin(context)
             self._validate_permissions(body.permissions)
-            self._validate_delegable_permissions(body.permissions)
-            await self._require_delegable_subset(context, body.permissions, None, None)
+            self._validate_delegable_permissions(
+                body.permissions, allow_non_delegable=tenant_admin
+            )
+            await self._require_delegable_subset(
+                context, body.permissions, None, None, bypass=tenant_admin
+            )
             if role is not None:
                 added = sorted(set(body.permissions) - set(cast(list[str], role["permissions"])))
                 for binding in await self.store.bindings_for_role(context.tenant_id, role_id):
                     await self._require_delegable_subset(
-                        context, added, binding["storage_space_id"], binding["canonical_prefix"]
+                        context,
+                        added,
+                        binding["storage_space_id"],
+                        binding["canonical_prefix"],
+                        bypass=tenant_admin,
                     )
         try:
             result = await self.store.update_role(
@@ -101,8 +135,6 @@ class AuthorizationManagementService:
         self,
         context: PrincipalContext,
         principal_id: UUID | None = None,
-        *,
-        storage_space_id: UUID | None = None,
         **page: Any,
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         if (
@@ -110,90 +142,142 @@ class AuthorizationManagementService:
             and await self.store.get_principal(context.tenant_id, principal_id) is None
         ):
             raise ApiError("resource_not_found", "Principal not found", status_code=404)
-        return await self.store.list_role_bindings(
-            context.tenant_id, principal_id, storage_space_id=storage_space_id, **page
-        )
+        return await self.store.list_role_bindings(context.tenant_id, principal_id, **page)
 
     async def create_role_binding(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
-        role = await self.store.get_role(context.tenant_id, body.role_id)
-        if (
-            role is None
-            or await self.store.get_principal(context.tenant_id, body.principal_id) is None
-        ):
-            raise ApiError("resource_not_found", "Role or principal not found", status_code=404)
-        if body.principal_id == context.principal_id:
-            await self._audit_delegation_denial(context, "self_grant")
-            raise ApiError(
-                "delegation_exceeds_authority", "Self-grants are forbidden", status_code=403
-            )
-        self._validate_delegable_permissions(role["permissions"])
-        scope = body.scope
-        if scope.type == "tenant" and (
-            scope.storage_space_id is not None or scope.canonical_prefix is not None
-        ):
+        await self.validate_role_grant(context, body.role_id, body.expires_at)
+        principal = await self.store.get_principal(context.tenant_id, body.principal_id)
+        if principal is None:
+            raise ApiError("resource_not_found", "Principal not found", status_code=404)
+        if principal.get("type") not in {"user", "group"}:
             raise ApiError(
                 "validation_failed",
-                "Tenant scope cannot contain resource constraints",
+                "Role bindings can only target tenant members or user groups",
                 status_code=422,
             )
-        if scope.type == "storage_space" and (
-            scope.storage_space_id is None or scope.canonical_prefix is not None
+        existing_lookup = getattr(self.store, "get_active_role_binding", None)
+        if existing_lookup is not None and await existing_lookup(
+            context.tenant_id, body.principal_id, body.role_id
         ):
             raise ApiError(
-                "validation_failed",
-                "Storage-space scope requires only storage_space_id",
-                status_code=422,
+                "duplicate_resource",
+                "This member or group already has this role binding; update it instead",
+                status_code=409,
             )
-        if scope.type == "directory" and (
-            scope.storage_space_id is None or scope.canonical_prefix is None
-        ):
+        try:
+            result = await self.store.create_role_binding(
+                context.tenant_id,
+                body.principal_id,
+                body.role_id,
+                body.effect,
+                None,
+                None,
+                body.reason,
+                body.starts_at,
+                body.expires_at,
+                context.principal_id,
+            )
+        except IntegrityError as exc:
             raise ApiError(
-                "validation_failed",
-                "Directory scope requires storage_space_id and canonical_prefix",
-                status_code=422,
-            )
-        if _requires_storage_scope(role["permissions"]) and scope.type == "tenant":
-            raise ApiError(
-                "validation_failed",
-                "File permissions require a storage-space scope",
-                status_code=422,
-            )
-        if scope.storage_space_id is not None and not await self.store.storage_space_exists(
-            context.tenant_id, scope.storage_space_id
-        ):
-            raise ApiError("resource_not_found", "Storage space not found", status_code=404)
-        if scope.canonical_prefix is not None:
-            try:
-                validate_canonical_prefix(scope.canonical_prefix)
-            except ValueError as exc:
-                raise ApiError(
-                    "invalid_object_key", "Invalid canonical prefix", status_code=422
-                ) from exc
-        await self._require_delegable_subset(
-            context, role["permissions"], scope.storage_space_id, scope.canonical_prefix
-        )
-        if body.expires_at <= datetime.now(UTC):
-            raise ApiError("validation_failed", "expires_at must be in the future", status_code=422)
-        await self._require_delegation_expiry_bound(
-            context,
-            role["permissions"],
-            scope.storage_space_id,
-            scope.canonical_prefix,
-            body.expires_at,
-        )
-        result = await self.store.create_role_binding(
+                "duplicate_resource",
+                "This member or group already has this role binding; update it instead",
+                status_code=409,
+            ) from exc
+        return _found(result, "Role binding")
+
+    async def update_role_binding(
+        self, context: PrincipalContext, binding_id: UUID, body: Any
+    ) -> dict[str, Any]:
+        current = await self.store.get_role_binding(context.tenant_id, binding_id)
+        if current is None:
+            raise ApiError("resource_not_found", "Role binding not found", status_code=404)
+        await self.validate_role_grant(context, body.role_id, body.expires_at)
+        result = await self.store.update_role_binding(
             context.tenant_id,
-            body.principal_id,
+            binding_id,
             body.role_id,
             body.effect,
-            scope.storage_space_id,
-            scope.canonical_prefix,
             body.reason,
             body.starts_at,
             body.expires_at,
-            context.principal_id,
         )
         return _found(result, "Role binding")
+
+    async def validate_role_grant(
+        self, context: PrincipalContext, role_id: UUID, expires_at: datetime
+    ) -> None:
+        """Validate a role delegation shared by bindings and member invitations."""
+        tenant_admin = await self._is_platform_tenant_admin(context)
+        role = await self.store.get_role(context.tenant_id, role_id)
+        if role is None:
+            raise ApiError("resource_not_found", "Role not found", status_code=404)
+        if role.get("name") == "tenant-admin":
+            raise ApiError(
+                "validation_failed",
+                "tenant-admin is a platform role and cannot be bound as a tenant role",
+                status_code=422,
+            )
+        self._validate_delegable_permissions(
+            role["permissions"], allow_non_delegable=tenant_admin
+        )
+        await self._require_delegable_subset(
+            context, role["permissions"], None, None, bypass=tenant_admin
+        )
+        if expires_at <= datetime.now(UTC):
+            raise ApiError("validation_failed", "expires_at must be in the future", status_code=422)
+        await self._require_delegation_expiry_bound(
+            context, role["permissions"], None, None, expires_at
+        )
+
+    async def maximum_role_grant_expiry(
+        self, context: PrincipalContext, role_id: UUID
+    ) -> datetime:
+        """Return the latest safe expiry for an invited member's initial role."""
+        tenant_admin = await self._is_platform_tenant_admin(context)
+        role = await self.store.get_role(context.tenant_id, role_id)
+        if role is None:
+            raise ApiError("resource_not_found", "Role not found", status_code=404)
+        if role.get("name") == "tenant-admin":
+            raise ApiError(
+                "validation_failed",
+                "tenant-admin is a platform role and cannot be bound as a tenant role",
+                status_code=422,
+            )
+        self._validate_delegable_permissions(
+            role["permissions"], allow_non_delegable=tenant_admin
+        )
+        await self._require_delegable_subset(
+            context, role["permissions"], None, None, bypass=tenant_admin
+        )
+        bindings = await self._bindings(
+            context.tenant_id,
+            context.principal_id,
+            include_tenant_member_baseline=context.subject_kind == "human",
+        )
+        per_permission_expiry: list[datetime] = []
+        for permission in role["permissions"]:
+            expiries = [
+                binding.expires_at
+                for binding in bindings
+                if binding.permission == permission
+                and binding.effect == "allow"
+                and binding.expires_at is not None
+                and evaluate(permission, [binding], storage_space_id=None, object_key="").decision
+                == Decision.ALLOW
+            ]
+            if not expiries:
+                await self._audit_delegation_denial(context, "expiry_exceeds_authority")
+                raise ApiError(
+                    "delegation_exceeds_authority",
+                    "Delegation expiry exceeds authority",
+                    status_code=403,
+                )
+            per_permission_expiry.append(max(expiries))
+        # Roles with no permissions still receive a valid finite binding; this
+        # avoids creating an effectively permanent artifact without authority.
+        if not per_permission_expiry:
+            raise ApiError("validation_failed", "Role must contain permissions", status_code=422)
+        return min(per_permission_expiry)
 
     async def get_role_binding(self, context: PrincipalContext, binding_id: UUID) -> dict[str, Any]:
         return _found(
@@ -208,18 +292,20 @@ class AuthorizationManagementService:
         self,
         context: PrincipalContext,
         principal_id: UUID,
-        _storage_space_id: UUID | None = None,
-        object_key: str | None = None,
     ) -> dict[str, Any]:
         await self._require_same_tenant(context.tenant_id, principal_id)
-        bindings = await self._bindings(context.tenant_id, principal_id)
+        bindings = await self._bindings(
+            context.tenant_id,
+            principal_id,
+            include_tenant_member_baseline=(
+                principal_id == context.principal_id and context.subject_kind == "human"
+            ),
+        )
         result = explain_permissions(
             principal_id,
             sorted(self.known_permissions),
             bindings,
             authorization_version=context.authorization_version,
-            storage_space_id=_storage_space_id,
-            object_key=object_key or "",
         )
         return {
             "principal_id": str(result.principal_id),
@@ -242,19 +328,72 @@ class AuthorizationManagementService:
         self._validate_permissions([body.permission])
         result = simulate(
             body.permission,
-            await self._bindings(context.tenant_id, principal_id),
+            await self._bindings(
+                context.tenant_id,
+                principal_id,
+                include_tenant_member_baseline=(
+                    principal_id == context.principal_id and context.subject_kind == "human"
+                ),
+            ),
             authorization_version=context.authorization_version,
-            storage_space_id=body.storage_space_id,
-            object_key=body.object_key or "",
         )
         sources = cast(list[Any], result["sources"])
         return {**result, "sources": [_source(source) for source in sources]}
 
-    async def _bindings(self, tenant_id: UUID, principal_id: UUID) -> list[Binding]:
-        return [
+    async def _bindings(
+        self,
+        tenant_id: UUID,
+        principal_id: UUID,
+        *,
+        include_platform_tenant_admin: bool = True,
+        include_tenant_member_baseline: bool = False,
+    ) -> list[Binding]:
+        bindings = [
             Binding(**row)
             for row in await self.store.bindings_for_principal(tenant_id, principal_id)
         ]
+        # Tenant sessions are issued only for active tenant memberships.  Give
+        # the current human member a small virtual baseline so invitation
+        # acceptance always leads to a usable (read-only) tenant landing page.
+        # Explicit deny bindings still win in the evaluator.
+        if include_tenant_member_baseline:
+            bindings.extend(
+                Binding(
+                    id=uuid5(NAMESPACE_URL, f"s3mp:tenant-member:{tenant_id}:{permission}"),
+                    permission=permission,
+                    effect=Decision.ALLOW,
+                    storage_space_id=None,
+                    canonical_prefix=None,
+                    starts_at=datetime.min.replace(tzinfo=UTC),
+                    expires_at=datetime.max.replace(tzinfo=UTC),
+                    reason="tenant member baseline",
+                )
+                for permission in TENANT_MEMBER_PERMISSIONS
+            )
+        resolver = getattr(self.store, "platform_tenant_admin_binding", None)
+        if (
+            not include_platform_tenant_admin
+            or resolver is None
+            or self.tenant_admin_permissions is None
+        ):
+            return bindings
+        platform_binding = await resolver(tenant_id, principal_id)
+        if platform_binding is None:
+            return bindings
+        bindings.extend(
+            Binding(
+                id=platform_binding["id"],
+                permission=permission,
+                effect=Decision.ALLOW,
+                storage_space_id=None,
+                canonical_prefix=None,
+                starts_at=platform_binding["starts_at"],
+                expires_at=platform_binding["expires_at"],
+                reason=platform_binding["reason"],
+            )
+            for permission in self.tenant_admin_permissions
+        )
+        return bindings
 
     async def _require_delegable_subset(
         self,
@@ -262,8 +401,16 @@ class AuthorizationManagementService:
         permissions: list[str],
         storage_space_id: UUID | None,
         prefix: str | None,
+        *,
+        bypass: bool = False,
     ) -> None:
-        bindings = await self._bindings(context.tenant_id, context.principal_id)
+        if bypass:
+            return
+        bindings = await self._bindings(
+            context.tenant_id,
+            context.principal_id,
+            include_tenant_member_baseline=context.subject_kind == "human",
+        )
         for permission in permissions:
             if (
                 evaluate(
@@ -286,7 +433,11 @@ class AuthorizationManagementService:
         prefix: str | None,
         expires_at: datetime,
     ) -> None:
-        bindings = await self._bindings(context.tenant_id, context.principal_id)
+        bindings = await self._bindings(
+            context.tenant_id,
+            context.principal_id,
+            include_tenant_member_baseline=context.subject_kind == "human",
+        )
         for permission in permissions:
             matching = [
                 binding
@@ -338,8 +489,20 @@ class AuthorizationManagementService:
                 details={"permissions": sorted(unknown)},
             )
 
-    def _validate_delegable_permissions(self, permissions: list[str]) -> None:
+    async def _is_platform_tenant_admin(self, context: PrincipalContext) -> bool:
+        if context.subject_kind != "human" or self.tenant_admin_permissions is None:
+            return False
+        resolver = getattr(self.store, "platform_tenant_admin_binding", None)
+        if resolver is None:
+            return False
+        return await resolver(context.tenant_id, context.principal_id) is not None
+
+    def _validate_delegable_permissions(
+        self, permissions: list[str], *, allow_non_delegable: bool = False
+    ) -> None:
         if self.delegable_permissions is None:
+            return
+        if allow_non_delegable:
             return
         forbidden = set(permissions) - self.delegable_permissions
         if forbidden:
@@ -356,15 +519,12 @@ def _found(value: dict[str, Any] | None, label: str) -> dict[str, Any]:
 
 def _source(value: Any) -> dict[str, Any]:
     return {
-        "source_type": "role_binding" if value.binding_id else "default",
+        "source_type": (
+            "platform_role"
+            if value.reason_code == "platform_tenant_admin"
+            else ("role_binding" if value.binding_id else "default")
+        ),
         "source_id": str(value.binding_id) if value.binding_id else None,
         "effect": value.effect,
         "reason_code": value.reason_code,
     }
-
-
-def _requires_storage_scope(permissions: list[str]) -> bool:
-    return any(
-        permission.startswith(("files.", "multipart.", "presigned_urls."))
-        for permission in permissions
-    )

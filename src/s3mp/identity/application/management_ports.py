@@ -23,6 +23,12 @@ class IdentityManagementStore(Protocol):
         status: UserStatus = UserStatus.ACTIVE,
         principal_type: PrincipalType = PrincipalType.USER,
     ) -> Page: ...
+    async def list_member_candidates(
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: UUID | None = None,
+    ) -> Page: ...
     async def get_user(self, tenant_id: UUID, user_id: UUID) -> dict[str, Any] | None: ...
     async def list_members(
         self,
@@ -32,7 +38,13 @@ class IdentityManagementStore(Protocol):
         status: MembershipStatus = MembershipStatus.ACTIVE,
     ) -> Page: ...
     async def create_member(
-        self, tenant_id: UUID, email: str, display_name: str | None
+        self,
+        tenant_id: UUID,
+        email: str,
+        display_name: str | None,
+        role_id: UUID,
+        created_by: UUID,
+        expires_at: Any,
     ) -> dict[str, Any]: ...
     async def get_member(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None: ...
     async def update_member(
@@ -83,7 +95,6 @@ class AuthorizationManagementStore(Protocol):
         principal_id: UUID | None = None,
         limit: int = 50,
         cursor: UUID | None = None,
-        storage_space_id: UUID | None = None,
     ) -> Page: ...
     async def create_role_binding(
         self,
@@ -98,13 +109,29 @@ class AuthorizationManagementStore(Protocol):
         expires_at: Any,
         created_by: UUID,
     ) -> dict[str, Any] | None: ...
+    async def update_role_binding(
+        self,
+        tenant_id: UUID,
+        binding_id: UUID,
+        role_id: UUID,
+        effect: str,
+        reason: str,
+        starts_at: Any,
+        expires_at: Any,
+    ) -> dict[str, Any] | None: ...
     async def get_role_binding(
         self, tenant_id: UUID, binding_id: UUID
+    ) -> dict[str, Any] | None: ...
+    async def get_active_role_binding(
+        self, tenant_id: UUID, principal_id: UUID, role_id: UUID
     ) -> dict[str, Any] | None: ...
     async def revoke_role_binding(self, tenant_id: UUID, binding_id: UUID) -> bool: ...
     async def bindings_for_principal(
         self, tenant_id: UUID, principal_id: UUID
     ) -> list[dict[str, Any]]: ...
+    async def platform_tenant_admin_binding(
+        self, tenant_id: UUID, principal_id: UUID
+    ) -> dict[str, Any] | None: ...
     async def bindings_for_role(self, tenant_id: UUID, role_id: UUID) -> list[dict[str, Any]]: ...
     async def record_security_audit(
         self,
@@ -115,4 +142,3 @@ class AuthorizationManagementStore(Protocol):
         resource_id: str | None,
         details: dict[str, object],
     ) -> None: ...
-    async def storage_space_exists(self, tenant_id: UUID, storage_space_id: UUID) -> bool: ...

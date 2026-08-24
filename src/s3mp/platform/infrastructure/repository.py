@@ -15,6 +15,7 @@ from s3mp.identity.application.security import PasswordCredential
 from s3mp.identity.infrastructure.models import (
     MembershipModel,
     MembershipStatus,
+    MembershipStatusHistoryModel,
     PrincipalModel,
     PrincipalType,
     SessionModel,
@@ -167,7 +168,6 @@ class SqlAlchemyPlatformStore:
             )
 
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None:
-        now = datetime.now(UTC)
         async with self.session_factory() as session:
             user = await session.get(UserModel, user_id)
             if user is None or user.status != UserStatus.ACTIVE:
@@ -177,9 +177,13 @@ class SqlAlchemyPlatformStore:
                 .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
                 .where(
                     MembershipModel.user_id == user_id,
-                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    MembershipModel.status.in_((MembershipStatus.ACTIVE, MembershipStatus.INVITED)),
                     TenantModel.status == TenantLifecycleStatus.ACTIVE,
-                    (MembershipModel.expires_at.is_(None)) | (MembershipModel.expires_at > now),
+                    or_(
+                        MembershipModel.status == MembershipStatus.INVITED,
+                        (MembershipModel.expires_at.is_(None))
+                        | (MembershipModel.expires_at > datetime.now(UTC)),
+                    ),
                 )
                 .order_by(TenantModel.name)
             )
@@ -191,10 +195,51 @@ class SqlAlchemyPlatformStore:
                     "display_name": user.display_name,
                 },
                 "tenants": [
-                    {"id": str(tenant.id), "name": tenant.name, "slug": tenant.slug}
-                    for _membership, tenant in rows
+                    {
+                        "id": str(tenant.id),
+                        "name": tenant.name,
+                        "slug": tenant.slug,
+                        "membership_id": str(membership.id),
+                        "membership_status": membership.status.value,
+                    }
+                    for membership, tenant in rows
                 ],
             }
+
+    async def accept_tenant_invitation(self, user_id: UUID, membership_id: UUID) -> bool:
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            row = await session.scalar(
+                select(MembershipModel)
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .where(
+                    MembershipModel.id == membership_id,
+                    MembershipModel.user_id == user_id,
+                    TenantModel.status == TenantLifecycleStatus.ACTIVE,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            if row.status == MembershipStatus.ACTIVE:
+                return True
+            if row.status != MembershipStatus.INVITED:
+                return False
+            if row.expires_at is not None and row.expires_at <= now:
+                return False
+            row.status = MembershipStatus.ACTIVE
+            row.authorization_version += 1
+            session.add(
+                MembershipStatusHistoryModel(
+                    tenant_id=row.tenant_id,
+                    membership_id=row.id,
+                    from_status=MembershipStatus.INVITED,
+                    to_status=MembershipStatus.ACTIVE,
+                    reason="tenant_invitation_accepted",
+                    changed_by_principal_id=row.principal_id,
+                )
+            )
+            return True
 
     async def create_tenant_session(
         self,
@@ -629,20 +674,7 @@ class SqlAlchemyPlatformStore:
             )
             session.add(membership)
             await session.flush()
-            role = await ensure_tenant_admin_role(session, tenant.id)
-            session.add(
-                RoleBindingModel(
-                    tenant_id=tenant.id,
-                    principal_id=principal.id,
-                    role_id=role.id,
-                    effect=BindingEffect.ALLOW,
-                    storage_space_id=None,
-                    canonical_prefix=None,
-                    reason="initial tenant administrator",
-                    expires_at=datetime.max.replace(tzinfo=UTC),
-                    created_by_principal_id=principal.id,
-                )
-            )
+            await ensure_tenant_admin_role(session, tenant.id)
             session.add(
                 PlatformAuditEventModel(
                     actor_user_id=actor_user_id,
@@ -889,6 +921,17 @@ class SqlAlchemyPlatformStore:
             )
             session.add(binding)
             await session.flush()
+            # A platform tenant-admin grant changes the derived authority in
+            # every tenant where this user is a member.  Advance membership
+            # versions so existing tenant sessions are forced to re-resolve.
+            await session.execute(
+                update(MembershipModel)
+                .where(
+                    MembershipModel.user_id == user_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                )
+                .values(authorization_version=MembershipModel.authorization_version + 1)
+            )
             session.add(
                 PlatformAuditEventModel(
                     actor_user_id=actor_user_id,
@@ -921,6 +964,14 @@ class SqlAlchemyPlatformStore:
                 return True
             role = await session.get(PlatformRoleModel, binding.role_id)
             binding.revoked_at = datetime.now(UTC)
+            await session.execute(
+                update(MembershipModel)
+                .where(
+                    MembershipModel.user_id == binding.user_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                )
+                .values(authorization_version=MembershipModel.authorization_version + 1)
+            )
             session.add(
                 PlatformAuditEventModel(
                     actor_user_id=actor_user_id,
@@ -1196,6 +1247,7 @@ class SqlAlchemyPlatformStore:
         return {
             "id": str(tenant.id),
             "slug": tenant.slug,
+            "storage_root": tenant.slug,
             "name": tenant.name,
             "status": tenant.status.value,
             "created_at": tenant.created_at,

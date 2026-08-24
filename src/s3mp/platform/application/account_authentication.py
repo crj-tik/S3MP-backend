@@ -36,6 +36,8 @@ class AccountAuthStore(Protocol):
 
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None: ...
 
+    async def accept_tenant_invitation(self, user_id: UUID, membership_id: UUID) -> bool: ...
+
     async def effective_permissions(self, user_id: UUID) -> frozenset[str]: ...
 
     async def create_tenant_session(
@@ -137,6 +139,21 @@ class AccountAuthenticationService:
         )
 
     async def account_context(self, context: PlatformContext) -> dict[str, object]:
+        summary = await self._store.account_summary(context.user_id)
+        if summary is None:
+            raise ApiError("authentication_required", "Account is not active", status_code=401)
+        return {**summary, "platform_permissions": sorted(context.permissions)}
+
+    async def accept_tenant_invitation(
+        self, context: PlatformContext, membership_id: UUID
+    ) -> dict[str, object]:
+        accepted = await self._store.accept_tenant_invitation(context.user_id, membership_id)
+        if not accepted:
+            raise ApiError(
+                "tenant_invitation_invalid",
+                "Tenant invitation is not available",
+                status_code=409,
+            )
         summary = await self._store.account_summary(context.user_id)
         if summary is None:
             raise ApiError("authentication_required", "Account is not active", status_code=401)

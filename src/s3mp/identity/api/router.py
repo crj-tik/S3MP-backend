@@ -70,6 +70,17 @@ class UserPage(_Strict):
     next_cursor: str | None
 
 
+class MemberCandidateResponse(_Strict):
+    id: str
+    email: str = Field(json_schema_extra={"format": "email"})
+    display_name: str
+
+
+class MemberCandidatePage(_Strict):
+    items: list[MemberCandidateResponse]
+    next_cursor: str | None
+
+
 class MembershipPage(_Strict):
     items: list[MembershipResponse]
     next_cursor: str | None
@@ -78,6 +89,7 @@ class MembershipPage(_Strict):
 class MembershipCreate(_Strict):
     email: str = Field(min_length=3, max_length=320, json_schema_extra={"format": "email"})
     display_name: str | None = Field(default=None, max_length=200)
+    role_id: UUID
 
 
 class MembershipUpdate(_Strict):
@@ -141,6 +153,26 @@ async def list_users(
         principal_type=principal_type,
     )
     return _page(items, next_position, context, query=query)
+
+
+@router.get(
+    "/member-candidates",
+    response_model=MemberCandidatePage,
+    operation_id="list_member_candidates",
+)
+async def list_member_candidates(
+    context: Annotated[PrincipalContext, management_permission("list_member_candidates")],
+    service: Annotated[IdentityManagementService, identity_service],
+    cursor: str | None = Query(default=None),
+) -> object:
+    # The invitation dialog loads the complete eligible candidate set and
+    # filters it locally, so typing never sends personal-data search terms.
+    cursor_query = "member_candidates"
+    items, next_position = await service.list_member_candidates(
+        context,
+        cursor=_cursor(cursor, context, query=cursor_query),
+    )
+    return _page(items, next_position, context, query=cursor_query)
 
 
 @router.get("/users/{user_id}", response_model=UserResponse, operation_id="get_user")

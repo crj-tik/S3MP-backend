@@ -45,6 +45,11 @@ class IdentityManagementService:
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         return await self.store.list_users(context.tenant_id, **page)
 
+    async def list_member_candidates(
+        self, context: PrincipalContext, **page: Any
+    ) -> tuple[list[dict[str, Any]], UUID | None]:
+        return await self.store.list_member_candidates(context.tenant_id, **page)
+
     async def get_user(self, context: PrincipalContext, user_id: UUID) -> dict[str, Any]:
         return _found(await self.store.get_user(context.tenant_id, user_id), "User")
 
@@ -54,9 +59,22 @@ class IdentityManagementService:
         return await self.store.list_members(context.tenant_id, **page)
 
     async def create_member(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
+        # An invitation is the only way a user gains a tenant principal.  Validate
+        # the selected role before persisting so the invited principal receives
+        # only authority the inviter is allowed to delegate.
+        expires_at = await self.authorization.maximum_role_grant_expiry(context, body.role_id)
         try:
-            return await self.store.create_member(context.tenant_id, body.email, body.display_name)
+            return await self.store.create_member(
+                context.tenant_id,
+                body.email,
+                body.display_name,
+                body.role_id,
+                context.principal_id,
+                expires_at,
+            )
         except ValueError as exc:
+            if str(exc) == "role not found":
+                raise ApiError("resource_not_found", "Role not found", status_code=404) from exc
             raise ApiError(
                 "duplicate_resource", "Membership already exists", status_code=409
             ) from exc

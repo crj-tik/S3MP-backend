@@ -1,48 +1,46 @@
-version: 1.1.0
+version: 1.2.0
 semantics:
   default: deny
   explicit_deny_precedence: true
-  storage_scope_required_for_file_permissions: true
+  tenant_role_permissions_apply_to_application_namespace: true
   direct_binding_requires_reason_and_expiry: true
 permissions:
-  - {name: platform.accounts.read, resource_type: platform_account, delegable: false, description: "View safe platform account summaries."}
-  - {name: platform.tenants.read, resource_type: platform_tenant, delegable: false, description: "View platform tenant lifecycle summaries."}
-  - {name: platform.tenants.manage, resource_type: platform_tenant, delegable: false, description: "Create and update platform tenants."}
-  - {name: platform.roles.read, resource_type: platform_role, delegable: false, description: "View platform roles and bindings."}
-  - {name: platform.roles.manage, resource_type: platform_role, delegable: false, description: "Grant and revoke platform roles."}
-  - {name: platform.support.read, resource_type: platform_support, delegable: false, description: "View support access requests."}
-  - {name: platform.support.manage, resource_type: platform_support, delegable: false, description: "Request, approve and revoke support access."}
-  - {name: platform.audit.read, resource_type: platform_audit, delegable: false, description: "View platform audit events."}
-  - {name: platform.quotas.read, resource_type: platform_quota, delegable: false, description: "View quota allocations across tenants."}
-  - {name: platform.quotas.manage, resource_type: platform_quota, delegable: false, description: "Allocate and revoke tenant and application quotas."}
-  - {name: tenant.read, resource_type: tenant, delegable: true, description: "View tenant metadata."}
-  - {name: members.read, resource_type: membership, delegable: true, description: "List and view tenant members."}
-  - {name: members.manage, resource_type: membership, delegable: true, description: "Invite, suspend, reactivate and remove members."}
-  - {name: groups.read, resource_type: group, delegable: true, description: "View groups and membership."}
-  - {name: groups.manage, resource_type: group, delegable: true, description: "Create groups and manage group membership."}
-  - {name: roles.read, resource_type: role, delegable: true, description: "View roles and their permissions."}
-  - {name: roles.manage, resource_type: role, delegable: true, description: "Create and update custom roles."}
-  - {name: role_bindings.read, resource_type: role_binding, delegable: true, description: "View scoped role bindings."}
-  - {name: role_bindings.manage, resource_type: role_binding, delegable: true, description: "Grant or revoke authority within the delegator subset."}
-  - {name: authorization.explain, resource_type: authorization, delegable: false, description: "Inspect effective permission sources and stable reasons."}
-  - {name: authorization.simulate, resource_type: authorization, delegable: false, description: "Perform a non-mutating access simulation."}
-  - {name: applications.read, resource_type: application, delegable: true, description: "View applications and owners."}
-  - {name: applications.manage, resource_type: application, delegable: true, description: "Create, update, disable and take over applications."}
-  - {name: api_keys.read, resource_type: api_key, delegable: true, description: "View key metadata but never key secrets."}
-  - {name: api_keys.manage, resource_type: api_key, delegable: true, description: "Issue, rotate, disable and revoke application keys."}
-  - {name: storage_connections.read, resource_type: storage_connection, delegable: false, description: "View redacted connection status and capabilities."}
-  - {name: storage_connections.manage, resource_type: storage_connection, delegable: false, description: "Configure and probe storage connections without exposing credentials."}
-  - {name: storage_spaces.read, resource_type: storage_space, delegable: true, description: "View logical storage spaces."}
-  - {name: storage_spaces.manage, resource_type: storage_space, delegable: true, description: "Manage bucket/root-prefix mappings."}
-  - {name: files.list, resource_type: storage_prefix, delegable: true, description: "List objects under the bound canonical prefix."}
-  - {name: files.read, resource_type: storage_object, delegable: true, description: "Read metadata or issue an exact-object download."}
-  - {name: files.write, resource_type: storage_object, delegable: true, description: "Issue a direct upload or write a multipart part under the bound canonical prefix."}
-  - {name: files.delete, resource_type: storage_object, delegable: true, description: "Delete objects under the bound canonical prefix."}
-  - {name: files.copy, resource_type: storage_object, delegable: true, description: "Copy with source-read and destination-write checks."}
-  - {name: files.move, resource_type: storage_object, delegable: true, description: "Move with source-read/delete and destination-write checks."}
-  - {name: presigned_urls.issue, resource_type: storage_object, delegable: true, description: "Issue bounded GET or PUT presigned URLs."}
-  - {name: quotas.read, resource_type: quota, delegable: true, description: "View limits, usage and reservations."}
-  - {name: quotas.manage, resource_type: quota, delegable: false, description: "Configure tenant or space quota."}
-  - {name: audit.read, resource_type: audit_event, delegable: false, description: "Search tenant audit events."}
-  - {name: access_reviews.read, resource_type: access_review, delegable: false, description: "View access review campaigns and items."}
-  - {name: access_reviews.manage, resource_type: access_review, delegable: false, description: "Create and decide access reviews."}
+  - {name: platform.accounts.read, display_name: "账户查看", resource_type: platform_account, delegable: false, description: "查看平台账户的非敏感摘要。"}
+  - {name: platform.accounts.manage, display_name: "账户管理", resource_type: platform_account, delegable: false, description: "管理平台账户的生命周期。"}
+  - {name: platform.tenants.read, display_name: "租户查看", resource_type: platform_tenant, delegable: false, description: "查看平台租户及其状态。"}
+  - {name: platform.tenants.manage, display_name: "租户管理", resource_type: platform_tenant, delegable: false, description: "创建和维护平台租户。"}
+  - {name: platform.roles.read, display_name: "平台角色", resource_type: platform_role, delegable: false, description: "查看平台角色及其绑定。"}
+  - {name: platform.roles.manage, display_name: "角色管理", resource_type: platform_role, delegable: false, description: "授予和撤销平台角色。"}
+  - {name: platform.support.read, display_name: "支持查看", resource_type: platform_support, delegable: false, description: "查看支持访问请求。"}
+  - {name: platform.support.manage, display_name: "支持管理", resource_type: platform_support, delegable: false, description: "申请、批准和撤销支持访问。"}
+  - {name: platform.audit.read, display_name: "平台审计", resource_type: platform_audit, delegable: false, description: "查看平台审计事件。"}
+  - {name: platform.quotas.read, display_name: "配额查看", resource_type: platform_quota, delegable: false, description: "查看跨租户的配额分配。"}
+  - {name: platform.quotas.manage, display_name: "配额管理", resource_type: platform_quota, delegable: false, description: "分配和撤销租户或应用配额。"}
+  - {name: members.read, display_name: "成员查看", resource_type: membership, delegable: true, description: "查看租户成员列表和资料。"}
+  - {name: members.manage, display_name: "成员管理", resource_type: membership, delegable: true, description: "邀请、停用、恢复和移除成员。"}
+  - {name: groups.read, display_name: "用户组查看", resource_type: group, delegable: true, description: "查看用户组及其成员。"}
+  - {name: groups.manage, display_name: "用户组管理", resource_type: group, delegable: true, description: "创建用户组并管理组成员。"}
+  - {name: roles.read, display_name: "角色查看", resource_type: role, delegable: true, description: "查看角色及其权限。"}
+  - {name: roles.manage, display_name: "角色管理", resource_type: role, delegable: true, description: "创建和修改自定义角色。"}
+  - {name: role_bindings.read, display_name: "授权查看", resource_type: role_binding, delegable: true, description: "查看成员和用户组的角色授权。"}
+  - {name: role_bindings.manage, display_name: "授权管理", resource_type: role_binding, delegable: true, description: "在可委派范围内授予或撤销角色。"}
+  - {name: authorization.explain, display_name: "权限说明", resource_type: authorization, delegable: false, description: "查看有效权限的来源和原因。"}
+  - {name: authorization.simulate, display_name: "权限模拟", resource_type: authorization, delegable: false, description: "模拟一次访问授权结果。"}
+  - {name: applications.read, display_name: "应用查看", resource_type: application, delegable: true, description: "查看租户应用及其基本状态。"}
+  - {name: applications.manage, display_name: "应用管理", resource_type: application, delegable: true, description: "创建、修改、停用和接管应用。"}
+  - {name: api_keys.read, display_name: "密钥查看", resource_type: api_key, delegable: true, description: "查看密钥元数据，不包含密钥明文。"}
+  - {name: api_keys.manage, display_name: "密钥管理", resource_type: api_key, delegable: true, description: "签发、轮换、停用和撤销应用密钥。"}
+  - {name: storage_connections.read, display_name: "连接查看", resource_type: storage_connection, delegable: false, description: "查看脱敏后的存储连接状态。"}
+  - {name: storage_connections.manage, display_name: "连接管理", resource_type: storage_connection, delegable: false, description: "配置和探测存储连接，不暴露凭据。"}
+  - {name: files.list, display_name: "文件列表", resource_type: application_namespace, delegable: true, description: "列出当前应用目录中的文件。"}
+  - {name: files.read, display_name: "文件读取", resource_type: application_namespace, delegable: true, description: "读取当前应用目录中的文件或下载信息。"}
+  - {name: files.write, display_name: "文件写入", resource_type: application_namespace, delegable: true, description: "上传文件或写入分片。"}
+  - {name: files.delete, display_name: "文件删除", resource_type: application_namespace, delegable: true, description: "删除当前应用目录中的文件。"}
+  - {name: files.copy, display_name: "文件复制", resource_type: application_namespace, delegable: true, description: "在当前应用目录内复制文件。"}
+  - {name: files.move, display_name: "文件移动", resource_type: application_namespace, delegable: true, description: "在当前应用目录内移动文件。"}
+  - {name: presigned_urls.issue, display_name: "临时链接", resource_type: application_namespace, delegable: true, description: "签发受限的文件上传或下载链接。"}
+  - {name: quotas.read, display_name: "配额查看", resource_type: quota, delegable: true, description: "查看容量限额、用量和预留。"}
+  - {name: quotas.manage, display_name: "配额管理", resource_type: quota, delegable: false, description: "配置租户和应用的配额。"}
+  - {name: audit.read, display_name: "审计查看", resource_type: audit_event, delegable: false, description: "检索当前租户的审计事件。"}
+  - {name: access_reviews.read, display_name: "复核查看", resource_type: access_review, delegable: false, description: "查看访问复核任务和结果。"}
+  - {name: access_reviews.manage, display_name: "复核管理", resource_type: access_review, delegable: false, description: "创建和处理访问复核。"}

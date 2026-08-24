@@ -1,11 +1,11 @@
 """Global platform-role grant and revocation routes."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from s3mp.common.api.dependencies import application_service
 from s3mp.platform.api.dependencies import platform_permission
@@ -20,7 +20,9 @@ class PlatformRoleGrant(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     user_id: UUID
-    role_name: str = Field(min_length=1, max_length=120)
+    role_name: Literal[
+        "platform_admin", "platform_operator", "platform_auditor", "tenant-admin"
+    ]
     expires_at: datetime | None = None
 
 

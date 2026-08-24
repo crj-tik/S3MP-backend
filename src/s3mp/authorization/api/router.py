@@ -69,6 +69,7 @@ class RolePage(_Strict):
 
 class PermissionCatalogEntry(_Strict):
     name: str
+    display_name: str
     resource_type: str
     delegable: bool
     description: str
@@ -80,27 +81,18 @@ class PermissionCatalogResponse(_Strict):
     permissions: list[PermissionCatalogEntry]
 
 
-class ResourceScope(_Strict):
-    type: Literal["tenant", "storage_space", "directory"] = Field(
-        description=(
-            "授权范围类型：tenant 为租户管理范围；storage_space 或 directory 用于应用文件路径范围。"
-        )
-    )
-    storage_space_id: UUID | None = Field(
-        default=None,
-        description="应用文件授权关联的逻辑存储空间标识；文件权限不得使用未绑定应用的空间。",
-    )
-    canonical_prefix: str | None = Field(
-        default=None,
-        description="directory 类型授权覆盖的规范相对路径前缀；不得越过应用命名空间边界。",
-    )
-
-
 class RoleBindingWrite(_Strict):
     principal_id: UUID
     role_id: UUID
     effect: Literal["allow", "deny"]
-    scope: ResourceScope
+    reason: str = Field(min_length=1, max_length=500)
+    starts_at: datetime | None = None
+    expires_at: datetime
+
+
+class RoleBindingUpdate(_Strict):
+    role_id: UUID
+    effect: Literal["allow", "deny"]
     reason: str = Field(min_length=1, max_length=500)
     starts_at: datetime | None = None
     expires_at: datetime
@@ -111,7 +103,6 @@ class RoleBindingResponse(_Strict):
     principal: PrincipalSummary
     role_id: str
     effect: Literal["allow", "deny"]
-    scope: ResourceScope
     reason: str
     starts_at: datetime
     expires_at: datetime
@@ -129,6 +120,7 @@ class DecisionSource(_Strict):
     source_type: Literal[
         "role_binding",
         "group",
+        "platform_role",
         "key_scope",
         "directory_policy",
         "tenant_policy",
@@ -157,8 +149,6 @@ class EffectivePermissionsResponse(_Strict):
 class SimulationRequest(_Strict):
     principal_id: UUID
     permission: str
-    storage_space_id: UUID | None = None
-    object_key: str | None = None
 
 
 class AuthorizationDecisionResponse(_Strict):
@@ -185,6 +175,14 @@ def get_permission_catalog(
     catalog_path = Path(__file__).resolve().parents[4] / "contracts" / "permission-catalog.yaml"
     with catalog_path.open(encoding="utf-8") as stream:
         catalog = yaml.safe_load(stream) or {}
+    # This is a tenant-scoped catalog. Platform permissions are managed only
+    # through platform control-plane APIs and must never be offered as tenant
+    # role choices.
+    catalog["permissions"] = [
+        entry
+        for entry in catalog.get("permissions", [])
+        if isinstance(entry, dict) and not str(entry.get("name", "")).startswith("platform.")
+    ]
     return PermissionCatalogResponse.model_validate(catalog)
 
 
@@ -319,16 +317,12 @@ async def list_role_bindings(
     context: Annotated[PrincipalContext, management_permission("list_role_bindings")],
     service: Annotated[AuthorizationManagementService, authorization_service],
     principal_id: UUID | None = None,
-    storage_space_id: Annotated[
-        UUID | None, Query(description="按逻辑存储空间标识筛选绑定。")
-    ] = None,
     cursor: str | None = Query(default=None),
 ) -> object:
-    query = f"role_bindings:{principal_id or ''}:{storage_space_id or ''}"
+    query = f"role_bindings:{principal_id or ''}"
     items, position = await service.list_role_bindings(
         context,
         principal_id,
-        storage_space_id=storage_space_id,
         cursor=_cursor(cursor, context, query=query),
     )
     return _page(items, position, context, query=query)
@@ -346,6 +340,20 @@ async def create_role_binding(
     service: Annotated[AuthorizationManagementService, authorization_service],
 ) -> object:
     return await service.create_role_binding(context, body)
+
+
+@router.patch(
+    "/role_bindings/{role_binding_id}",
+    response_model=RoleBindingResponse,
+    operation_id="update_role_binding",
+)
+async def update_role_binding(
+    role_binding_id: UUID,
+    body: RoleBindingUpdate,
+    context: Annotated[PrincipalContext, management_permission("update_role_binding")],
+    service: Annotated[AuthorizationManagementService, authorization_service],
+) -> object:
+    return await service.update_role_binding(context, role_binding_id, body)
 
 
 @router.get(
@@ -381,12 +389,8 @@ async def get_effective_permissions(
     principal_id: UUID,
     context: Annotated[PrincipalContext, management_permission("get_effective_permissions")],
     service: Annotated[AuthorizationManagementService, authorization_service],
-    storage_space_id: UUID | None = None,
-    object_key: str | None = None,
 ) -> object:
-    return await service.get_effective_permissions(
-        context, principal_id, storage_space_id, object_key
-    )
+    return await service.get_effective_permissions(context, principal_id)
 
 
 @router.post(

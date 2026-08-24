@@ -84,7 +84,14 @@ def evaluate(
         and _scope_matches(binding.canonical_prefix, object_key)
     ]
     sources = tuple(
-        DecisionSource(binding.id, binding.effect, "binding_match") for binding in matches
+        DecisionSource(
+            binding.id,
+            binding.effect,
+            "platform_tenant_admin"
+            if binding.reason.startswith("platform tenant-admin")
+            else "binding_match",
+        )
+        for binding in matches
     )
     if any(binding.effect == Decision.DENY for binding in matches):
         return AuthorizationDecision(Decision.DENY, "explicit_deny", sources)

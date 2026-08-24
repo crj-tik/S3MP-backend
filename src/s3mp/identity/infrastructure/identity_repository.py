@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import (
@@ -14,6 +14,7 @@ from s3mp.applications.infrastructure.models import (
 )
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.authorization.infrastructure.models import (
+    BindingEffect,
     GroupMemberModel,
     GroupModel,
     PermissionModel,
@@ -32,10 +33,10 @@ from s3mp.identity.infrastructure.models import (
     UserModel,
     UserStatus,
 )
-from s3mp.platform.infrastructure.models import TenantLifecycleStatus
-from s3mp.storage.infrastructure.models import (
-    StorageConnectionModel,
-    StorageSpaceModel,
+from s3mp.platform.infrastructure.models import (
+    PlatformRoleBindingModel,
+    PlatformRoleModel,
+    TenantLifecycleStatus,
 )
 from s3mp.tenant.infrastructure.models import TenantModel
 
@@ -154,6 +155,30 @@ class SqlAlchemyIdentityAdminStore:
                 rows
             ) > limit else None
 
+    async def list_member_candidates(
+        self,
+        tenant_id: UUID,
+        limit: int = 50,
+        cursor: UUID | None = None,
+    ) -> tuple[list[dict[str, Any]], UUID | None]:
+        async with self._sf() as session:
+            statement = select(UserModel).where(
+                UserModel.status == UserStatus.ACTIVE,
+                ~exists().where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.user_id == UserModel.id,
+                ),
+            )
+            if cursor is not None:
+                statement = statement.where(UserModel.id > cursor)
+            statement = statement.order_by(UserModel.id).limit(limit + 1)
+            rows = (await session.scalars(statement)).all()
+            page = rows[:limit]
+            return [
+                {"id": str(row.id), "email": row.email, "display_name": row.display_name}
+                for row in page
+            ], (page[-1].id if len(rows) > limit else None)
+
     async def get_user(self, tenant_id: UUID, user_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
@@ -177,7 +202,13 @@ class SqlAlchemyIdentityAdminStore:
             return _user_dict(row) if row else None
 
     async def create_member(
-        self, tenant_id: UUID, email: str, display_name: str | None
+        self,
+        tenant_id: UUID,
+        email: str,
+        display_name: str | None,
+        role_id: UUID,
+        created_by: UUID,
+        expires_at: datetime,
     ) -> dict[str, Any]:
         normalized_email = email.strip().lower()
         async with self._sf.begin() as session:
@@ -214,6 +245,24 @@ class SqlAlchemyIdentityAdminStore:
             )
             session.add(membership)
             await session.flush()
+            role = await session.scalar(
+                select(RoleModel).where(RoleModel.tenant_id == tenant_id, RoleModel.id == role_id)
+            )
+            if role is None:
+                raise ValueError("role not found")
+            session.add(
+                RoleBindingModel(
+                    tenant_id=tenant_id,
+                    principal_id=principal.id,
+                    role_id=role_id,
+                    effect=BindingEffect.ALLOW,
+                    storage_space_id=None,
+                    canonical_prefix=None,
+                    reason="Initial role granted with member invitation",
+                    expires_at=expires_at,
+                    created_by_principal_id=created_by,
+                )
+            )
             return _membership_dict(membership, user)
 
     async def list_members(
@@ -549,7 +598,10 @@ class SqlAlchemyIdentityAdminStore:
         async with self._sf() as session:
             statement = (
                 select(RoleModel)
-                .where(RoleModel.tenant_id == tenant_id)
+                .where(
+                    RoleModel.tenant_id == tenant_id,
+                    RoleModel.name != "tenant-admin",
+                )
                 .order_by(RoleModel.id)
                 .limit(limit + 1)
             )
@@ -564,7 +616,11 @@ class SqlAlchemyIdentityAdminStore:
     async def get_role(self, tenant_id: UUID, role_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(RoleModel).where(RoleModel.tenant_id == tenant_id, RoleModel.id == role_id)
+                select(RoleModel).where(
+                    RoleModel.tenant_id == tenant_id,
+                    RoleModel.id == role_id,
+                    RoleModel.name != "tenant-admin",
+                )
             )
             return await self._role_projection(session, row) if row else None
 
@@ -610,45 +666,25 @@ class SqlAlchemyIdentityAdminStore:
         principal_id: UUID | None = None,
         limit: int = 50,
         cursor: UUID | None = None,
-        storage_space_id: UUID | None = None,
     ) -> tuple[list[dict[str, Any]], UUID | None]:
         async with self._sf() as session:
             statement = (
                 select(RoleBindingModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == RoleBindingModel.tenant_id)
+                    & (PrincipalModel.id == RoleBindingModel.principal_id),
+                )
                 .where(
-                    RoleBindingModel.tenant_id == tenant_id, RoleBindingModel.revoked_at.is_(None)
+                    RoleBindingModel.tenant_id == tenant_id,
+                    RoleBindingModel.revoked_at.is_(None),
+                    PrincipalModel.type.in_((PrincipalType.USER, PrincipalType.GROUP)),
                 )
                 .order_by(RoleBindingModel.id)
                 .limit(limit + 1)
             )
             if principal_id is not None:
                 statement = statement.where(RoleBindingModel.principal_id == principal_id)
-            if storage_space_id is not None:
-                statement = (
-                    statement.join(
-                        StorageSpaceModel,
-                        (StorageSpaceModel.tenant_id == RoleBindingModel.tenant_id)
-                        & (StorageSpaceModel.id == RoleBindingModel.storage_space_id),
-                    )
-                    .join(
-                        ApplicationModel,
-                        (ApplicationModel.tenant_id == StorageSpaceModel.tenant_id)
-                        & (ApplicationModel.id == StorageSpaceModel.application_id),
-                    )
-                    .join(
-                        StorageConnectionModel,
-                        (StorageConnectionModel.tenant_id == StorageSpaceModel.tenant_id)
-                        & (StorageConnectionModel.id == StorageSpaceModel.connection_id),
-                    )
-                    .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
-                    .where(
-                        RoleBindingModel.storage_space_id == storage_space_id,
-                        StorageSpaceModel.status == "active",
-                        ApplicationModel.status == "active",
-                        StorageConnectionModel.status == "active",
-                        TenantModel.status == TenantLifecycleStatus.ACTIVE,
-                    )
-                )
             if cursor is not None:
                 statement = statement.where(RoleBindingModel.id > cursor)
             rows = (await session.scalars(statement)).all()
@@ -660,10 +696,38 @@ class SqlAlchemyIdentityAdminStore:
     async def get_role_binding(self, tenant_id: UUID, binding_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
             row = await session.scalar(
-                select(RoleBindingModel).where(
+                select(RoleBindingModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == RoleBindingModel.tenant_id)
+                    & (PrincipalModel.id == RoleBindingModel.principal_id),
+                )
+                .where(
                     RoleBindingModel.tenant_id == tenant_id,
                     RoleBindingModel.id == binding_id,
                     RoleBindingModel.revoked_at.is_(None),
+                    PrincipalModel.type.in_((PrincipalType.USER, PrincipalType.GROUP)),
+                )
+            )
+            return await self._binding_projection(session, row) if row else None
+
+    async def get_active_role_binding(
+        self, tenant_id: UUID, principal_id: UUID, role_id: UUID
+    ) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(RoleBindingModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == RoleBindingModel.tenant_id)
+                    & (PrincipalModel.id == RoleBindingModel.principal_id),
+                )
+                .where(
+                    RoleBindingModel.tenant_id == tenant_id,
+                    RoleBindingModel.principal_id == principal_id,
+                    RoleBindingModel.role_id == role_id,
+                    RoleBindingModel.revoked_at.is_(None),
+                    PrincipalModel.type.in_((PrincipalType.USER, PrincipalType.GROUP)),
                 )
             )
             return await self._binding_projection(session, row) if row else None
@@ -690,7 +754,10 @@ class SqlAlchemyIdentityAdminStore:
             role = await session.scalar(
                 select(RoleModel).where(RoleModel.tenant_id == tenant_id, RoleModel.id == role_id)
             )
-            if principal is None or role is None:
+            if principal is None or role is None or principal.type not in {
+                PrincipalType.USER,
+                PrincipalType.GROUP,
+            }:
                 return None
             row = RoleBindingModel(
                 tenant_id=tenant_id,
@@ -709,14 +776,60 @@ class SqlAlchemyIdentityAdminStore:
             await self._bump_affected_principals(session, tenant_id, principal_id)
             return await self._binding_projection(session, row)
 
-    async def revoke_role_binding(self, tenant_id: UUID, binding_id: UUID) -> bool:
+    async def update_role_binding(
+        self,
+        tenant_id: UUID,
+        binding_id: UUID,
+        role_id: UUID,
+        effect: str,
+        reason: str,
+        starts_at: datetime | None,
+        expires_at: datetime,
+    ) -> dict[str, Any] | None:
         async with self._sf.begin() as session:
             row = await session.scalar(
                 select(RoleBindingModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == RoleBindingModel.tenant_id)
+                    & (PrincipalModel.id == RoleBindingModel.principal_id),
+                )
                 .where(
                     RoleBindingModel.tenant_id == tenant_id,
                     RoleBindingModel.id == binding_id,
                     RoleBindingModel.revoked_at.is_(None),
+                    PrincipalModel.type.in_((PrincipalType.USER, PrincipalType.GROUP)),
+                )
+                .with_for_update()
+            )
+            role = await session.scalar(
+                select(RoleModel).where(RoleModel.tenant_id == tenant_id, RoleModel.id == role_id)
+            )
+            if row is None or role is None:
+                return None
+            row.role_id = role_id
+            row.effect = effect
+            row.reason = reason
+            row.starts_at = starts_at or datetime.now(UTC)
+            row.expires_at = expires_at
+            await session.flush()
+            await self._bump_affected_principals(session, tenant_id, row.principal_id)
+            return await self._binding_projection(session, row)
+
+    async def revoke_role_binding(self, tenant_id: UUID, binding_id: UUID) -> bool:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(RoleBindingModel)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.tenant_id == RoleBindingModel.tenant_id)
+                    & (PrincipalModel.id == RoleBindingModel.principal_id),
+                )
+                .where(
+                    RoleBindingModel.tenant_id == tenant_id,
+                    RoleBindingModel.id == binding_id,
+                    RoleBindingModel.revoked_at.is_(None),
+                    PrincipalModel.type.in_((PrincipalType.USER, PrincipalType.GROUP)),
                 )
                 .with_for_update()
             )
@@ -791,12 +904,14 @@ class SqlAlchemyIdentityAdminStore:
                 select(RoleBindingModel, PermissionModel.name)
                 .join(RolePermissionModel, RolePermissionModel.role_id == RoleBindingModel.role_id)
                 .join(PermissionModel, PermissionModel.id == RolePermissionModel.permission_id)
+                .join(RoleModel, RoleModel.id == RoleBindingModel.role_id)
                 .where(
                     RoleBindingModel.tenant_id == tenant_id,
                     RoleBindingModel.principal_id.in_(subject_principals),
                     RoleBindingModel.revoked_at.is_(None),
                     RoleBindingModel.starts_at <= now,
                     RoleBindingModel.expires_at > now,
+                    RoleModel.name != "tenant-admin",
                 )
             )
             return [
@@ -812,6 +927,66 @@ class SqlAlchemyIdentityAdminStore:
                 }
                 for binding, permission in rows
             ]
+
+    async def platform_tenant_admin_binding(
+        self, tenant_id: UUID, principal_id: UUID
+    ) -> dict[str, Any] | None:
+        """Return the global tenant-admin grant only for this tenant membership.
+
+        Platform roles are global-user grants, while ``principal_id`` is a
+        tenant-scoped principal.  Resolving through the current tenant's
+        active Membership is deliberate: a grant or Membership in another
+        tenant must never become an authorization source here.
+        """
+        now = datetime.now(UTC)
+        async with self._sf() as session:
+            row = await session.execute(
+                select(
+                    PlatformRoleBindingModel.id,
+                    PlatformRoleBindingModel.created_at,
+                    PlatformRoleBindingModel.expires_at,
+                )
+                .join(
+                    PlatformRoleModel,
+                    PlatformRoleModel.id == PlatformRoleBindingModel.role_id,
+                )
+                .join(
+                    MembershipModel,
+                    (MembershipModel.user_id == PlatformRoleBindingModel.user_id)
+                    & (MembershipModel.tenant_id == tenant_id)
+                    & (MembershipModel.principal_id == principal_id),
+                )
+                .join(UserModel, UserModel.id == MembershipModel.user_id)
+                .join(TenantModel, TenantModel.id == MembershipModel.tenant_id)
+                .join(
+                    PrincipalModel,
+                    (PrincipalModel.id == MembershipModel.principal_id)
+                    & (PrincipalModel.tenant_id == tenant_id),
+                )
+                .where(
+                    PlatformRoleModel.name == "tenant-admin",
+                    PlatformRoleBindingModel.revoked_at.is_(None),
+                    (PlatformRoleBindingModel.expires_at.is_(None))
+                    | (PlatformRoleBindingModel.expires_at > now),
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                    (MembershipModel.expires_at.is_(None)) | (MembershipModel.expires_at > now),
+                    UserModel.status == UserStatus.ACTIVE,
+                    PrincipalModel.enabled.is_(True),
+                    TenantModel.status == TenantLifecycleStatus.ACTIVE,
+                )
+                .order_by(PlatformRoleBindingModel.created_at.desc())
+                .limit(1)
+            )
+            value = row.first()
+            if value is None:
+                return None
+            binding_id, created_at, expires_at = value
+            return {
+                "id": binding_id,
+                "starts_at": created_at or now,
+                "expires_at": expires_at or datetime.max.replace(tzinfo=UTC),
+                "reason": "platform tenant-admin grant",
+            }
 
     async def bindings_for_role(self, tenant_id: UUID, role_id: UUID) -> list[dict[str, Any]]:
         now = datetime.now(UTC)
@@ -896,6 +1071,28 @@ class SqlAlchemyIdentityAdminStore:
                     )
                 )
                 is not None
+            )
+
+    async def resolve_application_storage_space(
+        self, tenant_id: UUID, application_id: UUID
+    ) -> UUID | None:
+        from s3mp.applications.infrastructure.models import ApplicationModel
+        from s3mp.storage.infrastructure.models import StorageSpaceModel
+
+        async with self._sf() as session:
+            return await session.scalar(
+                select(StorageSpaceModel.id)
+                .join(
+                    ApplicationModel,
+                    (ApplicationModel.tenant_id == StorageSpaceModel.tenant_id)
+                    & (ApplicationModel.id == StorageSpaceModel.application_id),
+                )
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.application_id == application_id,
+                    StorageSpaceModel.status == "active",
+                    ApplicationModel.status == "active",
+                )
             )
 
     async def tenant_memberships_for_principal(self, principal_id: UUID) -> list[dict[str, Any]]:
@@ -1156,23 +1353,11 @@ def _role_dict(row: RoleModel, permissions: list[str]) -> dict[str, Any]:
 
 
 def _binding_dict(row: RoleBindingModel, principal: dict[str, Any] | None) -> dict[str, Any]:
-    scope_type = (
-        "directory"
-        if row.canonical_prefix is not None
-        else "storage_space"
-        if row.storage_space_id is not None
-        else "tenant"
-    )
     return {
         "id": str(row.id),
         "principal": principal,
         "role_id": str(row.role_id),
         "effect": _enum_value(row.effect),
-        "scope": {
-            "type": scope_type,
-            "storage_space_id": str(row.storage_space_id) if row.storage_space_id else None,
-            "canonical_prefix": row.canonical_prefix,
-        },
         "reason": row.reason,
         "starts_at": _time(row.starts_at),
         "expires_at": _time(row.expires_at),

@@ -50,6 +50,8 @@ class AccountTenantSummary(_Strict):
     id: str
     name: str
     slug: str
+    membership_id: str
+    membership_status: str
 
 
 class AccountContext(_Strict):
@@ -144,6 +146,22 @@ async def me(
     service: Annotated[AccountAuthenticationService, account_service],
 ) -> AccountContext:
     return AccountContext.model_validate(await service.account_context(context))
+
+
+@router.post(
+    "/tenant-invitations/{membership_id}/accept",
+    response_model=AccountContext,
+    operation_id="accept_tenant_invitation",
+)
+async def accept_tenant_invitation(
+    membership_id: UUID,
+    context: Annotated[PlatformContext, Depends(account_context)],
+    service: Annotated[AccountAuthenticationService, account_service],
+    _csrf: Annotated[str | None, Header(alias="X-S3MP-CSRF")] = None,
+) -> AccountContext:
+    return AccountContext.model_validate(
+        await service.accept_tenant_invitation(context, membership_id)
+    )
 
 
 @router.post("/logout", status_code=204, operation_id="account_logout")

@@ -10,12 +10,32 @@ silently bypassing the authorization or data boundaries of any tenant.
 ### Requirement: Platform authority is independent of tenant authority
 The system SHALL assign platform roles directly to global user accounts and
 SHALL NOT represent platform authority as a tenant principal, Membership, Role,
-or RoleBinding. Platform authority MUST NOT grant direct file, object-storage,
-application API-Key, or tenant-management access.
+or RoleBinding. `platform_admin`, `platform_operator`, and `platform_auditor`
+MUST NOT grant direct tenant access. The platform role `tenant-admin` is an
+explicit exception: it SHALL grant complete tenant-scoped authority only when
+the same user has an ACTIVE Membership in the current tenant and the request
+supplies that tenant context. No platform role SHALL cross tenant boundaries
+without the current tenant Membership check.
 
 #### Scenario: Platform administrator requests tenant file data
 - **WHEN** a platform administrator calls a tenant data-plane operation without a tenant-scoped grant
 - **THEN** the system SHALL reject the request as unauthorized
+
+#### Scenario: Tenant admin platform grant with active membership
+- **WHEN** a global user has platform `tenant-admin`, an ACTIVE Membership in the current tenant, and requests a tenant operation
+- **THEN** the system SHALL evaluate the user as having all tenant-scoped permissions for that tenant
+
+#### Scenario: Tenant admin without membership
+- **WHEN** a global user has platform `tenant-admin` but no ACTIVE Membership in the requested tenant
+- **THEN** the system SHALL reject the tenant operation
+
+#### Scenario: Tenant admin is isolated per tenant
+- **WHEN** a user has an ACTIVE Membership in tenant A but not tenant B and requests tenant operations for both
+- **THEN** the system SHALL allow derived tenant-admin authority only in tenant A and SHALL reject tenant B
+
+#### Scenario: Tenant admin grant is revoked
+- **WHEN** a platform operator revokes the user's platform `tenant-admin` grant
+- **THEN** subsequent tenant authorization checks SHALL no longer derive tenant-admin permissions
 
 ### Requirement: Bootstrap first platform administrator
 The system SHALL provide an audited bootstrap mechanism that creates the first
@@ -27,13 +47,34 @@ HTTP registration path for this privilege.
 - **THEN** the bootstrap mechanism SHALL fail without creating another administrator
 
 ### Requirement: Tenant creation has an accountable initial administrator
-The system SHALL create a tenant, its initial active Membership, and the initial
-tenant-administrator grant atomically. A newly created tenant MUST NOT be left
-without an active tenant administrator.
+The system SHALL create a tenant and its initial active Membership atomically. A
+newly created tenant MUST NOT be left without an active Membership. If an
+initial administrator grant is requested, it SHALL be created atomically and
+SHALL include only tenant-scoped permissions; tenant creation MUST NOT
+implicitly create or bind a tenant-local `tenant-admin` role.
 
 #### Scenario: Initial administrator setup fails
 - **WHEN** a tenant creation request cannot create its initial administrator grant
 - **THEN** the system SHALL roll back tenant creation
+
+#### Scenario: Tenant creation does not bootstrap tenant-local tenant-admin
+- **WHEN** a tenant is created without an explicit initial administrator grant
+- **THEN** the system SHALL create the tenant and Membership only and SHALL not create a tenant-local `tenant-admin` Role or RoleBinding
+
+### Requirement: Platform tenant-admin is a peer global role
+The platform role catalog and role-binding APIs SHALL expose `tenant-admin`
+alongside `platform_admin`, `platform_operator`, and `platform_auditor`. The
+grant target SHALL be a global user account and SHALL preserve status, expiry,
+audit, and authorization-version semantics. `tenant-admin` SHALL NOT be
+accepted as a tenant-local role.
+
+#### Scenario: Platform UI grants tenant-admin
+- **WHEN** an authorized platform operator grants `tenant-admin` to a global user
+- **THEN** the API SHALL persist a platform-scoped grant and return the role name and effective status
+
+#### Scenario: Tenant-admin is not accepted as a tenant role
+- **WHEN** a tenant role API receives `tenant-admin` as a tenant-local role name or permission scope
+- **THEN** the API SHALL reject the request as a platform-role misuse
 
 ### Requirement: Support access is explicit and temporary
 The system SHALL require a reason, target tenant, approved duration, and audit

@@ -121,5 +121,8 @@ async def _resolve_api_key(request: Request, header: str) -> PrincipalContext:
         application_id=UUID(str(record["application_id"])),
         api_key_id=key_id,
         api_key_scopes=frozenset(str(scope) for scope in record.get("scopes", [])),
+        api_key_directory_prefix=(
+            str(record["directory_prefix"]) if record.get("directory_prefix") else None
+        ),
         authorization_version=int(record.get("application_authorization_version", 1)),
     )

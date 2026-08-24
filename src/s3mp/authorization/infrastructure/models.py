@@ -139,6 +139,14 @@ class RoleBindingModel(Base):
         ),
         Index("ix_role_binding_tenant_principal", "tenant_id", "principal_id"),
         Index("ix_role_binding_tenant_scope", "tenant_id", "storage_space_id", "canonical_prefix"),
+        Index(
+            "uq_role_binding_active_principal_role",
+            "tenant_id",
+            "principal_id",
+            "role_id",
+            unique=True,
+            postgresql_where="revoked_at IS NULL",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

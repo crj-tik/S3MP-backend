@@ -20,6 +20,10 @@ class PrincipalContext:
     application_id: UUID | None = None
     api_key_id: UUID | None = None
     api_key_scopes: frozenset[str] | None = None
+    api_key_directory_prefix: str | None = None
+    actor_application_id: UUID | None = None
+    actor_principal_id: UUID | None = None
+    actor_application_code: str | None = None
 
     def __post_init__(self) -> None:
         if self.tenant_id.int == 0:
@@ -37,6 +41,7 @@ class PrincipalContext:
             self.application_id is not None
             or self.api_key_id is not None
             or self.api_key_scopes is not None
+            or self.api_key_directory_prefix is not None
         ):
             raise ValueError("human principals must not carry API key attributes")
         if self.subject_kind == "application" and self.application_id is None:
@@ -54,6 +59,7 @@ class PrincipalContext:
         application_id: UUID | None = None,
         api_key_id: UUID | None = None,
         api_key_scopes: frozenset[str] | None = None,
+        api_key_directory_prefix: str | None = None,
     ) -> "PrincipalContext":
         """Create an application principal without fabricating a membership."""
         return cls(
@@ -65,6 +71,7 @@ class PrincipalContext:
             application_id=application_id or principal_id,
             api_key_id=api_key_id,
             api_key_scopes=api_key_scopes,
+            api_key_directory_prefix=api_key_directory_prefix,
         )
 
 
