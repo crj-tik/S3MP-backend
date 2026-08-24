@@ -35,7 +35,8 @@ class FileAuthGuard:
     def check_ownership(record: dict[str, Any], ctx: PrincipalContext) -> None:
         """Verify that the record's principal_id matches the current context."""
         rid = record.get("principal_id")
-        if not rid or str(rid) != str(ctx.principal_id):
+        expected_principal_id = ctx.actor_principal_id or ctx.principal_id
+        if not rid or str(rid) != str(expected_principal_id):
             raise ApiError("permission_denied", "Not authorized for this resource", status_code=403)
 
     @staticmethod

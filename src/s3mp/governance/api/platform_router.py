@@ -26,7 +26,6 @@ class _Strict(BaseModel):
 
 class PlatformQuotaCreate(_Strict):
     tenant_id: UUID
-    application_id: UUID | None = None
     limit_gib: int = Field(ge=0)
 
 
@@ -102,7 +101,7 @@ async def create_platform_quota(
         await service.create_quota(
             context,
             tenant_id=body.tenant_id,
-            application_id=body.application_id,
+            application_id=None,
             limit_gib=body.limit_gib,
         )
     )

@@ -1,11 +1,17 @@
 """SQLAlchemy storage connection and space repository."""
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import ApplicationModel
+from s3mp.authorization.infrastructure.models import (
+    BindingEffect,
+    RoleBindingModel,
+    RoleModel,
+)
 from s3mp.storage.infrastructure.models import (
     PlatformStorageProfileModel,
     StorageConnectionModel,
@@ -298,6 +304,71 @@ class SqlAlchemyStorageStore:
             )
         return _space(model) if model else None
 
+    async def get_space_for_application(
+        self, tenant_id: UUID, application_id: UUID
+    ) -> dict[str, object] | None:
+        """Resolve the one internal storage record owned by an active application."""
+        async with self._sessions() as session:
+            model = await session.scalar(
+                select(StorageSpaceModel)
+                .join(
+                    ApplicationModel,
+                    (ApplicationModel.tenant_id == StorageSpaceModel.tenant_id)
+                    & (ApplicationModel.id == StorageSpaceModel.application_id),
+                )
+                .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.application_id == application_id,
+                    StorageSpaceModel.status == "active",
+                    StorageSpaceModel.storage_namespace.is_not(None),
+                    ApplicationModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+        return _space(model) if model else None
+
+    async def get_space_for_application_code(
+        self, tenant_id: UUID, application_code: str
+    ) -> dict[str, object] | None:
+        """Resolve active implicit application storage by tenant-local public code."""
+        async with self._sessions() as session:
+            model = await session.scalar(
+                select(StorageSpaceModel)
+                .join(
+                    ApplicationModel,
+                    (ApplicationModel.tenant_id == StorageSpaceModel.tenant_id)
+                    & (ApplicationModel.id == StorageSpaceModel.application_id),
+                )
+                .join(TenantModel, TenantModel.id == StorageSpaceModel.tenant_id)
+                .where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.status == "active",
+                    StorageSpaceModel.storage_namespace.is_not(None),
+                    ApplicationModel.code == application_code,
+                    ApplicationModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+        return _space(model) if model else None
+
+    async def get_active_application_by_code(
+        self, tenant_id: UUID, application_code: str
+    ) -> dict[str, object] | None:
+        async with self._sessions() as session:
+            model = await session.scalar(
+                select(ApplicationModel).where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.code == application_code,
+                    ApplicationModel.status == "active",
+                )
+            )
+        return (
+            {"id": str(model.id), "principal_id": str(model.principal_id), "code": model.code}
+            if model
+            else None
+        )
+
     async def create_space(self, tenant_id: UUID, data: dict[str, object]) -> dict[str, object]:
         async with self._sessions.begin() as session:
             application_id = data.get("application_id")
@@ -319,3 +390,78 @@ class SqlAlchemyStorageStore:
             session.add(model)
             await session.flush()
             return _space(model)
+
+    @staticmethod
+    async def _ensure_tenant_admin_space_bindings(
+        session: AsyncSession, tenant_id: UUID, storage_space_id: UUID
+    ) -> int:
+        """Give each tenant-admin principal an explicit binding for a new space."""
+        admin_principals = (
+            await session.scalars(
+                select(RoleBindingModel.principal_id)
+                .join(RoleModel, RoleModel.id == RoleBindingModel.role_id)
+                .where(
+                    RoleBindingModel.tenant_id == tenant_id,
+                    RoleModel.tenant_id == tenant_id,
+                    RoleModel.name == "tenant-admin",
+                    RoleBindingModel.effect == BindingEffect.ALLOW,
+                    RoleBindingModel.revoked_at.is_(None),
+                    RoleBindingModel.storage_space_id.is_(None),
+                )
+            )
+        ).all()
+        if not admin_principals:
+            return 0
+        role_id = await session.scalar(
+            select(RoleModel.id).where(
+                RoleModel.tenant_id == tenant_id, RoleModel.name == "tenant-admin"
+            )
+        )
+        if role_id is None:
+            return 0
+        created = 0
+        for principal_id in set(admin_principals):
+            exists = await session.scalar(
+                select(RoleBindingModel.id).where(
+                    RoleBindingModel.tenant_id == tenant_id,
+                    RoleBindingModel.principal_id == principal_id,
+                    RoleBindingModel.role_id == role_id,
+                    RoleBindingModel.storage_space_id == storage_space_id,
+                    RoleBindingModel.canonical_prefix.is_(None),
+                    RoleBindingModel.revoked_at.is_(None),
+                )
+            )
+            if exists is not None:
+                continue
+            session.add(
+                RoleBindingModel(
+                    tenant_id=tenant_id,
+                    principal_id=principal_id,
+                    role_id=role_id,
+                    effect=BindingEffect.ALLOW,
+                    storage_space_id=storage_space_id,
+                    canonical_prefix=None,
+                    reason="tenant-admin storage space baseline",
+                    expires_at=datetime.max.replace(tzinfo=UTC),
+                    created_by_principal_id=principal_id,
+                )
+            )
+            created += 1
+        return created
+
+    async def reconcile_tenant_admin_space_bindings(self) -> int:
+        """Backfill explicit tenant-admin bindings for existing storage spaces."""
+        async with self._sessions.begin() as session:
+            spaces = (
+                await session.execute(
+                    select(StorageSpaceModel.tenant_id, StorageSpaceModel.id).where(
+                        StorageSpaceModel.status == "active"
+                    )
+                )
+            ).all()
+            created = 0
+            for tenant_id, storage_space_id in spaces:
+                created += await self._ensure_tenant_admin_space_bindings(
+                    session, tenant_id, storage_space_id
+                )
+            return created

@@ -27,6 +27,7 @@ class ApiKeyState(Protocol):
 class DelayedSubject:
     subject_kind: str
     api_key_scopes: frozenset[str] | None
+    api_key_directory_prefix: str | None = None
 
 
 async def validate_delayed_subject(
@@ -84,6 +85,7 @@ async def validate_delayed_subject(
         or key.get("expires_at") is not None
         and key["expires_at"] <= datetime.now(UTC)
         or int(key.get("application_authorization_version", 0)) < authorization_version
+        or key.get("directory_prefix") != evidence.get("api_key_directory_prefix")
     ):
         return None
     scopes = frozenset(str(scope) for scope in key.get("scopes") or ())
@@ -113,4 +115,4 @@ async def validate_delayed_subject(
         and membership["expires_at"] <= datetime.now(UTC)
     ):
         return None
-    return DelayedSubject("application", scopes)
+    return DelayedSubject("application", scopes, key.get("directory_prefix"))

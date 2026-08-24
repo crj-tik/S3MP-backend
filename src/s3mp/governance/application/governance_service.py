@@ -27,6 +27,15 @@ class QuotaStore(Protocol):
     async def update_quota(
         self, tenant_id: UUID, quota_id: UUID, limit_bytes: int
     ) -> dict[str, Any] | None: ...
+    async def create_platform_quota(
+        self,
+        *,
+        actor_user_id: UUID,
+        tenant_id: UUID,
+        application_id: UUID | None,
+        limit_bytes: int,
+        bucket_capacity_bytes: int | None,
+    ) -> dict[str, Any]: ...
 
 
 class AuditStore(Protocol):
@@ -87,6 +96,27 @@ class QuotaService:
         if result is None:
             raise ApiError("resource_not_found", "Quota not found", status_code=404)
         return result
+
+    async def create_application_quota(
+        self, context: PrincipalContext, application_id: str, limit_gib: int
+    ) -> dict[str, Any]:
+        """Allocate an application-reserved quota inside the current tenant."""
+        await self._require(context, "quotas.manage")
+        try:
+            limit_bytes = gib_to_bytes(limit_gib)
+            application_uuid = UUID(application_id)
+        except (ValueError, TypeError) as exc:
+            raise ApiError("validation_failed", "Invalid application quota request", 422) from exc
+        return await self.store.create_platform_quota(
+            # Tenant contexts identify the authenticated membership principal,
+            # not the shared account user. The repository resolves this
+            # principal to the user id required by the platform audit table.
+            actor_user_id=context.principal_id,
+            tenant_id=context.tenant_id,
+            application_id=application_uuid,
+            limit_bytes=limit_bytes,
+            bucket_capacity_bytes=None,
+        )
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:

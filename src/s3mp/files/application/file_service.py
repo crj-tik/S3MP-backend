@@ -1,8 +1,8 @@
 """File, upload, presigned download, and multipart application service."""
 
 import hashlib
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 from uuid import UUID
 
@@ -18,6 +18,16 @@ from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
 
 MULTIPART_PART_SIZE = 8 * 1024 * 1024
+
+
+def _require_future_expiry(value: datetime) -> datetime:
+    """Require an explicit timezone-aware expiry in the future."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ApiError("validation_failed", "Upload expiry must include a timezone", 422)
+    expiry = value.astimezone(UTC)
+    if expiry <= datetime.now(UTC):
+        raise ApiError("validation_failed", "Upload expiry must be in the future", 422)
+    return expiry
 
 
 class FileStore(Protocol):
@@ -75,6 +85,15 @@ class FileStore(Protocol):
 
 class StorageSpaceStore(Protocol):
     async def get_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any] | None: ...
+    async def get_space_for_application(
+        self, tenant_id: UUID, application_id: UUID
+    ) -> dict[str, Any] | None: ...
+    async def get_space_for_application_code(
+        self, tenant_id: UUID, application_code: str
+    ) -> dict[str, Any] | None: ...
+    async def get_active_application_by_code(
+        self, tenant_id: UUID, application_code: str
+    ) -> dict[str, Any] | None: ...
 
 
 class FileAuthorizationStore(Protocol):
@@ -182,7 +201,11 @@ class ObjectStorage(Protocol):
     async def copy(self, source: ProviderTarget, destination: ProviderTarget) -> ObjectMetadata: ...
     async def presign_get(self, target: ProviderTarget, expires_in: int) -> str: ...
     async def presign_put(
-        self, target: ProviderTarget, content_type: str, expires_in: int
+        self,
+        target: ProviderTarget,
+        content_type: str,
+        expires_in: int,
+        checksum_sha256: str | None = None,
     ) -> str: ...
     async def readiness_probe(self) -> None: ...
     # ── Multipart ──────────────────────────────────────────────────────────
@@ -220,6 +243,81 @@ class FileApplicationService:
             raise ApiError("resource_not_found", "Storage space not found", status_code=404)
         return space
 
+    async def resolve_application_space(
+        self, ctx: PrincipalContext, application_id: UUID
+    ) -> dict[str, Any]:
+        """Resolve an application's implicit storage without accepting a space choice."""
+        if ctx.subject_kind == "application" and ctx.application_id != application_id:
+            raise ApiError(
+                "permission_denied",
+                "Application credentials cannot address another application",
+                status_code=403,
+            )
+        if self.storage_store is None:
+            raise ApiError("internal_error", "Storage store not configured", status_code=500)
+        space = await self.storage_store.get_space_for_application(ctx.tenant_id, application_id)
+        if space is None:
+            raise ApiError("resource_not_found", "Application storage not found", status_code=404)
+        return space
+
+    async def resolve_application_space_by_code(
+        self, ctx: PrincipalContext, application_code: str
+    ) -> dict[str, Any]:
+        """Resolve a public application code to its server-owned storage space.
+
+        The application id never comes from a third-party caller.  Once the
+        code has been resolved within the current tenant, the API key is still
+        checked against the resolved application id.
+        """
+        if self.storage_store is None:
+            raise ApiError("internal_error", "Storage store not configured", status_code=500)
+        space = await self.storage_store.get_space_for_application_code(
+            ctx.tenant_id, application_code
+        )
+        if space is None:
+            raise ApiError("resource_not_found", "Application storage not found", status_code=404)
+        self._require_application_namespace(ctx, space)
+        return space
+
+    async def application_actor_context(
+        self, ctx: PrincipalContext, application_code: str
+    ) -> PrincipalContext:
+        """Attach the declared, same-tenant audit application to an API-key context."""
+        if ctx.subject_kind != "application":
+            raise ApiError("permission_denied", "Application API key is required", status_code=403)
+        if self.storage_store is None:
+            raise ApiError("internal_error", "Storage store not configured", status_code=500)
+        actor = await self.storage_store.get_active_application_by_code(
+            ctx.tenant_id, application_code
+        )
+        if actor is None:
+            raise ApiError("resource_not_found", "Application not found", status_code=404)
+        return replace(
+            ctx,
+            actor_application_id=UUID(str(actor["id"])),
+            actor_principal_id=UUID(str(actor["principal_id"])),
+            actor_application_code=application_code,
+        )
+
+    @staticmethod
+    def _require_application_namespace(ctx: PrincipalContext, space: dict[str, Any]) -> None:
+        """Keep application credentials inside their own immutable namespace.
+
+        Some legacy follow-up endpoints identify an upload, multipart session,
+        or file operation without an application id in the URL.  Their storage
+        record is therefore checked here as well as at the application route
+        boundary, so an application key can never use such an id to cross into
+        another application's directory.
+        """
+        if ctx.subject_kind != "application":
+            return
+        if str(space.get("application_id") or "") != str(ctx.application_id):
+            raise ApiError(
+                "permission_denied",
+                "Application credentials cannot address another application",
+                status_code=403,
+            )
+
     def _physical_key(self, space: dict[str, Any], relative_key: str) -> str:
         """Build the server-owned provider key for a relative object key."""
         return derive_provider_target(
@@ -255,6 +353,20 @@ class FileApplicationService:
         public.pop("membership_id", None)
         return public
 
+    @staticmethod
+    def _key_relative_public_key(ctx: PrincipalContext, key: str) -> str:
+        """Hide the server-owned Key directory prefix from application API clients."""
+        prefix = ctx.api_key_directory_prefix if ctx.subject_kind == "application" else None
+        if not prefix:
+            return key
+        if key == prefix:
+            return ""
+        if key.startswith(prefix + "/"):
+            return key[len(prefix) + 1 :]
+        raise ApiError(
+            "permission_denied", "Object is outside API key directory scope", status_code=403
+        )
+
     async def _public_direct_upload(
         self, space: dict[str, Any], record: dict[str, Any]
     ) -> dict[str, Any]:
@@ -273,14 +385,30 @@ class FileApplicationService:
         if ttl < 30:
             raise ApiError("resource_expired", "Upload session has expired", status_code=410)
         target = ProviderTarget(bucket=str(space["bucket"]), key=str(record["object_key"]))
-        url = await self.object_storage.presign_put(target, str(record["content_type"]), ttl)
+        checksum = record.get("checksum")
+        checksum_sha256 = (
+            str(checksum).removeprefix("sha256:") if checksum is not None else None
+        )
+        url = await self.object_storage.presign_put(
+            target,
+            str(record["content_type"]),
+            ttl,
+            checksum_sha256=checksum_sha256,
+        )
         public = self._public_upload(space, record)
         public.update(
             {
                 "mode": "direct",
                 "method": "PUT",
                 "url": url,
-                "headers": {"Content-Type": str(record["content_type"])},
+                "headers": {
+                    "Content-Type": str(record["content_type"]),
+                    **(
+                        {"x-amz-checksum-sha256": checksum_sha256}
+                        if checksum_sha256 is not None
+                        else {}
+                    ),
+                },
             }
         )
         return public
@@ -355,8 +483,10 @@ class FileApplicationService:
         *,
         idempotency_key: str | None = None,
         semantics: dict[str, Any] | None = None,
+        resolved_relative_key: bool = False,
     ) -> AuthorizedFileCommand:
         space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
+        self._require_application_namespace(ctx, space)
         if self.authorization_store is None:
             raise ApiError(
                 "internal_error", "File authorization store is not configured", status_code=500
@@ -373,6 +503,7 @@ class FileApplicationService:
             request_id=current_request_id(),
             idempotency_key=idempotency_key or "",
             semantics=semantics,
+            resolved_relative_key=resolved_relative_key,
         )
 
     async def _command_for_record(
@@ -401,6 +532,7 @@ class FileApplicationService:
             action,
             idempotency_key=idempotency_key,
             semantics=semantics,
+            resolved_relative_key=True,
         )
 
     async def _begin_ingestion(
@@ -500,8 +632,11 @@ class FileApplicationService:
             await self.ingestion_store.expire(UUID(record["tenant_id"]), UUID(ingestion["id"]))  # type: ignore[union-attr]
         raise ApiError("resource_expired", "Multipart upload has expired", status_code=410)
 
+    @staticmethod
     def _ingestion_data(
-        self, command: AuthorizedFileCommand, idempotency_key: str | None
+        command: AuthorizedFileCommand,
+        idempotency_key: str | None,
+        space: dict[str, Any],
     ) -> dict[str, Any]:
         return {
             "creator_principal_id": str(command.acting_principal_id),
@@ -510,6 +645,17 @@ class FileApplicationService:
             if command.authorization_evidence.get("membership_id")
             else None,
             "storage_space_id": str(command.storage_space_id),
+            # Completion revalidates the durable provider target against the
+            # current space. Persist the full namespace/profile identity used
+            # for the upload rather than falling back to legacy defaults.
+            "application_id": str(space["application_id"])
+            if space.get("application_id")
+            else None,
+            "actor_application_id": str(command.authorization_evidence.get("actor_application_id"))
+            if command.authorization_evidence.get("actor_application_id")
+            else None,
+            "storage_namespace": space.get("storage_namespace"),
+            "profile_version": int(space.get("profile_version", 1)),
             "bucket": command.bucket,
             "relative_key": command.relative_key,
             "physical_key": command.physical_key,
@@ -640,8 +786,10 @@ class FileApplicationService:
             or int(record.get("profile_version", 1)) != int(space.get("profile_version", 1))
         ):
             return False
-        principal_id = UUID(record["acting_principal_id"])
         evidence = record.get("authorization_evidence") or {}
+        principal_id = UUID(
+            str(evidence.get("target_principal_id") or record["acting_principal_id"])
+        )
         subject = await validate_delayed_subject(
             principal_store=self.principal_store,
             api_key_store=self.api_key_state_store,
@@ -653,6 +801,11 @@ class FileApplicationService:
             required_permission="files.write",
         )
         if subject is None:
+            return False
+        if subject.api_key_directory_prefix and not (
+            str(record["relative_key"]) == subject.api_key_directory_prefix
+            or str(record["relative_key"]).startswith(subject.api_key_directory_prefix + "/")
+        ):
             return False
         bindings = await self.authorization_store.bindings_for(
             tenant_id,
@@ -752,6 +905,11 @@ class FileApplicationService:
         )
         if subject is None:
             return False
+        if subject.api_key_directory_prefix and not (
+            relative_key == subject.api_key_directory_prefix
+            or relative_key.startswith(subject.api_key_directory_prefix + "/")
+        ):
+            return False
         bindings = await self.authorization_store.bindings_for(
             tenant_id, principal_id, space_id, subject_kind=subject.subject_kind
         )
@@ -844,7 +1002,7 @@ class FileApplicationService:
             UUID(file_id),
             idempotency_key=idempotency_key,
             if_match=if_match,
-            actor_principal_id=ctx.principal_id,
+            actor_principal_id=ctx.actor_principal_id or ctx.principal_id,
             request_id=current_request_id(),
             object_key=record["object_key"],
             authorization_version=ctx.authorization_version,
@@ -906,20 +1064,32 @@ class FileApplicationService:
         else:
             raise ApiError("validation_failed", "Unsupported file operation", status_code=422)
         data = {
-            "principal_id": str(ctx.principal_id),
+            "principal_id": str(ctx.actor_principal_id or ctx.principal_id),
             "membership_id": str(ctx.membership_id) if ctx.membership_id else None,
             "operation_type": body.operation_type,
-            "source_key": body.source_key,
-            "destination_key": body.destination_key,
-            "keys": body.keys,
+            "source_key": (
+                commands[0].relative_key if body.operation_type in {"copy", "move"} else None
+            ),
+            "destination_key": (
+                commands[-1].relative_key if body.operation_type in {"copy", "move"} else None
+            ),
+            "keys": (
+                [command.relative_key for command in commands]
+                if body.operation_type == "delete"
+                else None
+            ),
             "idempotency_key": idempotency_key,
             "authorization_version": ctx.authorization_version,
             "provider_target_version": commands[0].provider_target_version,
             "authorization_evidence": {
                 "subject_kind": ctx.subject_kind,
                 "application_id": str(ctx.application_id) if ctx.application_id else None,
+                "actor_application_id": str(ctx.actor_application_id)
+                if ctx.actor_application_id
+                else None,
                 "api_key_id": str(ctx.api_key_id) if ctx.api_key_id else None,
                 "api_key_scopes": sorted(ctx.api_key_scopes or ()),
+                "api_key_directory_prefix": ctx.api_key_directory_prefix,
                 "commands": [command.authorization_evidence for command in commands],
             },
         }
@@ -927,6 +1097,9 @@ class FileApplicationService:
         data.update(
             {
                 "application_id": space.get("application_id"),
+                "actor_application_id": str(ctx.actor_application_id)
+                if ctx.actor_application_id
+                else None,
                 "storage_namespace": space.get("storage_namespace"),
                 "profile_version": space.get("profile_version", 1),
             }
@@ -987,6 +1160,7 @@ class FileApplicationService:
                 "Object storage is not configured",
                 status_code=422,
             )
+        expires_at = _require_future_expiry(body.expires_at)
         command = await self._command(
             ctx,
             space_id,
@@ -997,22 +1171,27 @@ class FileApplicationService:
                 "content_length": body.content_length,
                 "content_type": body.content_type.lower(),
                 "checksum": body.checksum,
+                "expires_at": expires_at.isoformat(),
             },
         )
         data = {
-            "principal_id": str(ctx.principal_id),
+            "principal_id": str(ctx.actor_principal_id or ctx.principal_id),
             "membership_id": str(ctx.membership_id) if ctx.membership_id else None,
             "object_key": command.physical_key,
             "provider_target_version": command.provider_target_version,
             "content_length": body.content_length,
             "content_type": body.content_type,
             "checksum": body.checksum,
+            "expires_at": expires_at,
             "idempotency_key": idempotency_key,
         }
         space = await self._resolve_space(ctx.tenant_id, command.storage_space_id)
         data.update(
             {
                 "application_id": space.get("application_id"),
+                "actor_application_id": str(ctx.actor_application_id)
+                if ctx.actor_application_id
+                else None,
                 "storage_namespace": space.get("storage_namespace"),
                 "profile_version": space.get("profile_version", 1),
             }
@@ -1025,9 +1204,8 @@ class FileApplicationService:
                 {
                     **data,
                     "storage_space_id": str(command.storage_space_id),
-                    "expires_at": datetime.now(UTC) + timedelta(hours=24),
                 },
-                self._ingestion_data(command, idempotency_key),
+                self._ingestion_data(command, idempotency_key, space),
             )
             record.pop("replayed", None)
         try:
@@ -1239,6 +1417,7 @@ class FileApplicationService:
                 "Multipart storage is not configured",
                 status_code=422,
             )
+        expires_at = _require_future_expiry(body.expires_at)
         command = await self._command(
             ctx,
             space_id,
@@ -1248,21 +1427,26 @@ class FileApplicationService:
             semantics={
                 "content_length": body.content_length,
                 "content_type": body.content_type.lower(),
+                "expires_at": expires_at.isoformat(),
             },
         )
         data = {
-            "principal_id": str(ctx.principal_id),
+            "principal_id": str(ctx.actor_principal_id or ctx.principal_id),
             "membership_id": str(ctx.membership_id) if ctx.membership_id else None,
             "object_key": command.physical_key,
             "provider_target_version": command.provider_target_version,
             "content_length": body.content_length,
             "content_type": body.content_type,
+            "expires_at": expires_at,
             "idempotency_key": idempotency_key,
         }
         space = await self._resolve_space(ctx.tenant_id, command.storage_space_id)
         data.update(
             {
                 "application_id": space.get("application_id"),
+                "actor_application_id": str(ctx.actor_application_id)
+                if ctx.actor_application_id
+                else None,
                 "storage_namespace": space.get("storage_namespace"),
                 "profile_version": space.get("profile_version", 1),
             }
@@ -1278,9 +1462,8 @@ class FileApplicationService:
                 {
                     **data,
                     "storage_space_id": str(command.storage_space_id),
-                    "expires_at": datetime.now(UTC) + timedelta(hours=24),
                 },
-                self._ingestion_data(command, idempotency_key),
+                self._ingestion_data(command, idempotency_key, space),
             )
             ingestion = {"id": record["ingestion_id"]}
             if record.pop("replayed", False):

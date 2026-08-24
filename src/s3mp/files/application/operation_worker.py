@@ -105,6 +105,7 @@ class FileOperationWorker:
                 else None,
                 api_key_id=UUID(evidence["api_key_id"]) if evidence.get("api_key_id") else None,
                 api_key_scopes=scopes,
+                api_key_directory_prefix=subject.api_key_directory_prefix,
             )
             if subject.subject_kind == "application"
             else PrincipalContext(
@@ -157,6 +158,11 @@ class FileOperationWorker:
         async def authorize(permission: str, key: str) -> bool:
             if ctx.subject_kind == "application" and permission not in (
                 ctx.api_key_scopes or frozenset()
+            ):
+                return False
+            if ctx.api_key_directory_prefix and not (
+                key == ctx.api_key_directory_prefix
+                or key.startswith(ctx.api_key_directory_prefix + "/")
             ):
                 return False
             bindings = await self.authorization_store.bindings_for(

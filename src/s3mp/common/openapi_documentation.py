@@ -7,9 +7,10 @@ from typing import Any
 OPERATION_DESCRIPTIONS: dict[str, str] = {
     "live_health_live_get": "检查 API 进程是否存活；不检查数据库、Redis 或对象存储。",
     "ready_health_ready_get": "检查 API 是否已就绪，并验证已启用的外部依赖。",
-    "get_metadata_catalog": "获取前端使用的状态、枚举、授权范围和状态流转目录。",
+    "get_metadata_catalog": "获取前端使用的状态、枚举、授权效果和状态流转目录。",
     "get_me": "获取当前已选租户中的身份、成员关系与有效权限上下文。",
     "list_users": "列出当前租户可见的用户账户。",
+    "list_member_candidates": "搜索尚未加入当前租户的全局已注册用户候选；支持邮箱、姓名和工号模糊查询。",
     "get_user": "获取当前租户中指定用户的公开身份信息。",
     "list_members": "列出当前租户的成员关系。",
     "create_member": "将已有用户加入当前租户，或创建受邀成员关系。",
@@ -18,6 +19,7 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "list_group_members": "列出指定用户组中的成员关系。",
     "add_group_member": "将当前租户成员加入指定用户组。",
     "remove_group_member": "将成员从指定用户组移除。",
+    "get_permission_catalog": "获取当前租户可配置的权限目录；不包含任何 platform.* 平台权限。",
     "account_login": (
         "校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie "
         "和可读的账户 CSRF Cookie，同时清除浏览器中已有的租户会话 Cookie；"
@@ -28,6 +30,10 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
         "该公开接口不要求已有会话或 X-S3MP-CSRF 请求头。"
     ),
     "get_account_context": "获取当前账户及其可选择的活跃租户摘要。",
+    "accept_tenant_invitation": (
+        "接受当前账户的租户邀请并将成员关系从 invited 转为 active；客户端必须把 "
+        "s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。"
+    ),
     "account_logout": (
         "撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；客户端必须把 "
         "s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。"
@@ -62,15 +68,21 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "create_role": "创建当前租户的自定义角色。",
     "get_role": "获取指定角色及其权限详情。",
     "update_role": "更新自定义角色；系统内置角色不可通过此接口修改。",
-    "list_role_bindings": "列出当前租户的角色绑定，可按主体和逻辑存储空间筛选。",
-    "create_role_binding": "在调用者可委派的权限和资源范围内创建角色绑定。",
-    "get_role_binding": "获取指定角色绑定及其资源范围和有效期。",
+    "list_role_bindings": "列出当前租户的成员或用户组角色绑定，可按主体筛选。",
+    "create_role_binding": "在调用者可委派的权限范围内创建成员或用户组角色绑定。",
+    "update_role_binding": "修改指定成员或用户组的现有角色绑定；同一主体可绑定多个不同角色。",
+    "get_role_binding": "获取指定角色绑定及其有效期。",
     "revoke_role_binding": "撤销指定角色绑定并使相关授权立即失效。",
-    "get_effective_permissions": "解释指定主体在当前租户和资源范围内的有效权限来源。",
+    "get_effective_permissions": "解释指定主体在当前租户内的有效角色权限来源。",
     "simulate_authorization": "在不改变授权状态的前提下模拟一次访问决策。",
     "list_applications": "列出当前租户的应用及其所有者状态。",
-    "create_application": "创建应用并绑定当前主体为初始所有者。",
+    "create_application": "创建应用、生成其固定存储目录，并绑定一个租户成员作为初始授权代表。",
     "get_application": "获取指定应用的元数据与状态。",
+    "get_application_authorization_representative": "获取应用当前绑定的租户成员授权代表。",
+    "bind_application_authorization_representative": "为应用绑定一个同租户的活跃成员作为授权代表。",
+    "revoke_application_authorization_representative": (
+        "撤销应用当前绑定的成员授权代表并使其授权立即失效。"
+    ),
     "update_application": "更新指定应用的名称或状态。",
     "takeover_application": "接管失去活跃所有者、处于待接管状态的应用。",
     "list_api_keys": "列出指定应用的 API Key 元数据；不会返回密钥明文。",
@@ -82,12 +94,7 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "list_storage_connections": "列出当前租户的对象存储连接摘要，不暴露连接凭据。",
     "get_storage_connection": "获取对象存储连接的脱敏配置和连通性状态。",
     "probe_storage_connection": "探测对象存储连接与其声明能力。",
-    "list_storage_spaces": "列出当前租户的逻辑存储空间，可按应用筛选。",
-    "create_storage_space": (
-        "为指定应用创建逻辑存储空间；物理 S3 连接、Bucket 与对象命名空间均由平台派生。"
-    ),
-    "get_storage_space": "获取逻辑存储空间详情。",
-    "list_files": "在授权的逻辑存储空间和目录范围内列出文件对象。",
+    "list_files": "在当前应用的固定命名空间内列出文件对象。",
     "get_file": "获取指定文件对象的元数据；不直接返回对象存储凭据。",
     "delete_file": "提交文件删除；接口按声明的幂等与并发前置条件执行。",
     "create_file_operation": "创建文件复制、移动或其他受控异步操作。",
@@ -104,7 +111,7 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
         "接收一个分片二进制并由服务端写入对象存储，同时保存 provider 返回的 ETag。"
     ),
     "complete_multipart_upload": "按已确认分片完成分段上传并验证最终对象。",
-    "list_quotas": "列出当前租户或存储空间的配额与使用量。",
+    "list_quotas": "列出当前租户或应用的配额与使用量；历史空间记录仅作迁移兼容。",
     "get_quota": "获取指定配额的限制、已用量和预留量。",
     "update_quota": "更新配额上限；需要当前 ETag 以防并发覆盖。",
     "list_platform_quotas": "列出平台可管理的租户总配额和应用独立配额。",
@@ -126,7 +133,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "role_binding_id": "角色绑定的服务端唯一标识。",
     "application_id": "应用的服务端唯一标识。",
     "api_key_id": "API Key 的服务端唯一标识。",
-    "storage_space_id": "逻辑存储空间的服务端唯一标识。",
+    "storage_space_id": "历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。",
     "connection_id": "存储连接的服务端唯一标识。",
     "file_id": "文件对象的服务端唯一标识。",
     "upload_id": "上传会话的服务端唯一标识。",
@@ -158,8 +165,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "created_at": "资源创建时间，采用 UTC RFC 3339 格式。",
     "updated_at": "资源最近更新时间，采用 UTC RFC 3339 格式。",
     "reason": "执行该敏感操作的业务原因。",
-    "object_key": "逻辑存储空间内的规范相对对象路径。",
-    "canonical_prefix": "授权或存储空间覆盖的规范相对目录前缀。",
+    "object_key": "应用存储命名空间内的规范相对对象路径。",
     "content_type": "对象的媒体类型。",
     "content_length": "对象实际内容长度，单位为字节。",
     "declared_size_bytes": "客户端声明的上传对象大小，单位为字节。",
@@ -355,49 +361,18 @@ def document_openapi(schema: dict[str, Any]) -> dict[str, Any]:
         "description": (
             "由服务端固定的应用存储命名空间；调用方只能提供相对对象路径，不能提供物理 Key。"
         ),
-        "required": ["application_id", "storage_space_id", "storage_namespace", "profile_version"],
+        "required": ["application_id", "storage_namespace", "profile_version"],
         "properties": {
             "application_id": {
                 "type": "string",
                 "format": "uuid",
                 "description": "命名空间所属应用标识。",
             },
-            "storage_space_id": {
-                "type": "string",
-                "format": "uuid",
-                "description": "该应用唯一逻辑存储空间标识。",
-            },
             "storage_namespace": {"type": "string", "description": "不可变的服务端对象 Key 前缀。"},
             "profile_version": {
                 "type": "integer",
                 "minimum": 1,
                 "description": "创建该命名空间时的共享 profile 版本。",
-            },
-        },
-    }
-    schemas["ApplicationPathGrant"] = {
-        "type": "object",
-        "title": "ApplicationPathGrant",
-        "description": (
-            "角色绑定中的应用文件路径授权范围；用户组只能通过活跃成员关系取得该授权，不能登录。"
-        ),
-        "required": ["type", "storage_space_id"],
-        "properties": {
-            "type": {
-                "type": "string",
-                "enum": ["storage_space", "directory"],
-                "description": (
-                    "storage_space 覆盖应用全部路径；directory 仅覆盖 canonical_prefix。"
-                ),
-            },
-            "storage_space_id": {
-                "type": "string",
-                "format": "uuid",
-                "description": "已绑定应用的逻辑存储空间标识。",
-            },
-            "canonical_prefix": {
-                "type": "string",
-                "description": "directory 范围使用的规范相对前缀；storage_space 范围不需要该字段。",
             },
         },
     }

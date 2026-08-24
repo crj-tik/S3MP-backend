@@ -57,8 +57,8 @@ All non-2xx JSON errors use this envelope:
 
 ## Authorization semantics
 
-- Permission names come from `permission-catalog.yaml`. File permissions require a `storage_space` scope and may include a canonical prefix.
-- Canonical prefixes are slash-delimited relative object prefixes: no leading slash, `.`/`..`, backslash, control character, empty segment or ambiguous encoding. The empty string means the whole storage space.
+- Permission names come from `permission-catalog.yaml`. Tenant role bindings are granted only to members or user groups; they have no application or directory scope.
+- An application API Key obtains file permissions only through the member bound when that application was created (or explicitly rebound by an application administrator). Application requests are resolved only inside that application's immutable `<tenant-slug>/<application-id>` namespace, so another application's files are not addressable through its API.
 - Effective access merges matching allows, applies explicit deny before allow, and defaults to deny. Explanations contain stable reason codes and source references.
 - Membership suspension, binding expiry and policy/group changes advance `authorization_version`; sessions, cursors and queued work are revalidated.
 

@@ -13,6 +13,14 @@ from s3mp.common.config import Settings, get_settings
 from s3mp.common.database import create_engine
 
 QUERIES: dict[str, str] = {
+    "applications_without_internal_space": """
+        SELECT a.id, a.tenant_id, a.storage_namespace
+        FROM application AS a
+        LEFT JOIN storage_space AS s
+          ON s.tenant_id = a.tenant_id AND s.application_id = a.id
+        WHERE a.status <> 'deleted' AND s.id IS NULL
+        ORDER BY a.tenant_id, a.id
+    """,
     "storage_spaces_without_application": """
         SELECT id, tenant_id, name
         FROM storage_space
@@ -34,6 +42,16 @@ QUERIES: dict[str, str] = {
         GROUP BY storage_namespace
         HAVING COUNT(*) > 1
         ORDER BY storage_namespace
+    """,
+    "application_namespace_mismatches": """
+        SELECT a.id AS application_id, a.tenant_id,
+               a.storage_namespace AS application_namespace,
+               s.id AS storage_space_id, s.storage_namespace AS space_namespace
+        FROM application AS a
+        JOIN storage_space AS s ON s.application_id = a.id
+        WHERE s.tenant_id <> a.tenant_id
+           OR s.storage_namespace IS DISTINCT FROM a.storage_namespace
+        ORDER BY a.tenant_id, a.id
     """,
     "overlapping_legacy_prefixes": """
         SELECT a.tenant_id, a.id AS left_space_id, b.id AS right_space_id,
@@ -60,6 +78,56 @@ QUERIES: dict[str, str] = {
           ON s.tenant_id = f.tenant_id AND s.id = f.storage_space_id
         WHERE s.id IS NULL
         ORDER BY f.tenant_id, f.id
+    """,
+    "orphan_provider_records": """
+        SELECT 'upload_session' AS record_type, u.id, u.tenant_id, u.storage_space_id
+          FROM upload_session AS u
+          LEFT JOIN storage_space AS s
+            ON s.tenant_id = u.tenant_id AND s.id = u.storage_space_id
+         WHERE s.id IS NULL
+        UNION ALL
+        SELECT 'multipart_session', m.id, m.tenant_id, m.storage_space_id
+          FROM multipart_session AS m
+          LEFT JOIN storage_space AS s
+            ON s.tenant_id = m.tenant_id AND s.id = m.storage_space_id
+         WHERE s.id IS NULL
+        UNION ALL
+        SELECT 'file_operation', o.id, o.tenant_id, o.storage_space_id
+          FROM file_operation AS o
+          LEFT JOIN storage_space AS s
+            ON s.tenant_id = o.tenant_id AND s.id = o.storage_space_id
+         WHERE s.id IS NULL
+        UNION ALL
+        SELECT 'file_ingestion_record', i.id, i.tenant_id, i.storage_space_id
+          FROM file_ingestion_record AS i
+          LEFT JOIN storage_space AS s
+            ON s.tenant_id = i.tenant_id AND s.id = i.storage_space_id
+         WHERE s.id IS NULL
+    """,
+    "unfinished_records_with_namespace_drift": """
+        SELECT 'upload_session' AS record_type, u.id, u.tenant_id, u.application_id,
+               u.storage_namespace, s.storage_namespace AS expected_namespace
+          FROM upload_session AS u JOIN storage_space AS s
+            ON s.tenant_id = u.tenant_id AND s.id = u.storage_space_id
+         WHERE u.status IN ('initiated', 'uploading')
+           AND (u.application_id IS DISTINCT FROM s.application_id
+                OR u.storage_namespace IS DISTINCT FROM s.storage_namespace)
+        UNION ALL
+        SELECT 'multipart_session', m.id, m.tenant_id, m.application_id,
+               m.storage_namespace, s.storage_namespace
+          FROM multipart_session AS m JOIN storage_space AS s
+            ON s.tenant_id = m.tenant_id AND s.id = m.storage_space_id
+         WHERE m.status IN ('initiated', 'uploading')
+           AND (m.application_id IS DISTINCT FROM s.application_id
+                OR m.storage_namespace IS DISTINCT FROM s.storage_namespace)
+        UNION ALL
+        SELECT 'file_operation', o.id, o.tenant_id, o.application_id,
+               o.storage_namespace, s.storage_namespace
+          FROM file_operation AS o JOIN storage_space AS s
+            ON s.tenant_id = o.tenant_id AND s.id = o.storage_space_id
+         WHERE o.status IN ('accepted', 'pending', 'running')
+           AND (o.application_id IS DISTINCT FROM s.application_id
+                OR o.storage_namespace IS DISTINCT FROM s.storage_namespace)
     """,
     "legacy_file_targets": """
         SELECT 'file_object' AS record_type, COUNT(*) AS count

@@ -3,6 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +26,12 @@ class QuotaUpdate(BaseModel):
     limit_gib: int = Field(ge=0, description="新的配额上限，单位为 GiB。")
 
 
+class ApplicationQuotaCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    application_id: UUID = Field(description="本租户应用的稳定标识。")
+    limit_gib: int = Field(ge=0, description="应用独立配额上限，单位为 GiB。")
+
+
 class QuotaResponse(BaseModel):
     """租户或应用范围的存储配额及当前用量。"""
 
@@ -32,11 +39,11 @@ class QuotaResponse(BaseModel):
     tenant_id: str | None = Field(default=None, description="该配额所属租户的稳定标识。")
     storage_space_id: str | None = Field(
         default=None,
-        description="兼容迁移期间关联的逻辑存储空间标识；应用配额以 application_id 为准。",
+        description="兼容迁移期间关联的内部记录标识；活动应用配额以 application_id 为准。",
     )
     application_id: str | None = Field(
         default=None,
-        description="应用的稳定标识。一个逻辑存储空间只绑定一个应用。",
+        description="应用的稳定标识；其存储路径由租户和应用自动派生。",
     )
     limit_bytes: int | None = Field(
         default=None, description="允许使用和预留的容量上限，单位为字节。"
@@ -57,7 +64,7 @@ class QuotaResponse(BaseModel):
         default=None,
         description=(
             "配额范围：tenant 表示租户总量，application 表示单个应用，"
-            "storage_space 表示逻辑存储空间。"
+            "storage_space 仅表示历史迁移记录。"
         ),
     )
     consistency_status: str | None = Field(
@@ -288,6 +295,24 @@ async def get_quota(
     quota_id: str = Path(min_length=1),
 ) -> QuotaResponse:
     return QuotaResponse.model_validate(await _quota_svc(request).get_quota(context, quota_id))
+
+
+@router.post(
+    "/quotas/applications",
+    response_model=QuotaResponse,
+    status_code=201,
+    operation_id="create_application_quota",
+)
+async def create_application_quota(
+    request: Request,
+    body: Annotated[ApplicationQuotaCreate, Body()],
+    context: Annotated[PrincipalContext, management_permission("create_application_quota")],
+) -> QuotaResponse:
+    return QuotaResponse.model_validate(
+        await _quota_svc(request).create_application_quota(
+            context, str(body.application_id), body.limit_gib
+        )
+    )
 
 
 @router.patch("/quotas/{quota_id}", response_model=QuotaResponse, operation_id="update_quota")

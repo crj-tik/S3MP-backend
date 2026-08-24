@@ -1,6 +1,8 @@
 """Files, uploads, presigned downloads, and multipart HTTP endpoints."""
 
+from datetime import datetime
 from typing import Annotated, Any, cast
+from uuid import UUID
 
 from fastapi import APIRouter, Body, Header, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +32,9 @@ class DirectUploadCreate(BaseModel):
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
     checksum: str | None = Field(default=None, max_length=512)
+    expires_at: datetime = Field(
+        description="资源或授权的失效时间，采用 UTC RFC 3339 格式。"
+    )
 
 
 class UploadComplete(BaseModel):
@@ -48,6 +53,9 @@ class MultipartCreate(BaseModel):
     object_key: str = Field(min_length=1, max_length=1024)
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
+    expires_at: datetime = Field(
+        description="资源或授权的失效时间，采用 UTC RFC 3339 格式。"
+    )
 
 
 class MultipartPartRuntime(BaseModel):
@@ -206,6 +214,7 @@ def _idempotency_key(value: str | None) -> str:
     "/storage_spaces/{space_id}/files",
     response_model=list[FileObjectRuntime],
     operation_id="list_files",
+    deprecated=True,
 )
 async def list_files(
     request: Request,
@@ -225,6 +234,7 @@ async def list_files(
     "/storage_spaces/{space_id}/files/{file_id}",
     response_model=FileObjectRuntime,
     operation_id="get_file",
+    deprecated=True,
 )
 async def get_file(
     request: Request,
@@ -237,7 +247,8 @@ async def get_file(
 
 
 @router.delete(
-    "/storage_spaces/{space_id}/files/{file_id}", status_code=202, operation_id="delete_file"
+    "/storage_spaces/{space_id}/files/{file_id}", status_code=202,
+    operation_id="delete_file", deprecated=True
 )
 async def delete_file(
     request: Request,
@@ -260,6 +271,7 @@ async def delete_file(
     status_code=202,
     response_model=FileOperationRuntime,
     operation_id="create_file_operation",
+    deprecated=True,
 )
 async def create_file_operation(
     request: Request,
@@ -310,6 +322,7 @@ async def get_ingestion_provenance(
     status_code=201,
     response_model=DirectUploadSessionRuntime,
     operation_id="create_direct_upload",
+    deprecated=True,
 )
 async def create_direct_upload(
     request: Request,
@@ -347,8 +360,13 @@ async def complete_direct_upload(
     request: Request,
     body: UploadComplete,
     upload_id: str = Path(min_length=1),
+    application_code: str | None = Query(default=None, min_length=1),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> IngestionCommitResult:
+    if _context(request).subject_kind == "application":
+        if application_code is None:
+            raise ApiError("validation_failed", "application_code is required", status_code=422)
+        await _application_api_context(request, application_code)
     return IngestionCommitResult.model_validate(
         await _file_svc(request).complete_direct_upload(
             _context(request), upload_id, body, idempotency_key=_idempotency_key(idempotency_key)
@@ -360,6 +378,7 @@ async def complete_direct_upload(
     "/storage_spaces/{space_id}/presigned_downloads",
     status_code=201,
     operation_id="create_presigned_download",
+    deprecated=True,
 )
 async def create_presigned_download(
     request: Request,
@@ -377,6 +396,7 @@ async def create_presigned_download(
     status_code=201,
     response_model=MultipartUploadRuntime,
     operation_id="create_multipart_upload",
+    deprecated=True,
 )
 async def create_multipart_upload(
     request: Request,
@@ -473,4 +493,270 @@ async def complete_multipart_upload(
         await _file_svc(request).complete_multipart_upload(
             _context(request), multipart_id, body, idempotency_key=_idempotency_key(idempotency_key)
         )
+    )
+
+
+# ── Application-context file entry points ────────────────────────────────────
+
+
+async def _implicit_space_id(request: Request, application_id: UUID | None = None) -> str:
+    """Resolve the app directory from its API key, or a human-selected app code."""
+    context = _context(request)
+    if context.subject_kind == "application":
+        if application_id is not None:
+            raise ApiError(
+                "permission_denied", "API keys must use the application API route", status_code=403
+            )
+        if context.application_id is None:
+            raise ApiError(
+                "permission_denied", "Application credential is not bound", status_code=403
+            )
+        space = await _file_svc(request).resolve_application_space(
+            context, context.application_id
+        )
+    elif application_id is not None:
+        space = await _file_svc(request).resolve_application_space(context, application_id)
+    else:
+        raise ApiError(
+            "permission_denied", "Application API key is required", status_code=403
+        )
+    return str(space["id"])
+
+
+async def _application_api_context(request: Request, application_code: str) -> None:
+    """Use the Key application as target and the code application as audit actor."""
+    request.state.principal_context = await _file_svc(request).application_actor_context(
+        _context(request), application_code
+    )
+
+
+@router.get(
+    "/applications/{application_id}/files",
+    response_model=list[FileObjectRuntime],
+    operation_id="list_application_files",
+)
+async def list_application_files(
+    request: Request,
+    application_id: UUID,
+    prefix: str | None = None,
+    status: Annotated[FileObjectStatus, Query()] = FileObjectStatus.AVAILABLE,
+) -> list[FileObjectRuntime]:
+    return await list_files(
+        request, await _implicit_space_id(request, application_id), prefix, status
+    )
+
+
+@router.get(
+    "/application/files",
+    response_model=list[FileObjectRuntime],
+    operation_id="list_current_application_files",
+)
+async def list_current_application_files(
+    request: Request,
+    application_code: str = Query(min_length=1),
+    prefix: str | None = None,
+    status: Annotated[FileObjectStatus, Query()] = FileObjectStatus.AVAILABLE,
+) -> list[FileObjectRuntime]:
+    await _application_api_context(request, application_code)
+    return await list_files(request, await _implicit_space_id(request), prefix, status)
+
+
+@router.get(
+    "/applications/{application_id}/files/{file_id}",
+    response_model=FileObjectRuntime,
+    operation_id="get_application_file",
+)
+async def get_application_file(
+    request: Request, application_id: UUID, file_id: str
+) -> FileObjectRuntime:
+    return await get_file(request, await _implicit_space_id(request, application_id), file_id)
+
+
+@router.get(
+    "/application/files/{file_id}",
+    response_model=FileObjectRuntime,
+    operation_id="get_current_application_file",
+)
+async def get_current_application_file(
+    request: Request, file_id: str, application_code: str = Query(min_length=1)
+) -> FileObjectRuntime:
+    await _application_api_context(request, application_code)
+    return await get_file(request, await _implicit_space_id(request), file_id)
+
+
+@router.delete(
+    "/applications/{application_id}/files/{file_id}",
+    status_code=202,
+    operation_id="delete_application_file",
+)
+async def delete_application_file(
+    request: Request,
+    application_id: UUID,
+    file_id: str,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    return await delete_file(
+        request,
+        await _implicit_space_id(request, application_id),
+        file_id,
+        if_match,
+        idempotency_key,
+    )
+
+
+@router.delete(
+    "/application/files/{file_id}",
+    status_code=202,
+    operation_id="delete_current_application_file",
+)
+async def delete_current_application_file(
+    request: Request,
+    file_id: str,
+    application_code: str = Query(min_length=1),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    await _application_api_context(request, application_code)
+    return await delete_file(
+        request, await _implicit_space_id(request), file_id, if_match, idempotency_key
+    )
+
+
+@router.post(
+    "/applications/{application_id}/file_operations",
+    status_code=202,
+    response_model=FileOperationRuntime,
+    operation_id="create_application_file_operation",
+)
+async def create_application_file_operation(
+    request: Request,
+    application_id: UUID,
+    body: FileOperationCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> FileOperationRuntime:
+    return await create_file_operation(
+        request,
+        body,
+        await _implicit_space_id(request, application_id),
+        idempotency_key,
+    )
+
+
+@router.post(
+    "/application/file_operations",
+    status_code=202,
+    response_model=FileOperationRuntime,
+    operation_id="create_current_application_file_operation",
+)
+async def create_current_application_file_operation(
+    request: Request,
+    body: FileOperationCreate,
+    application_code: str = Query(min_length=1),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> FileOperationRuntime:
+    await _application_api_context(request, application_code)
+    return await create_file_operation(
+        request, body, await _implicit_space_id(request), idempotency_key
+    )
+
+
+@router.post(
+    "/applications/{application_id}/direct_uploads",
+    status_code=201,
+    response_model=DirectUploadSessionRuntime,
+    operation_id="create_application_direct_upload",
+)
+async def create_application_direct_upload(
+    request: Request,
+    application_id: UUID,
+    body: DirectUploadCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> DirectUploadSessionRuntime:
+    return await create_direct_upload(
+        request,
+        body,
+        await _implicit_space_id(request, application_id),
+        idempotency_key,
+    )
+
+
+@router.post(
+    "/application/direct_uploads",
+    status_code=201,
+    response_model=DirectUploadSessionRuntime,
+    operation_id="create_current_application_direct_upload",
+)
+async def create_current_application_direct_upload(
+    request: Request,
+    body: DirectUploadCreate,
+    application_code: str = Query(min_length=1),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> DirectUploadSessionRuntime:
+    await _application_api_context(request, application_code)
+    return await create_direct_upload(
+        request, body, await _implicit_space_id(request), idempotency_key
+    )
+
+
+@router.post(
+    "/applications/{application_id}/presigned_downloads",
+    status_code=201,
+    operation_id="create_application_presigned_download",
+)
+async def create_application_presigned_download(
+    request: Request, application_id: UUID, body: PresignedDownloadCreate
+) -> Any:
+    return await create_presigned_download(
+        request, body, await _implicit_space_id(request, application_id)
+    )
+
+
+@router.post(
+    "/application/presigned_downloads",
+    status_code=201,
+    operation_id="create_current_application_presigned_download",
+)
+async def create_current_application_presigned_download(
+    request: Request, body: PresignedDownloadCreate, application_code: str = Query(min_length=1)
+) -> Any:
+    await _application_api_context(request, application_code)
+    return await create_presigned_download(request, body, await _implicit_space_id(request))
+
+
+@router.post(
+    "/applications/{application_id}/multipart_uploads",
+    status_code=201,
+    response_model=MultipartUploadRuntime,
+    operation_id="create_application_multipart_upload",
+)
+async def create_application_multipart_upload(
+    request: Request,
+    application_id: UUID,
+    body: MultipartCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> MultipartUploadRuntime:
+    return await create_multipart_upload(
+        request,
+        body,
+        await _implicit_space_id(request, application_id),
+        idempotency_key,
+    )
+
+
+@router.post(
+    "/application/multipart_uploads",
+    status_code=201,
+    response_model=MultipartUploadRuntime,
+    operation_id="create_current_application_multipart_upload",
+)
+async def create_current_application_multipart_upload(
+    request: Request,
+    body: MultipartCreate,
+    application_code: str = Query(min_length=1),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> MultipartUploadRuntime:
+    await _application_api_context(request, application_code)
+    return await create_multipart_upload(
+        request, body, await _implicit_space_id(request), idempotency_key
     )

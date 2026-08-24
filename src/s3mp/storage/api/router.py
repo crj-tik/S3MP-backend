@@ -11,20 +11,12 @@ from s3mp.common.api.cursor import CursorCodec
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
-from s3mp.storage.infrastructure.models import StorageConnectionStatus, StorageSpaceStatus
+from s3mp.storage.infrastructure.models import StorageConnectionStatus
 
 router = APIRouter(prefix="/api/v1", tags=["Storage"])
 
 
 # ── DTOs ──────────────────────────────────────────────────────────────────────
-
-
-class StorageSpaceCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=200)
-    application_id: UUID = Field(
-        description="应用的稳定标识。一个逻辑存储空间只绑定一个应用。",
-    )
 
 
 class ProbeRequest(BaseModel):
@@ -38,35 +30,6 @@ class ProbeResult(BaseModel):
     writable: bool
     checked_at: datetime
     failure_reason: str | None = None
-
-
-class StorageSpaceResponse(BaseModel):
-    """公开的租户存储空间信息，不包含对象存储凭据。"""
-
-    id: UUID
-    tenant_id: UUID
-    connection_id: UUID
-    application_id: UUID | None = Field(
-        default=None,
-        description="应用的稳定标识。一个逻辑存储空间只绑定一个应用。",
-    )
-    name: str
-    bucket: str = Field(description="平台共享 S3 profile 派生的 Bucket；调用方不可覆盖。")
-    root_prefix: str = Field(
-        description="仅供迁移审计的旧根路径字段；新文件操作不以该字段选择对象存储目标。",
-        deprecated=True,
-    )
-    storage_namespace: str | None = Field(
-        default=None,
-        description="应用不可变的共享 Bucket 命名空间；与相对对象路径共同派生物理对象 Key。",
-    )
-    profile_version: int = Field(
-        default=1,
-        description="生成该存储目标时使用的平台共享 S3 profile 版本。",
-    )
-    provider_target_version: int
-    status: str
-    created_at: datetime
 
 
 class StorageConnectionResponse(BaseModel):
@@ -83,13 +46,6 @@ class StorageConnectionResponse(BaseModel):
     status: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
-
-
-class StorageSpacePage(BaseModel):
-    """租户存储空间分页结果。"""
-
-    items: list[StorageSpaceResponse]
-    next_cursor: str | None = None
 
 
 class StorageConnectionPage(BaseModel):
@@ -194,57 +150,3 @@ async def probe_storage_connection(
 ) -> ProbeResult:
     result = await _svc(request).probe_connection(context, connection_id, body.write_test_prefix)
     return ProbeResult.model_validate(result)
-
-
-# ── Spaces ────────────────────────────────────────────────────────────────────
-
-
-@router.get(
-    "/storage_spaces",
-    response_model=StorageSpacePage,
-    operation_id="list_storage_spaces",
-)
-async def list_storage_spaces(
-    request: Request,
-    context: Annotated[PrincipalContext, management_permission("list_storage_spaces")],
-    cursor: str | None = Query(default=None),
-    status: Annotated[StorageSpaceStatus, Query()] = StorageSpaceStatus.ACTIVE,
-    application_id: Annotated[
-        UUID | None, Query(description="按应用的稳定标识筛选逻辑存储空间。")
-    ] = None,
-) -> StorageSpacePage:
-    query = f"storage_spaces:{status.value}:{application_id or ''}"
-    items, position = await _svc(request).list_spaces(
-        context,
-        cursor=_cursor(cursor, context, query=query),
-        status=status,
-        application_id=application_id,
-    )
-    return StorageSpacePage.model_validate(_page(items, position, context, query=query))
-
-
-@router.post(
-    "/storage_spaces",
-    status_code=201,
-    response_model=StorageSpaceResponse,
-    operation_id="create_storage_space",
-)
-async def create_storage_space(
-    request: Request,
-    body: StorageSpaceCreate,
-    context: Annotated[PrincipalContext, management_permission("create_storage_space")],
-) -> StorageSpaceResponse:
-    return StorageSpaceResponse.model_validate(await _svc(request).create_space(context, body))
-
-
-@router.get(
-    "/storage_spaces/{space_id}",
-    response_model=StorageSpaceResponse,
-    operation_id="get_storage_space",
-)
-async def get_storage_space(
-    request: Request,
-    context: Annotated[PrincipalContext, management_permission("get_storage_space")],
-    space_id: str = Path(min_length=1),
-) -> StorageSpaceResponse:
-    return StorageSpaceResponse.model_validate(await _svc(request).get_space(context, space_id))

@@ -298,6 +298,11 @@ class SqlAlchemyFileStore:
                 application_id=(
                     UUID(data["application_id"]) if data.get("application_id") else None
                 ),
+                actor_application_id=(
+                    UUID(data["actor_application_id"])
+                    if data.get("actor_application_id")
+                    else None
+                ),
                 storage_namespace=data.get("storage_namespace"),
                 profile_version=int(data.get("profile_version", 1)),
                 authorization_version=int(data.get("authorization_version", 1)),
@@ -459,6 +464,11 @@ class SqlAlchemyFileStore:
                     if data.get("application_id")
                     else space.application_id
                 ),
+                actor_application_id=(
+                    UUID(str(data["actor_application_id"]))
+                    if data.get("actor_application_id")
+                    else None
+                ),
                 storage_namespace=data.get("storage_namespace") or space.storage_namespace,
                 profile_version=int(data.get("profile_version", space.profile_version)),
                 object_key=data["object_key"],
@@ -466,7 +476,7 @@ class SqlAlchemyFileStore:
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 checksum=data.get("checksum"),
-                expires_at=data.get("expires_at") or (datetime.now(UTC) + timedelta(hours=24)),
+                expires_at=data["expires_at"],
                 status="pending",
             )
             session.add(model)
@@ -569,6 +579,11 @@ class SqlAlchemyFileStore:
                     if data.get("application_id")
                     else space.application_id
                 ),
+                actor_application_id=(
+                    UUID(str(data["actor_application_id"]))
+                    if data.get("actor_application_id")
+                    else None
+                ),
                 storage_namespace=data.get("storage_namespace") or space.storage_namespace,
                 profile_version=int(data.get("profile_version", space.profile_version)),
                 object_key=data["object_key"],
@@ -576,7 +591,7 @@ class SqlAlchemyFileStore:
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 quota_reservation_id=uuid4(),
-                expires_at=data.get("expires_at") or (datetime.now(UTC) + timedelta(hours=24)),
+                expires_at=data["expires_at"],
                 status="pending",
             )
             session.add(model)

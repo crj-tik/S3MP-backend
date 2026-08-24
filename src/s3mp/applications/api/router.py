@@ -1,7 +1,7 @@
 """Applications and API Key HTTP endpoints."""
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Path, Query, Request
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/v1", tags=["Applications", "API Keys"])
 class ApplicationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=200)
+    code: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$")
     authorization_membership_id: UUID | None = Field(
         default=None,
         description="同租户 active Membership 的授权代表；省略时使用当前登录成员。",
@@ -43,10 +44,37 @@ class ApplicationLifecycleRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ApplicationMembershipBindingResponse(BaseModel):
+    """Tenant-scoped application authorization representative binding."""
+
+    id: UUID
+    tenant_id: UUID
+    application_id: UUID
+    membership_id: UUID
+    created_by_principal_id: UUID
+    status: Literal["active", "revoked"]
+    created_at: datetime
+    updated_at: datetime
+    revoked_at: datetime | None = None
+    revoked_by: UUID | None = None
+    user_id: UUID | None = None
+    principal_id: UUID | None = None
+    membership_status: str | None = None
+    membership_authorization_version: int | None = None
+    principal_type: str | None = None
+    principal_display_name: str | None = None
+
+
 class ApiKeyCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scopes: list[str] = Field(default_factory=list)
     ttl_days: int = Field(default=90, ge=1, le=365)
+    directory_prefix: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1024,
+        description="可选：应用内存取目录；留空表示应用根目录。",
+    )
 
 
 class ApiKeyRotate(BaseModel):
@@ -59,6 +87,14 @@ class ApiKeyRevoke(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ApplicationStorageSummary(BaseModel):
+    """应用自动拥有的只读存储摘要。"""
+
+    storage_namespace: str
+    status: Literal["active", "suspended", "deleted"]
+    profile_version: int = Field(ge=1)
+
+
 class ApplicationResponse(BaseModel):
     """租户内应用的公开管理信息。"""
 
@@ -66,10 +102,12 @@ class ApplicationResponse(BaseModel):
     tenant_id: UUID | None = None
     principal_id: UUID | None = None
     name: str
+    code: str
     storage_namespace: str | None = Field(
         default=None,
         description="应用不可变的共享 Bucket 命名空间；与相对对象路径共同派生物理对象 Key。",
     )
+    storage: ApplicationStorageSummary | None = None
     status: str | None = None
     authorization_version: int | None = None
     created_at: datetime | None = None
@@ -79,8 +117,10 @@ class ApplicationResponse(BaseModel):
     deletion_reason: str | None = None
     owners: list[dict[str, str]] = Field(default_factory=list)
     takeover_required: bool = False
-    authorization_state: str = "authorization_unconfigured"
-    authorization_representative: dict[str, Any] | None = None
+    authorization_state: Literal["configured", "authorization_unconfigured"] = (
+        "authorization_unconfigured"
+    )
+    authorization_representative: ApplicationMembershipBindingResponse | None = None
 
 
 class ApplicationMembershipBindingRequest(BaseModel):
@@ -99,6 +139,7 @@ class ApiKeyResponse(BaseModel):
     prefix: str | None = None
     pepper_version: int | None = None
     scopes: list[str] = Field(default_factory=list)
+    directory_prefix: str | None = None
     status: str | None = None
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
@@ -206,10 +247,10 @@ async def create_application(
 ) -> ApplicationResponse:
     service = _app_service(request)
     if body.authorization_membership_id is None:
-        result = await service.create_app(context, body.name)
+        result = await service.create_app(context, body.name, body.code)
     else:
         result = await service.create_app(
-            context, body.name, body.authorization_membership_id
+            context, body.name, body.code, body.authorization_membership_id
         )
     return ApplicationResponse.model_validate(
         result
@@ -218,28 +259,34 @@ async def create_application(
 
 @router.get(
     "/applications/{application_id}/authorization-representative",
-    response_model=dict[str, Any],
+    response_model=ApplicationMembershipBindingResponse,
     operation_id="get_application_authorization_representative",
 )
 async def get_application_authorization_representative(
     request: Request,
-    context: Annotated[PrincipalContext, management_permission("get_application")],
+    context: Annotated[
+        PrincipalContext,
+        management_permission("get_application_authorization_representative"),
+    ],
     application_id: UUID,
-) -> dict[str, Any]:
+) -> ApplicationMembershipBindingResponse:
     return await _app_service(request).get_membership_binding(context, application_id)
 
 
 @router.put(
     "/applications/{application_id}/authorization-representative",
-    response_model=dict[str, Any],
+    response_model=ApplicationMembershipBindingResponse,
     operation_id="bind_application_authorization_representative",
 )
 async def bind_application_authorization_representative(
     request: Request,
     body: ApplicationMembershipBindingRequest,
-    context: Annotated[PrincipalContext, management_permission("update_application")],
+    context: Annotated[
+        PrincipalContext,
+        management_permission("bind_application_authorization_representative"),
+    ],
     application_id: UUID,
-) -> dict[str, Any]:
+) -> ApplicationMembershipBindingResponse:
     return await _app_service(request).bind_membership(
         context,
         application_id,
@@ -250,14 +297,17 @@ async def bind_application_authorization_representative(
 
 @router.delete(
     "/applications/{application_id}/authorization-representative",
-    response_model=dict[str, Any],
+    response_model=ApplicationMembershipBindingResponse,
     operation_id="revoke_application_authorization_representative",
 )
 async def revoke_application_authorization_representative(
     request: Request,
-    context: Annotated[PrincipalContext, management_permission("update_application")],
+    context: Annotated[
+        PrincipalContext,
+        management_permission("revoke_application_authorization_representative"),
+    ],
     application_id: UUID,
-) -> dict[str, Any]:
+) -> ApplicationMembershipBindingResponse:
     return await _app_service(request).revoke_membership_binding(context, application_id)
 
 
@@ -379,8 +429,15 @@ async def create_api_key(
     context: Annotated[PrincipalContext, management_permission("create_api_key")],
     application_id: UUID,
 ) -> ApiKeyIssuedResponse:
+    service = _key_service(request)
+    if body.directory_prefix is None:
+        issued = await service.issue(context, application_id, body.scopes, body.ttl_days)
+    else:
+        issued = await service.issue(
+            context, application_id, body.scopes, body.ttl_days, body.directory_prefix
+        )
     return ApiKeyIssuedResponse.model_validate(
-        await _key_service(request).issue(context, application_id, body.scopes, body.ttl_days)
+        issued
     )
 
 

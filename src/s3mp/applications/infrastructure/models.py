@@ -36,6 +36,7 @@ class ApplicationModel(Base):
     __tablename__ = "application"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
+        UniqueConstraint("tenant_id", "code"),
         ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(
             ["tenant_id", "principal_id"],
@@ -52,6 +53,7 @@ class ApplicationModel(Base):
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
     principal_id: Mapped[UUID] = mapped_column(nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_namespace: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     authorization_version: Mapped[int] = mapped_column(
@@ -151,6 +153,7 @@ class ApiKeyModel(Base):
     secret_digest: Mapped[bytes] = mapped_column(nullable=False)
     pepper_version: Mapped[int] = mapped_column(nullable=False, default=1)
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    directory_prefix: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     rotated_from_id: Mapped[UUID | None] = mapped_column()

@@ -179,21 +179,28 @@ class MinioObjectStorageAdapter:
             raise ObjectStorageUnavailable("S3 signing failed") from exc
 
     async def presign_put(
-        self, target: ProviderTarget, content_type: str, expires_in: int
+        self,
+        target: ProviderTarget,
+        content_type: str,
+        expires_in: int,
+        checksum_sha256: str | None = None,
     ) -> str:
         """Create a short-lived PUT URL for one server-derived object target."""
         self._assert_shared_bucket(target)
         if not content_type or content_type.strip() != content_type:
             raise ValueError("content type is required for a presigned PUT")
         try:
+            params: dict[str, str] = {
+                "Bucket": target.bucket,
+                "Key": target.key,
+                "ContentType": content_type,
+            }
+            if checksum_sha256 is not None:
+                params["ChecksumSHA256"] = checksum_sha256
             signed_url = await asyncio.to_thread(
                 self._client.generate_presigned_url,
                 "put_object",
-                Params={
-                    "Bucket": target.bucket,
-                    "Key": target.key,
-                    "ContentType": content_type,
-                },
+                Params=params,
                 ExpiresIn=expires_in,
             )
             return cast(str, signed_url)

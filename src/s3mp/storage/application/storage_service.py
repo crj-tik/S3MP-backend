@@ -5,13 +5,11 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
-
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.connection import S3ConnectionConfig
 from s3mp.storage.domain.policy import StorageCapabilities
-from s3mp.storage.infrastructure.models import StorageConnectionStatus, StorageSpaceStatus
+from s3mp.storage.infrastructure.models import StorageConnectionStatus
 
 
 class StorageStore(Protocol):
@@ -27,16 +25,6 @@ class StorageStore(Protocol):
     async def ensure_managed_connection(
         self, tenant_id: UUID, profile: dict[str, Any]
     ) -> dict[str, Any]: ...
-    async def list_spaces(
-        self,
-        tenant_id: UUID,
-        limit: int,
-        cursor: str | None,
-        status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
-        application_id: UUID | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]: ...
-    async def get_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any] | None: ...
-    async def create_space(self, tenant_id: UUID, data: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class PermissionAuthorizer(Protocol):
@@ -108,77 +96,6 @@ class StorageService:
             "checked_at": datetime.now(UTC),
             "failure_reason": None,
         }
-
-    async def list_spaces(
-        self,
-        context: PrincipalContext,
-        limit: int = 50,
-        cursor: str | None = None,
-        status: StorageSpaceStatus = StorageSpaceStatus.ACTIVE,
-        application_id: UUID | None = None,
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        await self._require(context, "storage_spaces.read")
-        return await self.store.list_spaces(
-            context.tenant_id, min(limit, 200), cursor, status, application_id
-        )
-
-    async def get_space(self, context: PrincipalContext, space_id: str) -> dict[str, Any]:
-        await self._require(context, "storage_spaces.read")
-        result = await self.store.get_space(context.tenant_id, UUID(space_id))
-        if result is None:
-            raise ApiError("resource_not_found", "Space not found", status_code=404)
-        return result
-
-    async def create_space(self, context: PrincipalContext, body: Any) -> dict[str, Any]:
-        await self._require(context, "storage_spaces.manage")
-        if self.shared_profile is None:
-            raise ApiError(
-                "shared_storage_profile_unavailable",
-                "The platform shared storage profile is not configured",
-                status_code=503,
-            )
-        if body.application_id is None:
-            raise ApiError(
-                "application_binding_required",
-                "A storage space must be bound to one active application",
-                status_code=422,
-            )
-        try:
-            connection = await self.store.ensure_managed_connection(
-                context.tenant_id, self.shared_profile
-            )
-        except ValueError as exc:
-            raise ApiError(
-                "shared_storage_profile_invalid",
-                "The managed storage connection does not match the active platform profile",
-                status_code=503,
-            ) from exc
-        data = {
-            "name": body.name,
-            # The relational connection is a platform-created compatibility
-            # record.  It never selects the physical S3 target.
-            "connection_id": connection["id"],
-            "application_id": body.application_id,
-            "bucket": str(self.shared_profile["bucket"]),
-            "root_prefix": "",
-            "profile_version": int(self.shared_profile.get("profile_version", 1)),
-            "provider_target_version": 1,
-            "status": "active",
-        }
-        try:
-            return await self.store.create_space(context.tenant_id, data)
-        except ValueError as exc:
-            raise ApiError(
-                "application_not_active",
-                "The application is not active in this tenant",
-                status_code=422,
-            ) from exc
-        except IntegrityError as exc:
-            raise ApiError(
-                "storage_space_already_exists",
-                "This application already has a storage space with this name",
-                status_code=409,
-            ) from exc
 
     async def _require(self, context: PrincipalContext, permission: str) -> None:
         if self.authorizer is None:

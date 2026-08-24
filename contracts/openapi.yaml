@@ -122,6 +122,38 @@ paths:
         '500': *id001
       description: 列出当前租户可见的用户账户。
       x-permission: members.read
+  /api/v1/member-candidates:
+    get:
+      tags:
+      - Context
+      summary: 搜索尚未加入当前租户的全局已注册用户候选
+      operationId: list_member_candidates
+      parameters:
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberCandidatePage'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 搜索尚未加入当前租户的全局已注册用户候选；支持邮箱、姓名和工号模糊查询。
+      x-permission: members.manage
   /api/v1/users/{user_id}:
     get:
       tags:
@@ -451,6 +483,46 @@ paths:
         '422': *id001
         '500': *id001
       description: 获取当前账户及其可选择的活跃租户摘要。
+  /api/v1/auth/tenant-invitations/{membership_id}/accept:
+    post:
+      tags:
+      - Account authentication
+      summary: 接受当前账户的租户邀请并将成员关系从 invited 转为 active
+      operationId: accept_tenant_invitation
+      parameters:
+      - name: membership_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Membership Id
+        description: 租户成员关系的服务端唯一标识。
+      - name: X-S3MP-CSRF
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-S3Mp-Csrf
+        description: 浏览器会话的 CSRF 校验值；账户操作取自 s3mp_account_csrf Cookie，租户操作取自 s3mp_csrf Cookie，并原样放入此请求头。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountContext'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 接受当前账户的租户邀请并将成员关系从 invited 转为 active；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF
+        请求头。
   /api/v1/auth/logout:
     post:
       tags:
@@ -1340,8 +1412,8 @@ paths:
     get:
       tags:
       - Metadata
-      summary: 获取前端使用的状态、枚举、授权范围和状态流转目录。
-      description: 获取前端使用的状态、枚举、授权范围和状态流转目录。
+      summary: 获取前端使用的状态、枚举、授权效果和状态流转目录。
+      description: 获取前端使用的状态、枚举、授权效果和状态流转目录。
       operationId: get_metadata_catalog
       parameters:
       - name: domains
@@ -1374,8 +1446,8 @@ paths:
     get:
       tags:
       - Authorization
-      summary: 执行该公开 API 操作
-      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      summary: 获取当前租户可配置的权限目录
+      description: 获取当前租户可配置的权限目录；不包含任何 platform.* 平台权限。
       operationId: get_permission_catalog
       responses:
         '200':
@@ -1692,7 +1764,7 @@ paths:
     get:
       tags:
       - Authorization
-      summary: 列出当前租户的角色绑定，可按主体和逻辑存储空间筛选。
+      summary: 列出当前租户的成员或用户组角色绑定，可按主体筛选。
       operationId: list_role_bindings
       parameters:
       - name: principal_id
@@ -1705,17 +1777,6 @@ paths:
           - type: 'null'
           title: Principal Id
         description: 租户主体的服务端唯一标识。
-      - name: storage_space_id
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          description: 按逻辑存储空间标识筛选绑定。
-          title: Storage Space Id
-        description: 逻辑存储空间的服务端唯一标识。
       - name: cursor
         in: query
         required: false
@@ -1739,12 +1800,12 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 列出当前租户的角色绑定，可按主体和逻辑存储空间筛选。
+      description: 列出当前租户的成员或用户组角色绑定，可按主体筛选。
       x-permission: role_bindings.read
     post:
       tags:
       - Authorization
-      summary: 在调用者可委派的权限和资源范围内创建角色绑定。
+      summary: 在调用者可委派的权限范围内创建成员或用户组角色绑定。
       operationId: create_role_binding
       requestBody:
         required: true
@@ -1766,13 +1827,49 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 在调用者可委派的权限和资源范围内创建角色绑定。
+      description: 在调用者可委派的权限范围内创建成员或用户组角色绑定。
       x-permission: role_bindings.manage
   /api/v1/role_bindings/{role_binding_id}:
+    patch:
+      tags:
+      - Authorization
+      summary: 修改指定成员或用户组的现有角色绑定
+      operationId: update_role_binding
+      parameters:
+      - name: role_binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Role Binding Id
+        description: 角色绑定的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleBindingUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleBindingResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 修改指定成员或用户组的现有角色绑定；同一主体可绑定多个不同角色。
+      x-permission: role_bindings.manage
     get:
       tags:
       - Authorization
-      summary: 获取指定角色绑定及其资源范围和有效期。
+      summary: 获取指定角色绑定及其有效期。
       operationId: get_role_binding
       parameters:
       - name: role_binding_id
@@ -1797,7 +1894,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 获取指定角色绑定及其资源范围和有效期。
+      description: 获取指定角色绑定及其有效期。
       x-permission: role_bindings.read
     delete:
       tags:
@@ -1829,7 +1926,7 @@ paths:
     get:
       tags:
       - Authorization
-      summary: 解释指定主体在当前租户和资源范围内的有效权限来源。
+      summary: 解释指定主体在当前租户内的有效角色权限来源。
       operationId: get_effective_permissions
       parameters:
       - name: principal_id
@@ -1840,25 +1937,6 @@ paths:
           format: uuid
           title: Principal Id
         description: 租户主体的服务端唯一标识。
-      - name: storage_space_id
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          title: Storage Space Id
-        description: 逻辑存储空间的服务端唯一标识。
-      - name: object_key
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Object Key
-        description: 逻辑存储空间内的规范相对对象路径。
       responses:
         '200':
           description: Successful Response
@@ -1873,7 +1951,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 解释指定主体在当前租户和资源范围内的有效权限来源。
+      description: 解释指定主体在当前租户内的有效角色权限来源。
       x-permission: authorization.explain
   /api/v1/authorization/simulations:
     post:
@@ -1947,7 +2025,7 @@ paths:
       tags:
       - Applications
       - API Keys
-      summary: 创建应用并绑定当前主体为初始所有者。
+      summary: 创建应用、生成其固定存储目录，并绑定一个租户成员作为初始授权代表。
       operationId: create_application
       requestBody:
         required: true
@@ -1969,7 +2047,107 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 创建应用并绑定当前主体为初始所有者。
+      description: 创建应用、生成其固定存储目录，并绑定一个租户成员作为初始授权代表。
+      x-permission: applications.manage
+  /api/v1/applications/{application_id}/authorization-representative:
+    get:
+      tags:
+      - Applications
+      - API Keys
+      summary: 获取应用当前绑定的租户成员授权代表。
+      operationId: get_application_authorization_representative
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationMembershipBindingResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 获取应用当前绑定的租户成员授权代表。
+      x-permission: applications.read
+    put:
+      tags:
+      - Applications
+      - API Keys
+      summary: 为应用绑定一个同租户的活跃成员作为授权代表。
+      operationId: bind_application_authorization_representative
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationMembershipBindingRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationMembershipBindingResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 为应用绑定一个同租户的活跃成员作为授权代表。
+      x-permission: applications.manage
+    delete:
+      tags:
+      - Applications
+      - API Keys
+      summary: 撤销应用当前绑定的成员授权代表并使其授权立即失效。
+      operationId: revoke_application_authorization_representative
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApplicationMembershipBindingResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 撤销应用当前绑定的成员授权代表并使其授权立即失效。
       x-permission: applications.manage
   /api/v1/applications/{application_id}:
     get:
@@ -2485,122 +2663,15 @@ paths:
         '500': *id001
       description: 探测对象存储连接与其声明能力。
       x-permission: storage_connections.manage
-  /api/v1/storage_spaces:
-    get:
-      tags:
-      - Storage
-      summary: 列出当前租户的逻辑存储空间，可按应用筛选。
-      operationId: list_storage_spaces
-      parameters:
-      - name: cursor
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Cursor
-        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
-      - name: status
-        in: query
-        required: false
-        schema:
-          $ref: '#/components/schemas/StorageSpaceStatus'
-          default: active
-        description: 资源当前生命周期状态。
-      - name: application_id
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          description: 按应用的稳定标识筛选逻辑存储空间。
-          title: Application Id
-        description: 应用的服务端唯一标识。
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StorageSpacePage'
-        '422': *id001
-        '400': *id001
-        '401': *id001
-        '403': *id001
-        '404': *id001
-        '409': *id001
-        '500': *id001
-      description: 列出当前租户的逻辑存储空间，可按应用筛选。
-      x-permission: storage_spaces.read
-    post:
-      tags:
-      - Storage
-      summary: 为指定应用创建逻辑存储空间
-      operationId: create_storage_space
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/StorageSpaceCreate'
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StorageSpaceResponse'
-        '422': *id001
-        '400': *id001
-        '401': *id001
-        '403': *id001
-        '404': *id001
-        '409': *id001
-        '500': *id001
-      description: 为指定应用创建逻辑存储空间；物理 S3 连接、Bucket 与对象命名空间均由平台派生。
-      x-permission: storage_spaces.manage
-  /api/v1/storage_spaces/{space_id}:
-    get:
-      tags:
-      - Storage
-      summary: 获取逻辑存储空间详情。
-      operationId: get_storage_space
-      parameters:
-      - name: space_id
-        in: path
-        required: true
-        schema:
-          type: string
-          minLength: 1
-          title: Space Id
-        description: “space_id”字段；具体取值和约束见当前资源说明。
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/StorageSpaceResponse'
-        '422': *id001
-        '400': *id001
-        '401': *id001
-        '403': *id001
-        '404': *id001
-        '409': *id001
-        '500': *id001
-      description: 获取逻辑存储空间详情。
-      x-permission: storage_spaces.read
   /api/v1/storage_spaces/{space_id}/files:
     get:
       tags:
       - Files
       - Uploads
       - Multipart
-      summary: 在授权的逻辑存储空间和目录范围内列出文件对象。
+      summary: 在当前应用的固定命名空间内列出文件对象。
       operationId: list_files
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -2643,7 +2714,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 在授权的逻辑存储空间和目录范围内列出文件对象。
+      description: 在当前应用的固定命名空间内列出文件对象。
       x-permission: files.list
   /api/v1/storage_spaces/{space_id}/files/{file_id}:
     get:
@@ -2653,6 +2724,7 @@ paths:
       - Multipart
       summary: 获取指定文件对象的元数据
       operationId: get_file
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -2693,6 +2765,7 @@ paths:
       - Multipart
       summary: 提交文件删除
       operationId: delete_file
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -2752,6 +2825,7 @@ paths:
       - Multipart
       summary: 创建文件复制、移动或其他受控异步操作。
       operationId: create_file_operation
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -2865,6 +2939,7 @@ paths:
       - Multipart
       summary: 创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。
       operationId: create_direct_upload
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -2955,6 +3030,16 @@ paths:
           minLength: 1
           title: Upload Id
         description: 上传会话的服务端唯一标识。
+      - name: application_code
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
       - name: Idempotency-Key
         in: header
         required: false
@@ -2994,6 +3079,7 @@ paths:
       - Multipart
       summary: 为已授权的单个文件签发短期下载 URL。
       operationId: create_presigned_download
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -3033,6 +3119,7 @@ paths:
       - Multipart
       summary: 创建受配额和授权保护的分段上传会话。
       operationId: create_multipart_upload
+      deprecated: true
       parameters:
       - name: space_id
         in: path
@@ -3293,12 +3380,662 @@ paths:
         '500': *id001
       description: 按已确认分片完成分段上传并验证最终对象。
       x-permission: files.write
+  /api/v1/applications/{application_id}/files:
+    get:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: list_application_files
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prefix
+        description: “prefix”字段；具体取值和约束见当前资源说明。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/FileObjectStatus'
+          default: available
+        description: 资源当前生命周期状态。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileObjectRuntime'
+                title: Response List Application Files
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/files:
+    get:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: list_current_application_files
+      parameters:
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      - name: prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prefix
+        description: “prefix”字段；具体取值和约束见当前资源说明。
+      - name: status
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/FileObjectStatus'
+          default: available
+        description: 资源当前生命周期状态。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileObjectRuntime'
+                title: Response List Current Application Files
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/applications/{application_id}/files/{file_id}:
+    get:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: get_application_file
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileObjectRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+    delete:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: delete_application_file
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Delete Application File
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/files/{file_id}:
+    get:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: get_current_application_file
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileObjectRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+    delete:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: delete_current_application_file
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Delete Current Application File
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/applications/{application_id}/file_operations:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_application_file_operation
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileOperationCreate'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileOperationRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/file_operations:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_current_application_file_operation
+      parameters:
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileOperationCreate'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileOperationRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/applications/{application_id}/direct_uploads:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_application_direct_upload
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DirectUploadCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectUploadSessionRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/direct_uploads:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_current_application_direct_upload
+      parameters:
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DirectUploadCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DirectUploadSessionRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/applications/{application_id}/presigned_downloads:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_application_presigned_download
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignedDownloadCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Application Presigned Download
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/presigned_downloads:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_current_application_presigned_download
+      parameters:
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignedDownloadCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Create Current Application Presigned Download
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/applications/{application_id}/multipart_uploads:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_application_multipart_upload
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultipartUploadRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/multipart_uploads:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: create_current_application_multipart_upload
+      parameters:
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MultipartUploadRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/quotas:
     get:
       tags:
       - Quotas
       - Audit
-      summary: 列出当前租户或存储空间的配额与使用量。
+      summary: 列出当前租户或应用的配额与使用量
       operationId: list_quotas
       parameters:
       - name: storage_space_id
@@ -3309,7 +4046,7 @@ paths:
           - type: string
           - type: 'null'
           title: Storage Space Id
-        description: 逻辑存储空间的服务端唯一标识。
+        description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
       - name: application_id
         in: query
         required: false
@@ -3370,7 +4107,7 @@ paths:
         '404': *id001
         '409': *id001
         '500': *id001
-      description: 列出当前租户或存储空间的配额与使用量。
+      description: 列出当前租户或应用的配额与使用量；历史空间记录仅作迁移兼容。
       x-permission: quotas.read
   /api/v1/quotas/{quota_id}:
     get:
@@ -3440,6 +4177,35 @@ paths:
         '409': *id001
         '500': *id001
       description: 更新配额上限；需要当前 ETag 以防并发覆盖。
+      x-permission: quotas.manage
+  /api/v1/quotas/applications:
+    post:
+      tags:
+      - Quotas
+      - Audit
+      summary: 执行该公开 API 操作
+      operationId: create_application_quota
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplicationQuotaCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: quotas.manage
   /api/v1/quotas/reconciliation:
     post:
@@ -3942,12 +4708,22 @@ components:
           type: string
           title: Slug
           description: 租户的稳定、可读标识，仅由小写字母、数字和连字符组成。
+        membership_id:
+          type: string
+          title: Membership Id
+          description: 租户成员关系的服务端唯一标识。
+        membership_status:
+          type: string
+          title: Membership Status
+          description: 租户成员关系的当前状态。
       additionalProperties: false
       type: object
       required:
       - id
       - name
       - slug
+      - membership_id
+      - membership_status
       title: AccountTenantSummary
     AddGroupMemberBody:
       properties:
@@ -3976,6 +4752,14 @@ components:
           title: Ttl Days
           default: 90
           description: 资源或授权的有效天数。
+        directory_prefix:
+          anyOf:
+          - type: string
+            maxLength: 1024
+            minLength: 1
+          - type: 'null'
+          title: Directory Prefix
+          description: 可选：应用内存取目录；留空表示应用根目录。
       additionalProperties: false
       type: object
       title: ApiKeyCreate
@@ -4024,6 +4808,12 @@ components:
           type: array
           title: Scopes
           description: API Key 被允许使用的权限范围集合。
+        directory_prefix:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Directory Prefix
+          description: “directory_prefix”字段；具体取值和约束见当前资源说明。
         status:
           anyOf:
           - type: string
@@ -4136,6 +4926,12 @@ components:
           type: array
           title: Scopes
           description: API Key 被允许使用的权限范围集合。
+        directory_prefix:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Directory Prefix
+          description: “directory_prefix”字段；具体取值和约束见当前资源说明。
         status:
           anyOf:
           - type: string
@@ -4215,10 +5011,23 @@ components:
           minLength: 1
           title: Name
           description: 资源名称，在所属租户范围内使用。
+        code:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$
+          title: Code
+          description: “code”字段；具体取值和约束见当前资源说明。
+        authorization_membership_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Authorization Membership Id
+          description: 同租户 active Membership 的授权代表；省略时使用当前登录成员。
       additionalProperties: false
       type: object
       required:
       - name
+      - code
       title: ApplicationCreate
     ApplicationLifecycleRequest:
       properties:
@@ -4233,6 +5042,133 @@ components:
       required:
       - reason
       title: ApplicationLifecycleRequest
+    ApplicationMembershipBindingRequest:
+      properties:
+        membership_id:
+          type: string
+          format: uuid
+          title: Membership Id
+          description: 租户成员关系的服务端唯一标识。
+        expected_application_version:
+          anyOf:
+          - type: integer
+            minimum: 1.0
+          - type: 'null'
+          title: Expected Application Version
+          description: “expected_application_version”字段；具体取值和约束见当前资源说明。
+      additionalProperties: false
+      type: object
+      required:
+      - membership_id
+      title: ApplicationMembershipBindingRequest
+    ApplicationMembershipBindingResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 资源的服务端唯一标识。
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+        application_id:
+          type: string
+          format: uuid
+          title: Application Id
+          description: 应用的服务端唯一标识。
+        membership_id:
+          type: string
+          format: uuid
+          title: Membership Id
+          description: 租户成员关系的服务端唯一标识。
+        created_by_principal_id:
+          type: string
+          format: uuid
+          title: Created By Principal Id
+          description: “created_by_principal_id”字段；具体取值和约束见当前资源说明。
+        status:
+          type: string
+          enum:
+          - active
+          - revoked
+          title: Status
+          description: 资源当前生命周期状态。
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+          description: 资源创建时间，采用 UTC RFC 3339 格式。
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+        revoked_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Revoked At
+          description: “revoked_at”字段；具体取值和约束见当前资源说明。
+        revoked_by:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Revoked By
+          description: “revoked_by”字段；具体取值和约束见当前资源说明。
+        user_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: User Id
+          description: 全局用户账户的服务端唯一标识。
+        principal_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Principal Id
+          description: 租户主体的服务端唯一标识。
+        membership_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Membership Status
+          description: 租户成员关系的当前状态。
+        membership_authorization_version:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Membership Authorization Version
+          description: “membership_authorization_version”字段；具体取值和约束见当前资源说明。
+        principal_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Principal Type
+          description: “principal_type”字段；具体取值和约束见当前资源说明。
+        principal_display_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Principal Display Name
+          description: “principal_display_name”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - id
+      - tenant_id
+      - application_id
+      - membership_id
+      - created_by_principal_id
+      - status
+      - created_at
+      - updated_at
+      title: ApplicationMembershipBindingResponse
+      description: Tenant-scoped application authorization representative binding.
     ApplicationPage:
       properties:
         items:
@@ -4251,6 +5187,24 @@ components:
       required:
       - items
       title: ApplicationPage
+    ApplicationQuotaCreate:
+      properties:
+        application_id:
+          type: string
+          format: uuid
+          title: Application Id
+          description: 本租户应用的稳定标识。
+        limit_gib:
+          type: integer
+          minimum: 0.0
+          title: Limit Gib
+          description: 应用独立配额上限，单位为 GiB。
+      additionalProperties: false
+      type: object
+      required:
+      - application_id
+      - limit_gib
+      title: ApplicationQuotaCreate
     ApplicationResponse:
       properties:
         id:
@@ -4276,12 +5230,21 @@ components:
           type: string
           title: Name
           description: 资源名称，在所属租户范围内使用。
+        code:
+          type: string
+          title: Code
+          description: “code”字段；具体取值和约束见当前资源说明。
         storage_namespace:
           anyOf:
           - type: string
           - type: 'null'
           title: Storage Namespace
           description: 应用不可变的共享 Bucket 命名空间；与相对对象路径共同派生物理对象 Key。
+        storage:
+          anyOf:
+          - $ref: '#/components/schemas/ApplicationStorageSummary'
+          - type: 'null'
+          description: “storage”字段；具体取值和约束见当前资源说明。
         status:
           anyOf:
           - type: string
@@ -4341,10 +5304,24 @@ components:
           title: Takeover Required
           default: false
           description: “takeover_required”字段；具体取值和约束见当前资源说明。
+        authorization_state:
+          type: string
+          enum:
+          - configured
+          - authorization_unconfigured
+          title: Authorization State
+          default: authorization_unconfigured
+          description: “authorization_state”字段；具体取值和约束见当前资源说明。
+        authorization_representative:
+          anyOf:
+          - $ref: '#/components/schemas/ApplicationMembershipBindingResponse'
+          - type: 'null'
+          description: “authorization_representative”字段；具体取值和约束见当前资源说明。
       type: object
       required:
       - id
       - name
+      - code
       title: ApplicationResponse
       description: 租户内应用的公开管理信息。
     ApplicationStatus:
@@ -4355,6 +5332,32 @@ components:
       - pending_takeover
       - deleted
       title: ApplicationStatus
+    ApplicationStorageSummary:
+      properties:
+        storage_namespace:
+          type: string
+          title: Storage Namespace
+          description: “storage_namespace”字段；具体取值和约束见当前资源说明。
+        status:
+          type: string
+          enum:
+          - active
+          - suspended
+          - deleted
+          title: Status
+          description: 资源当前生命周期状态。
+        profile_version:
+          type: integer
+          minimum: 1.0
+          title: Profile Version
+          description: “profile_version”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - storage_namespace
+      - status
+      - profile_version
+      title: ApplicationStorageSummary
+      description: 应用自动拥有的只读存储摘要。
     ApplicationTakeover:
       properties:
         reason:
@@ -4605,6 +5608,7 @@ components:
           enum:
           - role_binding
           - group
+          - platform_role
           - key_scope
           - directory_policy
           - tenant_policy
@@ -4644,7 +5648,7 @@ components:
           maxLength: 1024
           minLength: 1
           title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
+          description: 应用存储命名空间内的规范相对对象路径。
         content_length:
           type: integer
           minimum: 0.0
@@ -4663,12 +5667,18 @@ components:
           - type: 'null'
           title: Checksum
           description: 内容校验和，用于验证上传数据的完整性。
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
       additionalProperties: false
       type: object
       required:
       - object_key
       - content_length
       - content_type
+      - expires_at
       title: DirectUploadCreate
     DirectUploadSessionRuntime:
       properties:
@@ -4681,13 +5691,13 @@ components:
           - type: string
           - type: 'null'
           title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
+          description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
         object_key:
           anyOf:
           - type: string
           - type: 'null'
           title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
+          description: 应用存储命名空间内的规范相对对象路径。
         content_length:
           anyOf:
           - type: integer
@@ -4815,11 +5825,11 @@ components:
           - type: string
           - type: 'null'
           title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
+          description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
         object_key:
           type: string
           title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
+          description: 应用存储命名空间内的规范相对对象路径。
         content_length:
           anyOf:
           - type: integer
@@ -5090,7 +6100,7 @@ components:
           - type: string
           - type: 'null'
           title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
+          description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
         file_object:
           anyOf:
           - $ref: '#/components/schemas/FileObjectRuntime'
@@ -5299,6 +6309,48 @@ components:
       - coarse_permissions
       - authorization_version
       title: MeResponse
+    MemberCandidatePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/MemberCandidateResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: MemberCandidatePage
+    MemberCandidateResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        email:
+          type: string
+          format: email
+          title: Email
+          description: 用户登录邮箱地址。
+        display_name:
+          type: string
+          title: Display Name
+          description: 面向用户展示的名称。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - email
+      - display_name
+      title: MemberCandidateResponse
     MembershipCreate:
       properties:
         email:
@@ -5315,10 +6367,16 @@ components:
           - type: 'null'
           title: Display Name
           description: 面向用户展示的名称。
+        role_id:
+          type: string
+          format: uuid
+          title: Role Id
+          description: 角色的服务端唯一标识。
       additionalProperties: false
       type: object
       required:
       - email
+      - role_id
       title: MembershipCreate
     MembershipPage:
       properties:
@@ -5442,7 +6500,7 @@ components:
             $ref: '#/components/schemas/CatalogItem'
           type: array
           title: Scopes
-          description: 授权资源范围类型目录。
+          description: 角色授权模型目录；角色绑定始终在当前租户内生效。
         effects:
           items:
             $ref: '#/components/schemas/CatalogItem'
@@ -5550,13 +6608,13 @@ components:
           - type: string
           - type: 'null'
           title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
+          description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
         object_key:
           anyOf:
           - type: string
           - type: 'null'
           title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
+          description: 应用存储命名空间内的规范相对对象路径。
         content_length:
           anyOf:
           - type: integer
@@ -5592,7 +6650,7 @@ components:
           maxLength: 1024
           minLength: 1
           title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
+          description: 应用存储命名空间内的规范相对对象路径。
         content_length:
           type: integer
           minimum: 0.0
@@ -5604,12 +6662,18 @@ components:
           minLength: 1
           title: Content Type
           description: 对象的媒体类型。
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
       additionalProperties: false
       type: object
       required:
       - object_key
       - content_length
       - content_type
+      - expires_at
       title: MultipartCreate
     MultipartPartRuntime:
       properties:
@@ -5648,13 +6712,13 @@ components:
           - type: string
           - type: 'null'
           title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
+          description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
         object_key:
           anyOf:
           - type: string
           - type: 'null'
           title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
+          description: 应用存储命名空间内的规范相对对象路径。
         content_length:
           anyOf:
           - type: integer
@@ -5706,6 +6770,10 @@ components:
           type: string
           title: Name
           description: 资源名称，在所属租户范围内使用。
+        display_name:
+          type: string
+          title: Display Name
+          description: 面向用户展示的名称。
         resource_type:
           type: string
           title: Resource Type
@@ -5722,6 +6790,7 @@ components:
       type: object
       required:
       - name
+      - display_name
       - resource_type
       - delegable
       - description
@@ -5827,13 +6896,6 @@ components:
           format: uuid
           title: Tenant Id
           description: 租户的服务端唯一标识。
-        application_id:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          title: Application Id
-          description: 应用的服务端唯一标识。
         limit_gib:
           type: integer
           minimum: 0.0
@@ -5948,8 +7010,11 @@ components:
           description: 全局用户账户的服务端唯一标识。
         role_name:
           type: string
-          maxLength: 120
-          minLength: 1
+          enum:
+          - platform_admin
+          - platform_operator
+          - platform_auditor
+          - tenant-admin
           title: Role Name
           description: 角色的显示名称。
         expires_at:
@@ -6051,6 +7116,10 @@ components:
           type: string
           title: Slug
           description: 租户的稳定、可读标识，仅由小写字母、数字和连字符组成。
+        storage_root:
+          type: string
+          title: Storage Root
+          description: 租户不可变的默认逻辑存储根路径。
         name:
           type: string
           title: Name
@@ -6095,6 +7164,7 @@ components:
       required:
       - id
       - slug
+      - storage_root
       - name
       - status
       title: PlatformTenantResponse
@@ -6364,13 +7434,13 @@ components:
           - type: string
           - type: 'null'
           title: Storage Space Id
-          description: 兼容迁移期间关联的逻辑存储空间标识；应用配额以 application_id 为准。
+          description: 兼容迁移期间关联的内部记录标识；活动应用配额以 application_id 为准。
         application_id:
           anyOf:
           - type: string
           - type: 'null'
           title: Application Id
-          description: 应用的稳定标识。一个逻辑存储空间只绑定一个应用。
+          description: 应用的稳定标识；其存储路径由租户和应用自动派生。
         limit_bytes:
           anyOf:
           - type: integer
@@ -6407,7 +7477,7 @@ components:
           - type: string
           - type: 'null'
           title: Scope Type
-          description: 配额范围：tenant 表示租户总量，application 表示单个应用，storage_space 表示逻辑存储空间。
+          description: 配额范围：tenant 表示租户总量，application 表示单个应用，storage_space 仅表示历史迁移记录。
         consistency_status:
           anyOf:
           - type: string
@@ -6680,34 +7750,6 @@ components:
       - display_name
       - password
       title: RegisterRequest
-    ResourceScope:
-      properties:
-        type:
-          type: string
-          enum:
-          - tenant
-          - storage_space
-          - directory
-          title: Type
-          description: 授权范围类型：tenant 为租户管理范围；storage_space 或 directory 用于应用文件路径范围。
-        storage_space_id:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          title: Storage Space Id
-          description: 应用文件授权关联的逻辑存储空间标识；文件权限不得使用未绑定应用的空间。
-        canonical_prefix:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Canonical Prefix
-          description: directory 类型授权覆盖的规范相对路径前缀；不得越过应用命名空间边界。
-      additionalProperties: false
-      type: object
-      required:
-      - type
-      title: ResourceScope
     RoleBindingPage:
       properties:
         items:
@@ -6748,9 +7790,6 @@ components:
           - deny
           title: Effect
           description: 角色绑定对权限产生的允许或拒绝效果。
-        scope:
-          $ref: '#/components/schemas/ResourceScope'
-          description: 授权、查询或操作生效的资源范围。
         reason:
           type: string
           title: Reason
@@ -6785,7 +7824,6 @@ components:
       - principal
       - role_id
       - effect
-      - scope
       - reason
       - starts_at
       - expires_at
@@ -6793,6 +7831,46 @@ components:
       - created_at
       - etag
       title: RoleBindingResponse
+    RoleBindingUpdate:
+      properties:
+        role_id:
+          type: string
+          format: uuid
+          title: Role Id
+          description: 角色的服务端唯一标识。
+        effect:
+          type: string
+          enum:
+          - allow
+          - deny
+          title: Effect
+          description: 角色绑定对权限产生的允许或拒绝效果。
+        reason:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Reason
+          description: 执行该敏感操作的业务原因。
+        starts_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Starts At
+          description: 授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+      additionalProperties: false
+      type: object
+      required:
+      - role_id
+      - effect
+      - reason
+      - expires_at
+      title: RoleBindingUpdate
     RoleBindingWrite:
       properties:
         principal_id:
@@ -6812,9 +7890,6 @@ components:
           - deny
           title: Effect
           description: 角色绑定对权限产生的允许或拒绝效果。
-        scope:
-          $ref: '#/components/schemas/ResourceScope'
-          description: 授权、查询或操作生效的资源范围。
         reason:
           type: string
           maxLength: 500
@@ -6839,7 +7914,6 @@ components:
       - principal_id
       - role_id
       - effect
-      - scope
       - reason
       - expires_at
       title: RoleBindingWrite
@@ -6951,19 +8025,6 @@ components:
           type: string
           title: Permission
           description: 需要判定、授予或模拟的单个权限名称。
-        storage_space_id:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          title: Storage Space Id
-          description: 逻辑存储空间的服务端唯一标识。
-        object_key:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Object Key
-          description: 逻辑存储空间内的规范相对对象路径。
       additionalProperties: false
       type: object
       required:
@@ -7068,125 +8129,6 @@ components:
       - suspended
       - deleted
       title: StorageConnectionStatus
-    StorageSpaceCreate:
-      properties:
-        name:
-          type: string
-          maxLength: 200
-          minLength: 1
-          title: Name
-          description: 资源名称，在所属租户范围内使用。
-        application_id:
-          type: string
-          format: uuid
-          title: Application Id
-          description: 应用的稳定标识。一个逻辑存储空间只绑定一个应用。
-      additionalProperties: false
-      type: object
-      required:
-      - name
-      - application_id
-      title: StorageSpaceCreate
-    StorageSpacePage:
-      properties:
-        items:
-          items:
-            $ref: '#/components/schemas/StorageSpaceResponse'
-          type: array
-          title: Items
-          description: 当前页返回的资源记录列表。
-        next_cursor:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Next Cursor
-          description: 下一页分页游标；无更多结果时为 null。
-      type: object
-      required:
-      - items
-      title: StorageSpacePage
-      description: 租户存储空间分页结果。
-    StorageSpaceResponse:
-      properties:
-        id:
-          type: string
-          format: uuid
-          title: Id
-          description: 资源的服务端唯一标识。
-        tenant_id:
-          type: string
-          format: uuid
-          title: Tenant Id
-          description: 租户的服务端唯一标识。
-        connection_id:
-          type: string
-          format: uuid
-          title: Connection Id
-          description: 存储连接的服务端唯一标识。
-        application_id:
-          anyOf:
-          - type: string
-            format: uuid
-          - type: 'null'
-          title: Application Id
-          description: 应用的稳定标识。一个逻辑存储空间只绑定一个应用。
-        name:
-          type: string
-          title: Name
-          description: 资源名称，在所属租户范围内使用。
-        bucket:
-          type: string
-          title: Bucket
-          description: 平台共享 S3 profile 派生的 Bucket；调用方不可覆盖。
-        root_prefix:
-          type: string
-          title: Root Prefix
-          description: 仅供迁移审计的旧根路径字段；新文件操作不以该字段选择对象存储目标。
-          deprecated: true
-        storage_namespace:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Storage Namespace
-          description: 应用不可变的共享 Bucket 命名空间；与相对对象路径共同派生物理对象 Key。
-        profile_version:
-          type: integer
-          title: Profile Version
-          description: 生成该存储目标时使用的平台共享 S3 profile 版本。
-          default: 1
-        provider_target_version:
-          type: integer
-          title: Provider Target Version
-          description: “provider_target_version”字段；具体取值和约束见当前资源说明。
-        status:
-          type: string
-          title: Status
-          description: 资源当前生命周期状态。
-        created_at:
-          type: string
-          format: date-time
-          title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
-      type: object
-      required:
-      - id
-      - tenant_id
-      - connection_id
-      - name
-      - bucket
-      - root_prefix
-      - provider_target_version
-      - status
-      - created_at
-      title: StorageSpaceResponse
-      description: 公开的租户存储空间信息，不包含对象存储凭据。
-    StorageSpaceStatus:
-      type: string
-      enum:
-      - active
-      - suspended
-      - deleted
-      title: StorageSpaceStatus
     SupportAccessCreate:
       properties:
         tenant_id:
@@ -7674,9 +8616,9 @@ components:
       - suspended
       - deleted
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
-    MetadataStorageSpaceStatus:
+    MetadataApplicationStorageStatus:
       type: string
-      title: MetadataStorageSpaceStatus
+      title: MetadataApplicationStorageStatus
       enum:
       - active
       - suspended
@@ -7719,8 +8661,6 @@ components:
       title: MetadataAuthorizationScope
       enum:
       - tenant
-      - storage_space
-      - directory
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataAuthorizationEffect:
       type: string
@@ -7789,7 +8729,6 @@ components:
       description: 由服务端固定的应用存储命名空间；调用方只能提供相对对象路径，不能提供物理 Key。
       required:
       - application_id
-      - storage_space_id
       - storage_namespace
       - profile_version
       properties:
@@ -7797,10 +8736,6 @@ components:
           type: string
           format: uuid
           description: 命名空间所属应用标识。
-        storage_space_id:
-          type: string
-          format: uuid
-          description: 该应用唯一逻辑存储空间标识。
         storage_namespace:
           type: string
           description: 不可变的服务端对象 Key 前缀。
@@ -7808,27 +8743,6 @@ components:
           type: integer
           minimum: 1
           description: 创建该命名空间时的共享 profile 版本。
-    ApplicationPathGrant:
-      type: object
-      title: ApplicationPathGrant
-      description: 角色绑定中的应用文件路径授权范围；用户组只能通过活跃成员关系取得该授权，不能登录。
-      required:
-      - type
-      - storage_space_id
-      properties:
-        type:
-          type: string
-          enum:
-          - storage_space
-          - directory
-          description: storage_space 覆盖应用全部路径；directory 仅覆盖 canonical_prefix。
-        storage_space_id:
-          type: string
-          format: uuid
-          description: 已绑定应用的逻辑存储空间标识。
-        canonical_prefix:
-          type: string
-          description: directory 范围使用的规范相对前缀；storage_space 范围不需要该字段。
     QuotaStatus:
       type: object
       title: QuotaStatus

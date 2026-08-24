@@ -15,6 +15,7 @@ from s3mp.applications.domain.credentials import (
 from s3mp.applications.infrastructure.models import ApiKeyStatus, ApplicationStatus
 from s3mp.common.errors import ApiError
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.storage.domain.policy import StoragePolicyError, canonical_object_key
 
 
 def _public_api_key(record: dict[str, Any]) -> dict[str, Any]:
@@ -27,6 +28,10 @@ def _public_api_key(record: dict[str, Any]) -> dict[str, Any]:
 async def _application_view(store: Any, tenant_id: UUID, record: dict[str, Any]) -> dict[str, Any]:
     public = dict(record)
     app_id = UUID(str(public["id"]))
+    if public.get("storage") is None:
+        current = await store.get_app(tenant_id, app_id)
+        if current is not None:
+            public["storage"] = current.get("storage")
     if hasattr(store, "list_owner_summaries"):
         public["owners"] = await store.list_owner_summaries(tenant_id, app_id)
     else:
@@ -60,7 +65,12 @@ class ApplicationStore(Protocol):
     async def get_app(self, tenant_id: UUID, app_id: UUID) -> dict[str, Any] | None: ...
 
     async def create_app(
-        self, tenant_id: UUID, name: str, principal_id: UUID, membership_id: UUID | None = None
+        self,
+        tenant_id: UUID,
+        name: str,
+        code: str,
+        principal_id: UUID,
+        membership_id: UUID | None = None,
     ) -> dict[str, Any]: ...
 
     async def update_app(
@@ -172,7 +182,7 @@ class ApplicationService:
         return await _application_view(self.store, context.tenant_id, result)
 
     async def create_app(
-        self, context: PrincipalContext, name: str, membership_id: UUID | None = None
+        self, context: PrincipalContext, name: str, code: str, membership_id: UUID | None = None
     ) -> dict[str, Any]:
         await self._require(context, "applications.manage")
         if context.subject_kind == "application":
@@ -189,21 +199,44 @@ class ApplicationService:
             )
             if accepts_membership:
                 created = await self.store.create_app(
-                    context.tenant_id, name, context.principal_id, representative_id
+                    context.tenant_id, name, code, context.principal_id, representative_id
                 )
             else:
                 # Keep lightweight/in-memory stores from older integrations usable
                 # while the SQLAlchemy store adopts the representative argument.
                 created = await self.store.create_app(
-                    context.tenant_id, name, context.principal_id
+                    context.tenant_id, name, code, context.principal_id
                 )
         except ValueError as exc:
+            if str(exc) == "application_code_exists":
+                raise ApiError(
+                    "resource_conflict",
+                    "Application code already exists in this tenant",
+                    status_code=409,
+                ) from exc
             if str(exc) == "membership_not_found":
                 raise ApiError(
                     "resource_not_found", "Membership not found", status_code=404
                 ) from exc
             if str(exc) == "membership_not_active":
-                raise ApiError("conflict", "Membership is not active", status_code=409) from exc
+                raise ApiError(
+                    "membership_inactive",
+                    "Membership is not active",
+                    status_code=403,
+                ) from exc
+            if str(exc) in {
+                "storage_profile_unavailable",
+                "managed_storage_connection_mismatch",
+            }:
+                raise ApiError(
+                    "storage_unavailable",
+                    "Application storage is unavailable",
+                    status_code=503,
+                ) from exc
+            if str(exc) == "tenant_not_active":
+                raise ApiError(
+                    "resource_not_found", "Tenant not found", status_code=404
+                ) from exc
             raise
         return await _application_view(
             self.store,
@@ -252,10 +285,14 @@ class ApplicationService:
                     status_code=404,
                 ) from exc
             if str(exc) == "membership_not_active":
-                raise ApiError("conflict", "Membership is not active", status_code=409) from exc
+                raise ApiError(
+                    "membership_inactive",
+                    "Membership is not active",
+                    status_code=403,
+                ) from exc
             if str(exc) == "authorization_version_conflict":
                 raise ApiError(
-                    "conflict",
+                    "authorization_version_conflict",
                     "Application authorization version has changed",
                     status_code=409,
                 ) from exc
@@ -395,9 +432,17 @@ class ApiKeyService:
         return _public_api_key(result)
 
     async def issue(
-        self, context: PrincipalContext, app_id: UUID, scopes: list[str], ttl_days: int = 90
+        self, context: PrincipalContext, app_id: UUID, scopes: list[str], ttl_days: int = 90,
+        directory_prefix: str | None = None,
     ) -> dict[str, Any]:
         await self._require_owner_or_permission(context, app_id, "api_keys.manage")
+        if directory_prefix is not None:
+            try:
+                directory_prefix = canonical_object_key(directory_prefix)
+            except StoragePolicyError as exc:
+                raise ApiError(
+                    "validation_failed", "API key directory is not canonical", status_code=422
+                ) from exc
         issued = self.credential_service.issue()
         digest = self.credential_service.digest(issued.secret)
         expires_at = datetime.now(UTC) + timedelta(days=ttl_days)
@@ -409,6 +454,7 @@ class ApiKeyService:
             self.credential_service.pepper_version,
             scopes,
             expires_at,
+            directory_prefix,
             actor_principal_id=context.principal_id,
             audit_action="api_key.issued",
         )
@@ -444,6 +490,7 @@ class ApiKeyService:
             self.credential_service.pepper_version,
             existing.get("scopes", []),
             expires_at,
+            existing.get("directory_prefix"),
             actor_principal_id=context.principal_id,
             audit_action="api_key.rotation_replacement_issued",
         )

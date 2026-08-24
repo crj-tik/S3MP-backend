@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import (
@@ -126,11 +126,13 @@ class SqlAlchemyFileAuthorizationStore:
                     RoleBindingModel.revoked_at.is_(None),
                     RoleBindingModel.starts_at <= now,
                     RoleBindingModel.expires_at > now,
-                    # File operations always require an application-bound
-                    # storage-space scope. Legacy tenant-wide bindings remain
-                    # in the database as audit evidence, but cannot authorize
-                    # an object in a shared bucket.
-                    RoleBindingModel.storage_space_id == storage_space_id,
+                    # New role bindings are tenant-wide.  Historical scoped
+                    # bindings retain their narrower internal restriction
+                    # until an operator explicitly replaces them.
+                    or_(
+                        RoleBindingModel.storage_space_id.is_(None),
+                        RoleBindingModel.storage_space_id == storage_space_id,
+                    ),
                 )
             )
         return [
@@ -138,6 +140,7 @@ class SqlAlchemyFileAuthorizationStore:
                 id=binding.id,
                 permission=permission,
                 effect=Decision(binding.effect),
+                storage_space_id=binding.storage_space_id,
                 canonical_prefix=binding.canonical_prefix,
                 starts_at=binding.starts_at,
                 expires_at=binding.expires_at,

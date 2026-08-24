@@ -52,10 +52,24 @@ class AuthorizedFileCommand:
         request_id: str = "",
         idempotency_key: str = "",
         semantics: dict[str, Any] | None = None,
+        resolved_relative_key: bool = False,
     ) -> "AuthorizedFileCommand":
         """Create a command from user input, validating and authorizing in one step."""
         # 1. Validate canonical key
         rel = canonical_object_key(relative_key, allow_empty=action == "files.list")
+        key_prefix = ctx.api_key_directory_prefix if ctx.subject_kind == "application" else None
+        if key_prefix:
+            key_prefix = canonical_object_key(key_prefix)
+            if resolved_relative_key:
+                if rel != key_prefix and not rel.startswith(key_prefix + "/"):
+                    raise ApiError(
+                        "permission_denied",
+                        "Object is outside API key directory scope",
+                        status_code=403,
+                    )
+            else:
+                # New application API input is relative to the Key's own directory.
+                rel = f"{key_prefix}/{rel}" if rel else key_prefix
         validate_canonical_prefix(rel)
 
         # 2. Compute physical key
@@ -100,10 +114,17 @@ class AuthorizedFileCommand:
             "evaluated_at": now.isoformat(),
             "authorization_version": ctx.authorization_version,
             "subject_kind": ctx.subject_kind,
+            "target_principal_id": str(ctx.principal_id),
             "membership_id": str(ctx.membership_id) if ctx.membership_id else None,
             "application_id": str(ctx.application_id) if ctx.application_id else None,
+            "actor_application_id": str(ctx.actor_application_id)
+            if ctx.actor_application_id
+            else None,
+            "actor_principal_id": str(ctx.actor_principal_id) if ctx.actor_principal_id else None,
+            "actor_application_code": ctx.actor_application_code,
             "api_key_id": str(ctx.api_key_id) if ctx.api_key_id else None,
             "api_key_scopes": sorted(ctx.api_key_scopes or ()),
+            "api_key_directory_prefix": key_prefix,
         }
 
         # 4. Compute idempotency fingerprint
@@ -125,7 +146,7 @@ class AuthorizedFileCommand:
 
         return cls(
             tenant_id=ctx.tenant_id,
-            acting_principal_id=ctx.principal_id,
+            acting_principal_id=ctx.actor_principal_id or ctx.principal_id,
             storage_space_id=UUID(storage_space["id"]),
             bucket=target.bucket,
             relative_key=rel,

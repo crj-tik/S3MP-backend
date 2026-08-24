@@ -187,3 +187,17 @@ tenant-scoped permissions.
 #### Scenario: Operator reviews an approved request
 - **WHEN** an authorized operator retrieves an approved Support Access request
 - **THEN** the response SHALL include both the requester summary and the safe approver summary
+
+### Requirement: Tenant permission catalog is scope-filtered
+The tenant authorization API SHALL publish a permission catalog containing only
+tenant-scoped permissions. The response SHALL omit all `platform.*` entries
+while preserving permission names, descriptions, resource types and delegation
+metadata for tenant role configuration.
+
+#### Scenario: Codegen consumes tenant catalog
+- **WHEN** a frontend loads `GET /api/v1/permission_catalog` from a tenant session
+- **THEN** generated role choices SHALL contain no platform permission and SHALL include the documented tenant permission metadata
+
+#### Scenario: Platform permission is submitted to tenant role creation
+- **WHEN** a tenant role request includes a `platform.*` permission
+- **THEN** the request SHALL be rejected as an invalid or non-tenant permission and SHALL not create or modify a role

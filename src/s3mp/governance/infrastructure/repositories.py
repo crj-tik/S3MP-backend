@@ -13,7 +13,7 @@ from s3mp.governance.domain.allocation import AllocationSnapshot, build_snapshot
 from s3mp.governance.domain.quota import QuotaAllocationMode, QuotaScope
 from s3mp.governance.domain.units import bytes_to_gib
 from s3mp.governance.infrastructure.models import QuotaModel
-from s3mp.identity.infrastructure.models import PrincipalModel
+from s3mp.identity.infrastructure.models import MembershipModel, PrincipalModel
 from s3mp.platform.infrastructure.models import PlatformAuditEventModel
 from s3mp.storage.infrastructure.models import StorageSpaceModel
 from s3mp.tenant.infrastructure.models import TenantModel
@@ -151,6 +151,16 @@ class SqlAlchemyQuotaStore:
         if limit_bytes < 0:
             raise ApiError("validation_failed", "Quota limit must not be negative", 422)
         async with self._sf.begin() as session:
+            # Platform calls provide a user id; tenant-scoped calls provide a
+            # principal id. Normalize both to the user id used by the audit FK.
+            actor_user = await session.scalar(
+                select(MembershipModel.user_id).where(
+                    MembershipModel.tenant_id == tenant_id,
+                    MembershipModel.principal_id == actor_user_id,
+                )
+            )
+            if actor_user is not None:
+                actor_user_id = actor_user
             tenant = await session.scalar(
                 select(TenantModel)
                 .where(TenantModel.id == tenant_id, TenantModel.status == "active")

@@ -8,7 +8,6 @@
 | `contracts/api-conventions.md` | 1.1.0 | 通用约定：账户/租户会话、分页、幂等、错误码、时间格式、文件语义 |
 | `contracts/error-codes.yaml` | 1.1.0 | 稳定机器错误码目录 |
 | `contracts/permission-catalog.yaml` | 1.1.0 | 租户权限操作目录 |
-| `contracts/platform-permission-catalog.yaml` | 1.1.0 | 平台控制面权限目录 |
 | `contracts/examples/` | 1.1.0 | 成功/空状态/拒绝/冲突/过期/部分失败契约示例 |
 
 **契约兼容性级别**: 1.1.0（向后兼容）。新增账户/平台端点和可选字段不视为 breaking change。

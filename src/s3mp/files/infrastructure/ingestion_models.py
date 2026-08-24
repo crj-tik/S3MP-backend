@@ -51,6 +51,7 @@ class FileIngestionRecordModel(Base):
     membership_id: Mapped[UUID | None] = mapped_column()
     storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
     application_id: Mapped[UUID | None] = mapped_column()
+    actor_application_id: Mapped[UUID | None] = mapped_column()
     storage_namespace: Mapped[str | None] = mapped_column(String(512))
     profile_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)

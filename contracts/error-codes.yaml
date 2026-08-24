@@ -6,6 +6,9 @@ error_codes:
   - code: authentication_required
     http_status: 401
     description: No valid session or API key was supplied.
+  - code: account_authentication_required
+    http_status: 401
+    description: No valid global account session was supplied for an account or platform operation.
   - code: invalid_credentials
     http_status: 401
     description: Credentials are malformed or cannot be verified.
@@ -18,6 +21,9 @@ error_codes:
   - code: tenant_session_denied
     http_status: 403
     description: The account cannot create a session for the selected tenant.
+  - code: tenant_invitation_invalid
+    http_status: 409
+    description: The tenant invitation is missing, not owned by the account, expired or no longer eligible.
   - code: csrf_validation_failed
     http_status: 403
     description: A browser-authenticated unsafe request lacked valid CSRF proof.
@@ -30,6 +36,9 @@ error_codes:
   - code: membership_inactive
     http_status: 403
     description: The tenant membership is not active.
+  - code: authorization_version_conflict
+    http_status: 409
+    description: The application authorization version changed before the requested representative binding was applied.
   - code: permission_denied
     http_status: 403
     description: The principal lacks the required effective permission.
@@ -43,6 +52,9 @@ error_codes:
     http_status: 422
     description: Request fields violate schema or business validation.
     details: {fields: 'Array of {pointer, reason}.'}
+  - code: invalid_request
+    http_status: 422
+    description: Request parameters are mutually inconsistent or unsupported for the requested operation.
   - code: invalid_cursor
     http_status: 400
     description: Cursor is malformed, expired, or does not match principal, tenant, authorization version or filters.
@@ -52,6 +64,9 @@ error_codes:
   - code: conflict
     http_status: 409
     description: Current resource state conflicts with the requested transition.
+  - code: invalid_transition
+    http_status: 409
+    description: The addressed resource cannot transition from its current lifecycle state.
   - code: duplicate_resource
     http_status: 409
     description: A tenant-scoped unique value already exists.

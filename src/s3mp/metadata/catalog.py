@@ -40,7 +40,7 @@ class MetadataCatalogResponse(BaseModel):
 
     version: str = Field(description="目录版本；值集合变化时递增。")
     statuses: dict[str, list[CatalogItem]] = Field(description="按资源类型分组的生命周期状态目录。")
-    scopes: list[CatalogItem] = Field(description="授权资源范围类型目录。")
+    scopes: list[CatalogItem] = Field(description="角色授权模型目录；角色绑定始终在当前租户内生效。")
     effects: list[CatalogItem] = Field(description="授权效果目录。")
     operations: list[CatalogItem] = Field(description="文件和对象存储操作类型目录。")
     quota_scopes: list[CatalogItem] = Field(description="配额统计范围目录。")
@@ -168,10 +168,10 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
         _item("suspended", "已暂停", "对象存储关联记录暂不可用。", ("active", "deleted")),
         _item("deleted", "已删除", "对象存储关联记录已软删除。", terminal=True),
     ],
-    "storage_space": [
-        _item("active", "正常", "逻辑存储空间可用于文件操作。", ("suspended", "deleted")),
-        _item("suspended", "已暂停", "逻辑存储空间暂时不能进行文件操作。", ("active", "deleted")),
-        _item("deleted", "已删除", "逻辑存储空间已软删除。", terminal=True),
+    "application_storage": [
+        _item("active", "正常", "应用派生存储路径可用于文件操作。", ("suspended", "deleted")),
+        _item("suspended", "已暂停", "应用派生存储路径暂时不能进行文件操作。", ("active", "deleted")),
+        _item("deleted", "已删除", "应用派生存储路径已软删除。", terminal=True),
     ],
     "ingestion": [
         _item(
@@ -218,25 +218,23 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
 }
 
 SCOPES = [
-    _item("tenant", "租户", "覆盖租户管理范围。"),
-    _item("storage_space", "存储空间", "覆盖一个应用逻辑存储空间。"),
-    _item("directory", "应用目录", "仅覆盖应用命名空间内的规范相对目录。"),
+    _item("tenant", "租户", "角色授权在当前租户内生效；应用 API Key 仅继承其绑定成员的角色权限。"),
 ]
 EFFECTS = [
-    _item("allow", "允许", "授予匹配范围内的权限。"),
-    _item("deny", "拒绝", "拒绝匹配范围内的权限，且优先于 allow。"),
+    _item("allow", "允许", "授予绑定角色中的权限。"),
+    _item("deny", "拒绝", "拒绝绑定角色中的权限，且优先于 allow。"),
 ]
 OPERATIONS = [
-    _item("LIST", "列举", "列举授权范围内的文件对象。"),
+    _item("LIST", "列举", "列举当前应用命名空间内的文件对象。"),
     _item("HEAD", "读取元数据", "读取对象元数据。"),
     _item("GET", "读取内容", "读取对象内容或签发下载地址。"),
     _item("PUT", "写入内容", "写入或上传对象内容。"),
-    _item("DELETE", "删除对象", "删除授权范围内的对象。"),
+    _item("DELETE", "删除对象", "删除当前应用命名空间内的对象。"),
 ]
 QUOTA_SCOPES = [
     _item("tenant", "租户", "统计租户全部应用的容量。"),
     _item("application", "应用", "统计单个应用命名空间的容量。"),
-    _item("storage_space", "存储空间", "统计单个逻辑存储空间命名空间的容量。"),
+    _item("storage_space", "历史存储空间配额", "旧模型配额，仅用于迁移和审计；活动配额按租户或应用统计。"),
 ]
 QUOTA_ALLOCATION_MODES = [
     _item("tenant_total", "租户总配额", "租户在共享 Bucket 中的总容量上限。"),
@@ -384,14 +382,6 @@ def _catalog_descriptors() -> list[dict[str, Any]]:
             "status",
             STATUS_CATALOG["storage_connection"],
             "GET /api/v1/storage_connections",
-            query_parameter="status",
-        ),
-        _descriptor(
-            "storage",
-            "storage_space",
-            "status",
-            STATUS_CATALOG["storage_space"],
-            "GET /api/v1/storage_spaces",
             query_parameter="status",
         ),
         _descriptor(

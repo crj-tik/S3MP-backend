@@ -21,15 +21,23 @@ from s3mp.identity.infrastructure.models import (
     PrincipalType,
     UserModel,
 )
+from s3mp.storage.infrastructure.models import (
+    PlatformStorageProfileModel,
+    StorageConnectionModel,
+    StorageSpaceModel,
+)
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
-def _application(model: ApplicationModel) -> dict[str, object]:
-    return {
+def _application(
+    model: ApplicationModel, storage: StorageSpaceModel | None = None
+) -> dict[str, object]:
+    result: dict[str, object] = {
         "id": str(model.id),
         "tenant_id": model.tenant_id,
         "principal_id": model.principal_id,
         "name": model.name,
+        "code": model.code,
         "storage_namespace": model.storage_namespace,
         "status": model.status,
         "authorization_version": model.authorization_version,
@@ -39,6 +47,17 @@ def _application(model: ApplicationModel) -> dict[str, object]:
         "deleted_by": model.deleted_by,
         "deletion_reason": model.deletion_reason,
     }
+    result["storage"] = (
+        {
+            "storage_space_id": str(storage.id),
+            "storage_namespace": storage.storage_namespace,
+            "status": storage.status,
+            "profile_version": storage.profile_version,
+        }
+        if storage is not None
+        else None
+    )
+    return result
 
 
 def _membership_binding(
@@ -77,6 +96,7 @@ def _api_key(model: ApiKeyModel) -> dict[str, object]:
         "secret_digest": model.secret_digest,
         "pepper_version": model.pepper_version,
         "scopes": list(model.scopes),
+        "directory_prefix": model.directory_prefix,
         "status": model.status,
         "expires_at": model.expires_at,
         "revoked_at": model.revoked_at,
@@ -100,8 +120,13 @@ class SqlAlchemyApplicationStore:
     ) -> tuple[list[dict[str, object]], str | None]:
         async with self._sessions() as session:
             statement = (
-                select(ApplicationModel)
+                select(ApplicationModel, StorageSpaceModel)
                 .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                .outerjoin(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == ApplicationModel.tenant_id)
+                    & (StorageSpaceModel.application_id == ApplicationModel.id),
+                )
                 .where(
                     ApplicationModel.tenant_id == tenant_id,
                     ApplicationModel.status == status,
@@ -110,34 +135,51 @@ class SqlAlchemyApplicationStore:
             )
             if cursor:
                 statement = statement.where(ApplicationModel.id > UUID(cursor))
-            models = (
-                await session.scalars(statement.order_by(ApplicationModel.id).limit(limit + 1))
-            ).all()
-        page, extra = models[:limit], len(models) > limit
-        return [_application(item) for item in page], str(page[-1].id) if extra and page else None
+            rows = (await session.execute(
+                statement.order_by(ApplicationModel.id).limit(limit + 1)
+            )).all()
+        page, extra = rows[:limit], len(rows) > limit
+        return [
+            _application(application, storage) for application, storage in page
+        ], str(page[-1][0].id) if extra and page else None
 
     async def get_app(self, tenant_id: UUID, app_id: UUID) -> dict[str, object] | None:
         async with self._sessions() as session:
-            model = await session.scalar(
-                select(ApplicationModel)
+            row = (
+                await session.execute(
+                select(ApplicationModel, StorageSpaceModel)
                 .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                .outerjoin(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == ApplicationModel.tenant_id)
+                    & (StorageSpaceModel.application_id == ApplicationModel.id),
+                )
                 .where(
                     ApplicationModel.tenant_id == tenant_id,
                     ApplicationModel.id == app_id,
                     ApplicationModel.status != "deleted",
                     TenantModel.status == "active",
-                )
-            )
-        return _application(model) if model else None
+                ))
+            ).one_or_none()
+        return _application(row[0], row[1]) if row else None
 
     async def create_app(
         self,
         tenant_id: UUID,
         name: str,
+        code: str,
         principal_id: UUID,
         membership_id: UUID | None = None,
     ) -> dict[str, object]:
         async with self._sessions.begin() as session:
+            existing = await session.scalar(
+                select(ApplicationModel.id).where(
+                    ApplicationModel.tenant_id == tenant_id,
+                    ApplicationModel.code == code,
+                )
+            )
+            if existing is not None:
+                raise ValueError("application_code_exists")
             application_principal = PrincipalModel(
                 tenant_id=tenant_id,
                 type=PrincipalType.APPLICATION,
@@ -149,15 +191,75 @@ class SqlAlchemyApplicationStore:
             model = ApplicationModel(
                 tenant_id=tenant_id,
                 name=name,
+                code=code,
                 principal_id=application_principal.id,
                 status="active",
             )
             session.add(model)
             await session.flush()
             tenant = await session.get(TenantModel, tenant_id)
-            if tenant is not None:
-                # The namespace is immutable even if the display name changes.
-                model.storage_namespace = f"{tenant.slug}/{model.id}"
+            if tenant is None or str(tenant.status) != "active":
+                raise ValueError("tenant_not_active")
+            profile = await session.scalar(
+                select(PlatformStorageProfileModel)
+                .where(PlatformStorageProfileModel.status == "active")
+                .order_by(PlatformStorageProfileModel.profile_version.desc())
+                .with_for_update()
+            )
+            if profile is None:
+                raise ValueError("storage_profile_unavailable")
+            # The namespace is immutable even if the display name changes.
+            model.storage_namespace = f"{tenant.slug}/{model.id}"
+            connection_name = f"__s3mp_managed_shared_profile_v{profile.profile_version}__"
+            connection = await session.scalar(
+                select(StorageConnectionModel)
+                .where(
+                    StorageConnectionModel.tenant_id == tenant_id,
+                    StorageConnectionModel.name == connection_name,
+                )
+                .with_for_update()
+            )
+            if connection is None:
+                connection = StorageConnectionModel(
+                    tenant_id=tenant_id,
+                    name=connection_name,
+                    endpoint=profile.endpoint,
+                    region=profile.region,
+                    path_style=profile.path_style,
+                    credential_reference=profile.credential_reference,
+                    capabilities={
+                        "list_objects": True,
+                        "head_object": True,
+                        "presigned_get": True,
+                        "presigned_put": True,
+                        "multipart": True,
+                        "copy_object": True,
+                        "delete_object": True,
+                    },
+                    status="active",
+                )
+                session.add(connection)
+                await session.flush()
+            elif (
+                connection.status != "active"
+                or connection.endpoint != profile.endpoint
+                or connection.region != profile.region
+                or connection.path_style != profile.path_style
+            ):
+                raise ValueError("managed_storage_connection_mismatch")
+            storage = StorageSpaceModel(
+                tenant_id=tenant_id,
+                connection_id=connection.id,
+                application_id=model.id,
+                name=f"__application_storage__{model.id}",
+                bucket=profile.bucket,
+                root_prefix="",
+                storage_namespace=model.storage_namespace,
+                profile_version=profile.profile_version,
+                provider_target_version=1,
+                status="active",
+            )
+            session.add(storage)
             await session.flush()
             await session.refresh(model)
             session.add(
@@ -194,7 +296,7 @@ class SqlAlchemyApplicationStore:
                     )
                 )
             await session.flush()
-            return _application(model)
+            return _application(model, storage)
 
     async def get_membership_binding(
         self, tenant_id: UUID, app_id: UUID
@@ -868,6 +970,7 @@ class SqlAlchemyApplicationStore:
         pepper_version: int,
         scopes: list[str],
         expires_at: datetime,
+        directory_prefix: str | None = None,
         *,
         actor_principal_id: UUID | None = None,
         audit_action: str = "api_key.issued",
@@ -880,6 +983,7 @@ class SqlAlchemyApplicationStore:
                 secret_digest=digest,
                 pepper_version=pepper_version,
                 scopes=scopes,
+                directory_prefix=directory_prefix,
                 expires_at=expires_at,
                 status="active",
             )
@@ -900,7 +1004,11 @@ class SqlAlchemyApplicationStore:
                     action=audit_action,
                     resource_type="api_key",
                     resource_id=str(model.id),
-                    details={"application_id": str(app_id), "scope_count": len(scopes)},
+                    details={
+                        "application_id": str(app_id),
+                        "scope_count": len(scopes),
+                        "directory_prefix": directory_prefix,
+                    },
                 )
             )
             return _api_key(model)
@@ -997,6 +1105,7 @@ class SqlAlchemyApplicationStore:
             "status": key.status,
             "expires_at": key.expires_at,
             "scopes": list(key.scopes),
+            "directory_prefix": key.directory_prefix,
             "application_id": str(application.id),
             "application_status": application.status,
             "application_authorization_version": application.authorization_version,
@@ -1026,6 +1135,7 @@ class SqlAlchemyApplicationStore:
         key, application, principal = result
         record = _api_key(key)
         record.update(
+            directory_prefix=key.directory_prefix,
             application_principal_id=str(principal.id),
             application_status=application.status,
             application_authorization_version=application.authorization_version,
