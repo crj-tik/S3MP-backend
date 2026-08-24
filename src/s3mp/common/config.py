@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_secret_sources(self) -> Self:
         required_secrets = ["database_url", "redis_url"]
+        if self.environment.lower() == "production":
+            required_secrets.append("api_key_pepper")
         if self.s3_endpoint is not None:
             required_secrets.extend(["s3_access_key", "s3_secret_key"])
         for name in required_secrets:
