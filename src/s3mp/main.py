@@ -177,7 +177,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 principal_store=identity_store,
             )
             authorization_management = AuthorizationManagementService(
-                identity_store, _known_permissions(), _delegable_permissions()
+                identity_store,
+                _known_permissions(),
+                _delegable_permissions(),
+                frozenset(
+                    permission
+                    for permission in _known_permissions()
+                    if not permission.startswith("platform.")
+                ),
             )
             app.state.authorization_management = authorization_management
             app.state.identity_management = IdentityManagementService(
@@ -307,6 +314,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_headers=["Content-Type", "X-S3MP-CSRF", "If-Match", "Idempotency-Key"],
         )
     app.add_middleware(RequestIDMiddleware)
+    from s3mp.common.datetime_format import DateTimeFormatMiddleware
+
+    app.add_middleware(DateTimeFormatMiddleware)
     from s3mp.common.auth_middleware import AuthMiddleware
 
     app.add_middleware(AuthMiddleware)
