@@ -31,6 +31,7 @@ from s3mp.common.health import router as health_router
 from s3mp.common.logging import configure_logging
 from s3mp.common.middleware import RequestIDMiddleware
 from s3mp.common.openapi_documentation import document_openapi
+from s3mp.common.timezone_middleware import ChinaTimeInputMiddleware
 from s3mp.common.redis import create_redis
 from s3mp.files.api.router import router as files_router
 from s3mp.files.application.file_service import FileApplicationService
@@ -314,6 +315,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_headers=["Content-Type", "X-S3MP-CSRF", "If-Match", "Idempotency-Key"],
         )
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(ChinaTimeInputMiddleware)
     from s3mp.common.datetime_format import DateTimeFormatMiddleware
 
     app.add_middleware(DateTimeFormatMiddleware)

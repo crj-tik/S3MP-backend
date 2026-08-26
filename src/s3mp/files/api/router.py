@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Header, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from s3mp.common.api.dependencies import management_permission
 from s3mp.common.application.idempotency import IdempotencyGuard
 from s3mp.common.errors import ApiError
 from s3mp.files.domain.file_status import FileObjectStatus
@@ -26,6 +27,11 @@ class FileOperationCreate(BaseModel):
     keys: list[str] | None = Field(default=None)
 
 
+class FileRenameCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    object_key: str = Field(min_length=1, max_length=1024)
+
+
 class DirectUploadCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     object_key: str = Field(min_length=1, max_length=1024)
@@ -33,7 +39,7 @@ class DirectUploadCreate(BaseModel):
     content_type: str = Field(min_length=1, max_length=255)
     checksum: str | None = Field(default=None, max_length=512)
     expires_at: datetime = Field(
-        description="资源或授权的失效时间，采用 UTC RFC 3339 格式。"
+        description="资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。"
     )
 
 
@@ -54,7 +60,7 @@ class MultipartCreate(BaseModel):
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
     expires_at: datetime = Field(
-        description="资源或授权的失效时间，采用 UTC RFC 3339 格式。"
+        description="资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。"
     )
 
 
@@ -78,6 +84,11 @@ class FileObjectRuntime(BaseModel):
     etag: str | None = None
     checksum: str | None = None
     created_at: str | None = None
+
+
+class FileDeletionResult(BaseModel):
+    status: str
+    purge_due_at: str | None = None
 
 
 class UploadSessionRuntime(BaseModel):
@@ -111,12 +122,26 @@ class FileOperationRuntime(BaseModel):
     status: str | None = None
     source_key: str | None = None
     destination_key: str | None = None
+    source_file_id: str | None = None
+    result_file_id: str | None = None
     keys: list[str] = Field(default_factory=list)
     failure_reason: str | None = None
     attempt_count: int = 0
     next_retry_at: str | None = None
     completed_at: str | None = None
     created_at: str | None = None
+
+
+class RenameAcceptedFile(BaseModel):
+    id: str
+    object_key: str
+    status: str = "renaming"
+
+
+class FileRenameAccepted(BaseModel):
+    operation_id: str
+    status: str
+    file: RenameAcceptedFile
 
 
 class IngestionCommitResult(BaseModel):
@@ -247,8 +272,11 @@ async def get_file(
 
 
 @router.delete(
-    "/storage_spaces/{space_id}/files/{file_id}", status_code=202,
-    operation_id="delete_file", deprecated=True
+    "/storage_spaces/{space_id}/files/{file_id}",
+    status_code=202,
+    response_model=FileDeletionResult,
+    operation_id="delete_file",
+    deprecated=True,
 )
 async def delete_file(
     request: Request,
@@ -263,6 +291,31 @@ async def delete_file(
         file_id,
         idempotency_key=_idempotency_key(idempotency_key),
         if_match=if_match,
+    )
+
+
+@router.post(
+    "/storage_spaces/{space_id}/files/{file_id}/restore",
+    response_model=FileObjectRuntime,
+    operation_id="restore_file",
+    deprecated=True,
+    dependencies=[management_permission("restore_file")],
+)
+async def restore_file(
+    request: Request,
+    space_id: str = Path(min_length=1),
+    file_id: str = Path(min_length=1),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> FileObjectRuntime:
+    return FileObjectRuntime.model_validate(
+        await _file_svc(request).restore_file(
+            _context(request),
+            space_id,
+            file_id,
+            idempotency_key=_idempotency_key(idempotency_key),
+            if_match=if_match,
+        )
     )
 
 
@@ -511,15 +564,11 @@ async def _implicit_space_id(request: Request, application_id: UUID | None = Non
             raise ApiError(
                 "permission_denied", "Application credential is not bound", status_code=403
             )
-        space = await _file_svc(request).resolve_application_space(
-            context, context.application_id
-        )
+        space = await _file_svc(request).resolve_application_space(context, context.application_id)
     elif application_id is not None:
         space = await _file_svc(request).resolve_application_space(context, application_id)
     else:
-        raise ApiError(
-            "permission_denied", "Application API key is required", status_code=403
-        )
+        raise ApiError("permission_denied", "Application API key is required", status_code=403)
     return str(space["id"])
 
 
@@ -620,6 +669,54 @@ async def delete_current_application_file(
     await _application_api_context(request, application_code)
     return await delete_file(
         request, await _implicit_space_id(request), file_id, if_match, idempotency_key
+    )
+
+
+@router.post(
+    "/application/files/{file_id}/rename",
+    status_code=202,
+    response_model=FileRenameAccepted,
+    operation_id="rename_current_application_file",
+)
+async def rename_current_application_file(
+    request: Request,
+    file_id: str,
+    body: FileRenameCreate,
+    application_code: str = Query(min_length=1),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> FileRenameAccepted:
+    await _application_api_context(request, application_code)
+    result = await _file_svc(request).rename_file(
+        _context(request),
+        await _implicit_space_id(request),
+        file_id,
+        body.object_key,
+        if_match=if_match,
+        idempotency_key=_idempotency_key(idempotency_key),
+    )
+    return FileRenameAccepted(
+        operation_id=result["id"],
+        status=str(result.get("status") or "pending"),
+        file=RenameAcceptedFile(
+            id=str(result["result_file_id"]), object_key=body.object_key, status="renaming"
+        ),
+    )
+
+
+@router.get(
+    "/application/file_operations/{operation_id}",
+    response_model=FileOperationRuntime,
+    operation_id="get_current_application_file_operation",
+)
+async def get_current_application_file_operation(
+    request: Request,
+    operation_id: str,
+    application_code: str = Query(min_length=1),
+) -> FileOperationRuntime:
+    await _application_api_context(request, application_code)
+    return FileOperationRuntime.model_validate(
+        await _file_svc(request).get_file_operation(_context(request), operation_id)
     )
 
 

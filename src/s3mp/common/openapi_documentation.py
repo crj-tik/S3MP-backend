@@ -10,7 +10,9 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "get_metadata_catalog": "获取前端使用的状态、枚举、授权效果和状态流转目录。",
     "get_me": "获取当前已选租户中的身份、成员关系与有效权限上下文。",
     "list_users": "列出当前租户可见的用户账户。",
-    "list_member_candidates": "搜索尚未加入当前租户的全局已注册用户候选；支持邮箱、姓名和工号模糊查询。",
+    "list_member_candidates": (
+        "搜索尚未加入当前租户的全局已注册用户候选；支持邮箱、姓名和工号模糊查询。"
+    ),
     "get_user": "获取当前租户中指定用户的公开身份信息。",
     "list_members": "列出当前租户的成员关系。",
     "create_member": "将已有用户加入当前租户，或创建受邀成员关系。",
@@ -46,15 +48,18 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "create_platform_tenant": "创建租户，并在同一事务中建立指定初始管理员的成员关系和管理员授权。",
     "get_platform_tenant": "获取平台视角下的租户生命周期摘要。",
     "update_platform_tenant": "更新租户名称或生命周期状态。",
-    "grant_platform_role": "向全局账户授予限期或长期的平台角色；不会授予任何租户数据面权限。",
-    "revoke_platform_role": "撤销指定的平台角色绑定。",
+    "grant_platform_role": "为一个全局账户创建或替换平台角色集合；一个用户仅保留一项有效授权。",
+    "update_platform_role_assignment": "修改指定全局账户的整个平台角色集合和统一有效期。",
+    "revoke_platform_role": "撤销指定全局账户的全部有效平台角色。",
     "request_support_access": "提交针对指定租户的限时支持访问申请；默认不包含文件内容权限。",
     "approve_support_access": "由不同的平台人员批准支持访问申请，并物化限时租户授权。",
     "revoke_support_access": "撤销已申请或已批准的支持访问，并回收其有效租户会话。",
     "list_platform_accounts": "分页列出平台账户目录，可按邮箱、系统号、姓名和账户状态筛选。",
     "get_platform_account": "获取平台账户的安全摘要；不返回密码、会话或密钥信息。",
+    "reset_platform_account_password": "重置指定活跃平台账户的密码，并撤销其全部账户和租户会话。",
+    "import_platform_accounts": "按 Excel 批量创建平台账户；已占用身份和无效行不会覆盖已有账户。",
     "list_platform_roles": "列出平台角色及其平台权限目录。",
-    "list_platform_role_bindings": "分页列出平台角色绑定及其账户、有效期和撤销状态。",
+    "list_platform_role_bindings": "按用户分页列出有效的平台角色授权集合；每个用户仅返回一项。",
     "list_support_access": "分页列出支持访问申请及其待审批、已批准、已撤销或已过期状态。",
     "get_support_access": "获取单条支持访问申请的安全详情和授权物化记录。",
     "list_platform_audit_events": "分页检索平台控制面审计事件，可按动作、资源类型和资源标识筛选。",
@@ -97,8 +102,13 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "list_files": "在当前应用的固定命名空间内列出文件对象。",
     "get_file": "获取指定文件对象的元数据；不直接返回对象存储凭据。",
     "delete_file": "提交文件删除；接口按声明的幂等与并发前置条件执行。",
+    "restore_file": "在三个月保留期内恢复文件；仅租户管理主体可调用。",
     "create_file_operation": "创建文件复制、移动或其他受控异步操作。",
     "get_file_operation": "查询文件操作的状态、结果和可恢复错误。",
+    "rename_current_application_file": (
+        "异步重命名当前应用文件；必须提供当前 ETag 和幂等键，并返回新的文件标识。"
+    ),
+    "get_current_application_file_operation": "查询当前应用异步文件操作的状态和结果文件标识。",
     "create_direct_upload": "创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。",
     "get_direct_upload": "查询直传会话状态并重新签发仍有效的短期 PUT URL。",
     "complete_direct_upload": "校验直传对象的元数据并将直传会话提交为可用文件。",
@@ -161,9 +171,9 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "name": "资源名称，在所属租户范围内使用。",
     "description": "资源的可读说明。",
     "status": "资源当前生命周期状态。",
-    "expires_at": "资源或授权的失效时间，采用 UTC RFC 3339 格式。",
-    "created_at": "资源创建时间，采用 UTC RFC 3339 格式。",
-    "updated_at": "资源最近更新时间，采用 UTC RFC 3339 格式。",
+    "expires_at": "资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。",
+    "created_at": "资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。",
+    "updated_at": "资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。",
     "reason": "执行该敏感操作的业务原因。",
     "object_key": "应用存储命名空间内的规范相对对象路径。",
     "content_type": "对象的媒体类型。",
@@ -192,7 +202,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "part_size": "建议的分片大小，单位为字节。",
     "effect": "角色绑定对权限产生的允许或拒绝效果。",
     "endpoint": "对象存储服务的访问端点地址。",
-    "evaluated_at": "本次权限或状态计算完成的时间，采用 UTC RFC 3339 格式。",
+    "evaluated_at": "本次权限或状态计算完成的时间，采用 Asia/Shanghai（UTC+08:00）格式。",
     "initial_admin_user_id": "新租户的初始管理员全局用户账户标识。",
     "input": "用于授权模拟的输入条件。",
     "items": "当前页返回的资源记录列表。",
@@ -250,7 +260,7 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "source_key": "文件复制或移动操作的源规范相对对象路径。",
     "source_type": "授权、审计或操作来源的分类。",
     "sources": "用于得出当前权限或结果的来源列表。",
-    "starts_at": "授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。",
+    "starts_at": "授权或支持访问开始生效的时间，采用 Asia/Shanghai（UTC+08:00）格式。",
     "system": "资源是否由系统内置并受额外修改限制。",
     "ttl_days": "资源或授权的有效天数。",
     "ttl_seconds": "临时 URL 或会话的有效秒数。",
@@ -490,7 +500,7 @@ def document_openapi(schema: dict[str, Any]) -> dict[str, Any]:
             )
             operation["description"] = description
             responses = operation.setdefault("responses", {})
-            for status_code in ("400", "401", "403", "404", "409", "422", "500"):
+            for status_code in ("400", "401", "403", "404", "409", "412", "422", "500"):
                 responses[status_code] = error_response
             operation["summary"] = description.split("；", 1)[0]
             permission = OPERATION_PERMISSION_CLASSIFICATIONS.get(operation_id)

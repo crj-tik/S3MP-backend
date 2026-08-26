@@ -26,14 +26,20 @@ def _database_url() -> str | None:
         return url
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "deploy", ".env")
     if not os.path.isfile(env_path):
-        return os.environ.get("S3MP_DOCKER_DATABASE_URL")
+        return os.environ.get("S3MP_DATABASE_URL") or os.environ.get("S3MP_DOCKER_DATABASE_URL")
     loaded = Settings(_env_file=env_path)
-    url = loaded.secret_value("database_url") or os.environ.get("S3MP_DOCKER_DATABASE_URL")
+    url = (
+        loaded.secret_value("database_url")
+        or os.environ.get("S3MP_DATABASE_URL")
+        or os.environ.get("S3MP_DOCKER_DATABASE_URL")
+    )
     if url:
         return url
     with open(env_path, encoding="utf-8") as stream:
         for line in stream:
-            if line.startswith("S3MP_DOCKER_DATABASE_URL="):
+            if line.startswith(
+                ("S3MP_DATABASE_URL=", "S3MP_DOCKER_DATABASE_URL=")
+            ):
                 return line.split("=", 1)[1].strip()
     return None
 

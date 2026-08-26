@@ -1,4 +1,4 @@
-"""Non-interactive, development-only platform administrator bootstrap."""
+"""Reconcile platform baseline and optionally create the first platform administrator."""
 
 import asyncio
 import os
@@ -12,25 +12,8 @@ from s3mp.platform.infrastructure.repository import SqlAlchemyPlatformStore
 
 
 async def ensure() -> None:
-    if os.environ.get("S3MP_BOOTSTRAP_ADMIN_ENABLED", "false").lower() != "true":
-        return
-    if os.environ.get("S3MP_ENVIRONMENT", "development").lower() == "production":
-        raise RuntimeError("startup platform admin bootstrap is disabled in production")
+    enabled = os.environ.get("S3MP_BOOTSTRAP_ADMIN_ENABLED", "false").lower() == "true"
     settings = get_settings()
-    required = {
-        "email": os.environ.get("S3MP_BOOTSTRAP_ADMIN_EMAIL"),
-        "employee_number": os.environ.get("S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER"),
-        "display_name": os.environ.get("S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME"),
-        "password": os.environ.get("S3MP_BOOTSTRAP_ADMIN_PASSWORD"),
-    }
-    missing = [name for name, value in required.items() if not value]
-    if missing:
-        raise RuntimeError(f"missing startup bootstrap configuration: {', '.join(missing)}")
-    assert all(isinstance(value, str) for value in required.values())
-    email = cast(str, required["email"])
-    employee_number = cast(str, required["employee_number"])
-    display_name = cast(str, required["display_name"])
-    password = cast(str, required["password"])
     database_url = settings.secret_value("database_url")
     if not database_url:
         raise RuntimeError("database configuration is required for startup bootstrap")
@@ -38,7 +21,24 @@ async def ensure() -> None:
     try:
         sessions = create_session_factory(engine)
         async with sessions.begin() as session:
-            await reconcile_platform_roles(session)
+            reconciled = await reconcile_platform_roles(session)
+        if not enabled:
+            print(f"platform role baseline checked: {len(reconciled)} changed")
+            return
+        required = {
+            "email": os.environ.get("S3MP_BOOTSTRAP_ADMIN_EMAIL"),
+            "employee_number": os.environ.get("S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER"),
+            "display_name": os.environ.get("S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME"),
+            "password": _bootstrap_password(),
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise RuntimeError(f"missing startup bootstrap configuration: {', '.join(missing)}")
+        assert all(isinstance(value, str) for value in required.values())
+        email = cast(str, required["email"])
+        employee_number = cast(str, required["employee_number"])
+        display_name = cast(str, required["display_name"])
+        password = cast(str, required["password"])
         store = SqlAlchemyPlatformStore(sessions)
         user_id = await store.ensure_platform_admin(
             email=email,
@@ -49,6 +49,10 @@ async def ensure() -> None:
         print(f"platform admin bootstrap checked: {user_id}")
     finally:
         await engine.dispose()
+
+
+def _bootstrap_password() -> str | None:
+    return os.environ.get("S3MP_BOOTSTRAP_ADMIN_PASSWORD")
 
 
 if __name__ == "__main__":

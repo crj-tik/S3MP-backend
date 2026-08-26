@@ -29,7 +29,7 @@ class _Strict(BaseModel):
 class PrincipalSummary(_Strict):
     id: str
     type: Literal["user", "group", "application"]
-    display_name: str
+    display_name: str = Field(min_length=1, max_length=200)
 
 
 class TenantSummary(_Strict):

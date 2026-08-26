@@ -32,6 +32,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '422': *id001
         '500': *id001
       description: 检查 API 进程是否存活；不检查数据库、Redis 或对象存储。
@@ -52,6 +53,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '422': *id001
         '500': *id001
       description: 检查 API 是否已就绪，并验证已启用的外部依赖。
@@ -73,6 +75,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '422': *id001
         '500': *id001
       description: 获取当前已选租户中的身份、成员关系与有效权限上下文。
@@ -119,6 +122,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户可见的用户账户。
       x-permission: members.read
@@ -151,6 +155,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 搜索尚未加入当前租户的全局已注册用户候选；支持邮箱、姓名和工号模糊查询。
       x-permission: members.manage
@@ -182,6 +187,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取当前租户中指定用户的公开身份信息。
       x-permission: members.read
@@ -221,6 +227,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户的成员关系。
       x-permission: members.read
@@ -248,6 +255,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 将已有用户加入当前租户，或创建受邀成员关系。
       x-permission: members.manage
@@ -279,6 +287,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取当前租户中指定成员关系的详情。
       x-permission: members.read
@@ -324,6 +333,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 更新成员状态；暂停、移除或到期会立即回收租户权限。
       x-permission: members.manage
@@ -364,6 +374,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出指定用户组中的成员关系。
       x-permission: groups.read
@@ -396,6 +407,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 将当前租户成员加入指定用户组。
       x-permission: groups.manage
@@ -431,6 +443,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 将成员从指定用户组移除。
       x-permission: groups.manage
@@ -459,6 +472,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 校验邮箱或公司系统号及密码并建立账户会话；响应设置账户会话 Cookie 和可读的账户 CSRF Cookie，同时清除浏览器中已有的租户会话 Cookie；并返回当前账户真实的
         platform_permissions；但不会自动选择租户。
@@ -480,6 +494,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '422': *id001
         '500': *id001
       description: 获取当前账户及其可选择的活跃租户摘要。
@@ -520,6 +535,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 接受当前账户的租户邀请并将成员关系从 invited 转为 active；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF
         请求头。
@@ -548,6 +564,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF
         请求头。
@@ -582,6 +599,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 为账户选择一个活跃租户成员关系，并建立独立的租户会话；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。
   /api/v1/account/register:
@@ -609,6 +627,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 注册全局平台账户；仅创建账户身份，不创建租户成员关系或平台角色；该公开接口不要求已有会话或 X-S3MP-CSRF 请求头。
   /api/v1/platform/tenants:
@@ -667,6 +686,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出平台可管理的租户生命周期摘要；不返回租户数据面内容。
     post:
@@ -693,6 +713,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建租户，并在同一事务中建立指定初始管理员的成员关系和管理员授权。
   /api/v1/platform/tenants/{tenant_id}:
@@ -723,6 +744,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取平台视角下的租户生命周期摘要。
     patch:
@@ -758,6 +780,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 更新租户名称或生命周期状态。
     delete:
@@ -793,6 +816,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/platform/tenants/{tenant_id}/restore:
@@ -829,6 +853,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/platform/accounts:
@@ -901,9 +926,39 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 分页列出平台账户目录，可按邮箱、系统号、姓名和账户状态筛选。
       x-permission: platform.accounts.read
+  /api/v1/platform/accounts/import:
+    post:
+      tags:
+      - Platform control plane
+      summary: 按 Excel 批量创建平台账户
+      operationId: import_platform_accounts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountImportRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountImportResult'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 按 Excel 批量创建平台账户；已占用身份和无效行不会覆盖已有账户。
+      x-permission: platform.accounts.manage
   /api/v1/platform/accounts/{user_id}:
     get:
       tags:
@@ -932,6 +987,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取平台账户的安全摘要；不返回密码、会话或密钥信息。
       x-permission: platform.accounts.read
@@ -968,6 +1024,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/platform/accounts/{user_id}/restore:
@@ -1004,8 +1061,47 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/platform/accounts/{user_id}/password:
+    post:
+      tags:
+      - Platform control plane
+      summary: 重置指定活跃平台账户的密码，并撤销其全部账户和租户会话。
+      operationId: reset_platform_account_password
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+        description: 全局用户账户的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountSummary'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 重置指定活跃平台账户的密码，并撤销其全部账户和租户会话。
+      x-permission: platform.accounts.manage
   /api/v1/platform/roles:
     get:
       tags:
@@ -1045,6 +1141,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出平台角色及其平台权限目录。
       x-permission: platform.roles.read
@@ -1052,7 +1149,7 @@ paths:
     get:
       tags:
       - Platform control plane
-      summary: 分页列出平台角色绑定及其账户、有效期和撤销状态。
+      summary: 按用户分页列出有效的平台角色授权集合
       operationId: list_platform_role_bindings
       parameters:
       - name: cursor
@@ -1087,13 +1184,14 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
-      description: 分页列出平台角色绑定及其账户、有效期和撤销状态。
+      description: 按用户分页列出有效的平台角色授权集合；每个用户仅返回一项。
       x-permission: platform.roles.read
     post:
       tags:
       - Platform roles
-      summary: 向全局账户授予限期或长期的平台角色
+      summary: 为一个全局账户创建或替换平台角色集合
       operationId: grant_platform_role
       requestBody:
         required: true
@@ -1102,7 +1200,7 @@ paths:
             schema:
               $ref: '#/components/schemas/PlatformRoleGrant'
       responses:
-        '201':
+        '200':
           description: Successful Response
           content:
             application/json:
@@ -1114,8 +1212,9 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
-      description: 向全局账户授予限期或长期的平台角色；不会授予任何租户数据面权限。
+      description: 为一个全局账户创建或替换平台角色集合；一个用户仅保留一项有效授权。
   /api/v1/platform/support-access:
     get:
       tags:
@@ -1164,6 +1263,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 分页列出支持访问申请及其待审批、已批准、已撤销或已过期状态。
       x-permission: platform.support.read
@@ -1191,6 +1291,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 提交针对指定租户的限时支持访问申请；默认不包含文件内容权限。
   /api/v1/platform/support-access/{request_id}:
@@ -1221,6 +1322,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取单条支持访问申请的安全详情和授权物化记录。
       x-permission: platform.support.read
@@ -1247,6 +1349,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 撤销已申请或已批准的支持访问，并回收其有效租户会话。
   /api/v1/platform/audit-events:
@@ -1318,6 +1421,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 分页检索平台控制面审计事件，可按动作、资源类型和资源标识筛选。
       x-permission: platform.audit.read
@@ -1349,24 +1453,61 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取单条平台审计事件的脱敏详情。
       x-permission: platform.audit.read
-  /api/v1/platform/role-bindings/{binding_id}:
-    delete:
+  /api/v1/platform/role-bindings/{user_id}:
+    put:
       tags:
       - Platform roles
-      summary: 撤销指定的平台角色绑定。
-      operationId: revoke_platform_role
+      summary: 修改指定全局账户的整个平台角色集合和统一有效期。
+      operationId: update_platform_role_assignment
       parameters:
-      - name: binding_id
+      - name: user_id
         in: path
         required: true
         schema:
           type: string
           format: uuid
-          title: Binding Id
-        description: 平台角色绑定的服务端唯一标识。
+          title: User Id
+        description: 全局用户账户的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformRoleAssignmentUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Update Platform Role Assignment
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 修改指定全局账户的整个平台角色集合和统一有效期。
+    delete:
+      tags:
+      - Platform roles
+      summary: 撤销指定全局账户的全部有效平台角色。
+      operationId: revoke_platform_role
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: User Id
+        description: 全局用户账户的服务端唯一标识。
       responses:
         '204':
           description: Successful Response
@@ -1376,8 +1517,9 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
-      description: 撤销指定的平台角色绑定。
+      description: 撤销指定全局账户的全部有效平台角色。
   /api/v1/platform/support-access/{request_id}/approvals:
     post:
       tags:
@@ -1406,6 +1548,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 由不同的平台人员批准支持访问申请，并物化限时租户授权。
   /api/v1/metadata/catalog:
@@ -1441,6 +1584,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
   /api/v1/permission_catalog:
     get:
@@ -1461,6 +1605,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '422': *id001
         '500': *id001
       x-permission: roles.read
@@ -1493,6 +1638,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户的用户组。
       x-permission: groups.read
@@ -1520,6 +1666,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建当前租户的用户组。
       x-permission: groups.manage
@@ -1551,6 +1698,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取指定用户组详情。
       x-permission: groups.read
@@ -1596,6 +1744,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 更新指定用户组的名称或描述。
       x-permission: groups.manage
@@ -1622,6 +1771,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 删除指定用户组；存在依赖时会拒绝删除。
       x-permission: groups.manage
@@ -1654,6 +1804,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户的角色及其权限。
       x-permission: roles.read
@@ -1681,6 +1832,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建当前租户的自定义角色。
       x-permission: roles.manage
@@ -1712,6 +1864,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取指定角色及其权限详情。
       x-permission: roles.read
@@ -1757,6 +1910,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 更新自定义角色；系统内置角色不可通过此接口修改。
       x-permission: roles.manage
@@ -1799,6 +1953,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户的成员或用户组角色绑定，可按主体筛选。
       x-permission: role_bindings.read
@@ -1826,6 +1981,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 在调用者可委派的权限范围内创建成员或用户组角色绑定。
       x-permission: role_bindings.manage
@@ -1863,6 +2019,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 修改指定成员或用户组的现有角色绑定；同一主体可绑定多个不同角色。
       x-permission: role_bindings.manage
@@ -1893,6 +2050,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取指定角色绑定及其有效期。
       x-permission: role_bindings.read
@@ -1919,6 +2077,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 撤销指定角色绑定并使相关授权立即失效。
       x-permission: role_bindings.manage
@@ -1950,6 +2109,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 解释指定主体在当前租户内的有效角色权限来源。
       x-permission: authorization.explain
@@ -1978,6 +2138,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 在不改变授权状态的前提下模拟一次访问决策。
       x-permission: authorization.simulate
@@ -2018,6 +2179,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户的应用及其所有者状态。
       x-permission: applications.read
@@ -2046,6 +2208,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建应用、生成其固定存储目录，并绑定一个租户成员作为初始授权代表。
       x-permission: applications.manage
@@ -2078,6 +2241,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取应用当前绑定的租户成员授权代表。
       x-permission: applications.read
@@ -2115,6 +2279,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 为应用绑定一个同租户的活跃成员作为授权代表。
       x-permission: applications.manage
@@ -2146,6 +2311,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 撤销应用当前绑定的成员授权代表并使其授权立即失效。
       x-permission: applications.manage
@@ -2178,6 +2344,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取指定应用的元数据与状态。
       x-permission: applications.read
@@ -2215,6 +2382,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 更新指定应用的名称或状态。
       x-permission: applications.manage
@@ -2252,6 +2420,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: applications.manage
@@ -2290,6 +2459,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 接管失去活跃所有者、处于待接管状态的应用。
       x-permission: applications.manage
@@ -2328,6 +2498,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: applications.manage
@@ -2376,6 +2547,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出指定应用的 API Key 元数据；不会返回密钥明文。
       x-permission: api_keys.read
@@ -2413,6 +2585,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 为指定应用签发 API Key；密钥明文仅在本次响应中返回。
       x-permission: api_keys.manage
@@ -2445,6 +2618,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取 API Key 的非敏感元数据。
       x-permission: api_keys.read
@@ -2477,6 +2651,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 历史兼容接口，始终拒绝返回 API Key 密钥明文。
       x-permission: api_keys.read
@@ -2515,6 +2690,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 轮换 API Key，并按请求指定的重叠期保留旧 Key。
       x-permission: api_keys.manage
@@ -2553,6 +2729,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 撤销 API Key 并返回剩余的已签发 URL 风险信息。
       x-permission: api_keys.manage
@@ -2592,6 +2769,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户的对象存储连接摘要，不暴露连接凭据。
       x-permission: storage_connections.read
@@ -2623,6 +2801,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取对象存储连接的脱敏配置和连通性状态。
       x-permission: storage_connections.read
@@ -2660,6 +2839,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 探测对象存储连接与其声明能力。
       x-permission: storage_connections.manage
@@ -2713,6 +2893,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 在当前应用的固定命名空间内列出文件对象。
       x-permission: files.list
@@ -2755,6 +2936,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取指定文件对象的元数据；不直接返回对象存储凭据。
       x-permission: files.read
@@ -2807,15 +2989,77 @@ paths:
           content:
             application/json:
               schema:
-                title: Response Delete File
+                $ref: '#/components/schemas/FileDeletionResult'
         '422': *id001
         '400': *id001
         '401': *id001
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 提交文件删除；接口按声明的幂等与并发前置条件执行。
+      x-permission: files.delete
+  /api/v1/storage_spaces/{space_id}/files/{file_id}/restore:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 在三个月保留期内恢复文件
+      operationId: restore_file
+      deprecated: true
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileObjectRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 在三个月保留期内恢复文件；仅租户管理主体可调用。
       x-permission: files.delete
   /api/v1/storage_spaces/{space_id}/file_operations:
     post:
@@ -2863,6 +3107,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建文件复制、移动或其他受控异步操作。
       x-permission: files.copy
@@ -2896,6 +3141,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 查询文件操作的状态、结果和可恢复错误。
   /api/v1/ingestions/{ingestion_id}/provenance:
@@ -2928,6 +3174,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: files.read
@@ -2977,6 +3224,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。
       x-permission: files.write
@@ -3010,6 +3258,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 查询直传会话状态并重新签发仍有效的短期 PUT URL。
       x-permission: files.write
@@ -3068,6 +3317,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 校验直传对象的元数据并将直传会话提交为可用文件。
       x-permission: files.write
@@ -3108,6 +3358,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 为已授权的单个文件签发短期下载 URL。
       x-permission: presigned_urls.issue
@@ -3157,6 +3408,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 创建受配额和授权保护的分段上传会话。
       x-permission: files.write
@@ -3190,6 +3442,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 查询分段上传会话状态。
       x-permission: files.write
@@ -3227,6 +3480,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 中止分段上传并释放相关保留资源。
       x-permission: files.write
@@ -3263,6 +3517,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出已确认的分段上传分片。
       x-permission: files.write
@@ -3329,6 +3584,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 接收一个分片二进制并由服务端写入对象存储，同时保存 provider 返回的 ETag。
       x-permission: files.write
@@ -3377,6 +3633,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 按已确认分片完成分段上传并验证最终对象。
       x-permission: files.write
@@ -3429,6 +3686,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/application/files:
@@ -3480,6 +3738,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/applications/{application_id}/files/{file_id}:
@@ -3519,6 +3778,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
     delete:
@@ -3575,6 +3835,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/application/files/{file_id}:
@@ -3614,6 +3875,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
     delete:
@@ -3670,8 +3932,115 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/files/{file_id}/rename:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 异步重命名当前应用文件
+      operationId: rename_current_application_file
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Match
+        description: 客户端已读取的资源 ETag；用于拒绝覆盖较新的服务端状态。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同语义的重试会复用首次结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileRenameCreate'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileRenameAccepted'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 异步重命名当前应用文件；必须提供当前 ETag 和幂等键，并返回新的文件标识。
+      x-permission: files.move
+  /api/v1/application/file_operations/{operation_id}:
+    get:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 查询当前应用异步文件操作的状态和结果文件标识。
+      operationId: get_current_application_file_operation
+      parameters:
+      - name: operation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Operation Id
+        description: 异步文件操作的服务端唯一标识。
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileOperationRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 查询当前应用异步文件操作的状态和结果文件标识。
+      x-permission: files.read
   /api/v1/applications/{application_id}/file_operations:
     post:
       tags:
@@ -3717,6 +4086,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/application/file_operations:
@@ -3764,6 +4134,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/applications/{application_id}/direct_uploads:
@@ -3811,6 +4182,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/application/direct_uploads:
@@ -3858,6 +4230,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/applications/{application_id}/presigned_downloads:
@@ -3896,6 +4269,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/application/presigned_downloads:
@@ -3934,6 +4308,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/applications/{application_id}/multipart_uploads:
@@ -3981,6 +4356,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/application/multipart_uploads:
@@ -4028,6 +4404,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/quotas:
@@ -4106,6 +4483,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出当前租户或应用的配额与使用量；历史空间记录仅作迁移兼容。
       x-permission: quotas.read
@@ -4138,6 +4516,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取指定配额的限制、已用量和预留量。
       x-permission: quotas.read
@@ -4175,6 +4554,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 更新配额上限；需要当前 ETag 以防并发覆盖。
       x-permission: quotas.manage
@@ -4204,6 +4584,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: quotas.manage
@@ -4233,6 +4614,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: quotas.read
@@ -4274,6 +4656,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
       x-permission: quotas.read
@@ -4343,6 +4726,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 检索当前租户可见的脱敏审计事件。
       x-permission: audit.read
@@ -4375,6 +4759,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 获取单条脱敏审计事件详情。
       x-permission: audit.read
@@ -4456,6 +4841,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 列出平台可管理的租户总配额和应用独立配额。
       x-permission: platform.quotas.read
@@ -4483,6 +4869,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 为租户配置总容量，或从租户容量中划分应用独立容量。
       x-permission: platform.quotas.manage
@@ -4520,6 +4907,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 调整租户总配额或应用独立配额，并校验使用量和子配额边界。
       x-permission: platform.quotas.manage
@@ -4550,6 +4938,7 @@ paths:
         '403': *id001
         '404': *id001
         '409': *id001
+        '412': *id001
         '500': *id001
       description: 撤销没有使用量和进行中预留的应用独立配额，使容量回到共享池。
       x-permission: platform.quotas.manage
@@ -4605,6 +4994,99 @@ components:
       - account
       - tenants
       title: AccountContext
+    AccountImportRequest:
+      properties:
+        filename:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Filename
+          description: “filename”字段；具体取值和约束见当前资源说明。
+        content_base64:
+          type: string
+          maxLength: 14000000
+          minLength: 1
+          title: Content Base64
+          description: “content_base64”字段；具体取值和约束见当前资源说明。
+      additionalProperties: false
+      type: object
+      required:
+      - filename
+      - content_base64
+      title: AccountImportRequest
+    AccountImportResult:
+      properties:
+        total_rows:
+          type: integer
+          title: Total Rows
+          description: “total_rows”字段；具体取值和约束见当前资源说明。
+        created_count:
+          type: integer
+          title: Created Count
+          description: “created_count”字段；具体取值和约束见当前资源说明。
+        rejected_count:
+          type: integer
+          title: Rejected Count
+          description: “rejected_count”字段；具体取值和约束见当前资源说明。
+        rows:
+          items:
+            $ref: '#/components/schemas/AccountImportRow'
+          type: array
+          title: Rows
+          description: “rows”字段；具体取值和约束见当前资源说明。
+      additionalProperties: false
+      type: object
+      required:
+      - total_rows
+      - created_count
+      - rejected_count
+      - rows
+      title: AccountImportResult
+    AccountImportRow:
+      properties:
+        row:
+          type: integer
+          title: Row
+          description: “row”字段；具体取值和约束见当前资源说明。
+        email:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Email
+          description: 用户登录邮箱地址。
+        employee_number:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Employee Number
+          description: 公司的唯一系统号或员工工号，用于账户识别和登录。
+        status:
+          type: string
+          enum:
+          - created
+          - rejected
+          title: Status
+          description: 资源当前生命周期状态。
+        code:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Code
+          description: “code”字段；具体取值和约束见当前资源说明。
+        message:
+          type: string
+          title: Message
+          description: “message”字段；具体取值和约束见当前资源说明。
+      additionalProperties: false
+      type: object
+      required:
+      - row
+      - email
+      - employee_number
+      - status
+      - code
+      - message
+      title: AccountImportRow
     AccountPage:
       properties:
         items:
@@ -4655,14 +5137,14 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           anyOf:
           - type: string
             format: date-time
           - type: 'null'
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
         deleted_at:
           anyOf:
           - type: string
@@ -4826,7 +5308,7 @@ components:
             format: date-time
           - type: 'null'
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         revoked_at:
           anyOf:
           - type: string
@@ -4847,7 +5329,7 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         secret:
           type: string
           title: Secret
@@ -4944,7 +5426,7 @@ components:
             format: date-time
           - type: 'null'
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         revoked_at:
           anyOf:
           - type: string
@@ -4965,7 +5447,7 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       type: object
       required:
       - id
@@ -5099,12 +5581,12 @@ components:
           type: string
           format: date-time
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           type: string
           format: date-time
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
         revoked_at:
           anyOf:
           - type: string
@@ -5263,14 +5745,14 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           anyOf:
           - type: string
             format: date-time
           - type: 'null'
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
         deleted_at:
           anyOf:
           - type: string
@@ -5511,7 +5993,7 @@ components:
           type: string
           format: date-time
           title: Evaluated At
-          description: 本次权限或状态计算完成的时间，采用 UTC RFC 3339 格式。
+          description: 本次权限或状态计算完成的时间，采用 Asia/Shanghai（UTC+08:00）格式。
         sources:
           items:
             $ref: '#/components/schemas/DecisionSource'
@@ -5671,7 +6153,7 @@ components:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -5721,7 +6203,7 @@ components:
           - type: string
           - type: 'null'
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         ingestion_id:
           anyOf:
           - type: string
@@ -5799,7 +6281,7 @@ components:
           type: string
           format: date-time
           title: Evaluated At
-          description: 本次权限或状态计算完成的时间，采用 UTC RFC 3339 格式。
+          description: 本次权限或状态计算完成的时间，采用 Asia/Shanghai（UTC+08:00）格式。
         permissions:
           items:
             $ref: '#/components/schemas/EffectivePermission'
@@ -5814,6 +6296,22 @@ components:
       - evaluated_at
       - permissions
       title: EffectivePermissionsResponse
+    FileDeletionResult:
+      properties:
+        status:
+          type: string
+          title: Status
+          description: 资源当前生命周期状态。
+        purge_due_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Purge Due At
+          description: “purge_due_at”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - status
+      title: FileDeletionResult
     FileObjectRuntime:
       properties:
         id:
@@ -5865,7 +6363,7 @@ components:
           - type: string
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       type: object
       required:
       - id
@@ -5876,6 +6374,8 @@ components:
       type: string
       enum:
       - available
+      - renaming
+      - rename_failed
       - deleting
       - deleted
       - delete_failed
@@ -5946,6 +6446,18 @@ components:
           - type: 'null'
           title: Destination Key
           description: 文件复制或移动操作的目标规范相对对象路径。
+        source_file_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source File Id
+          description: “source_file_id”字段；具体取值和约束见当前资源说明。
+        result_file_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Result File Id
+          description: “result_file_id”字段；具体取值和约束见当前资源说明。
         keys:
           items:
             type: string
@@ -5980,11 +6492,43 @@ components:
           - type: string
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       type: object
       required:
       - id
       title: FileOperationRuntime
+    FileRenameAccepted:
+      properties:
+        operation_id:
+          type: string
+          title: Operation Id
+          description: 异步文件操作的服务端唯一标识。
+        status:
+          type: string
+          title: Status
+          description: 资源当前生命周期状态。
+        file:
+          $ref: '#/components/schemas/RenameAcceptedFile'
+          description: “file”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - operation_id
+      - status
+      - file
+      title: FileRenameAccepted
+    FileRenameCreate:
+      properties:
+        object_key:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Object Key
+          description: 应用存储命名空间内的规范相对对象路径。
+      additionalProperties: false
+      type: object
+      required:
+      - object_key
+      title: FileRenameCreate
     GroupPage:
       properties:
         items:
@@ -6031,12 +6575,12 @@ components:
           type: string
           format: date-time
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           type: string
           format: date-time
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
         etag:
           type: string
           title: Etag
@@ -6170,7 +6714,7 @@ components:
           - type: string
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       type: object
       required:
       - id
@@ -6218,7 +6762,7 @@ components:
           - type: string
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         deleted_at:
           anyOf:
           - type: string
@@ -6428,12 +6972,12 @@ components:
           type: string
           format: date-time
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           type: string
           format: date-time
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
         etag:
           type: string
           title: Etag
@@ -6666,7 +7210,7 @@ components:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -6742,7 +7286,7 @@ components:
           - type: string
           - type: 'null'
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         ingestion_id:
           anyOf:
           - type: string
@@ -6764,6 +7308,19 @@ components:
       required:
       - id
       title: MultipartUploadRuntime
+    PasswordResetRequest:
+      properties:
+        password:
+          type: string
+          maxLength: 1024
+          minLength: 8
+          title: Password
+          description: 用户登录密码；仅用于本次认证，不会在响应中返回。
+      additionalProperties: false
+      type: object
+      required:
+      - password
+      title: PasswordResetRequest
     PermissionCatalogEntry:
       properties:
         name:
@@ -6877,7 +7434,7 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -6938,6 +7495,33 @@ components:
       required:
       - limit_gib
       title: PlatformQuotaUpdate
+    PlatformRoleAssignmentUpdate:
+      properties:
+        role_names:
+          items:
+            type: string
+            enum:
+            - platform_admin
+            - platform_operator
+            - platform_auditor
+            - tenant-admin
+          type: array
+          maxItems: 4
+          minItems: 1
+          title: Role Names
+          description: “role_names”字段；具体取值和约束见当前资源说明。
+        expires_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Expires At
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
+      additionalProperties: false
+      type: object
+      required:
+      - role_names
+      title: PlatformRoleAssignmentUpdate
     PlatformRoleBindingPage:
       properties:
         items:
@@ -6959,46 +7543,35 @@ components:
       title: PlatformRoleBindingPage
     PlatformRoleBindingResponse:
       properties:
-        id:
-          type: string
-          format: uuid
-          title: Id
-          description: 资源的服务端唯一标识。
         user:
           $ref: '#/components/schemas/AccountSummary'
           description: 全局用户账户的公开身份摘要。
-        role:
-          $ref: '#/components/schemas/PlatformRoleResponse'
-          description: “role”字段；具体取值和约束见当前资源说明。
+        roles:
+          items:
+            $ref: '#/components/schemas/PlatformRoleResponse'
+          type: array
+          title: Roles
+          description: “roles”字段；具体取值和约束见当前资源说明。
         expires_at:
           anyOf:
           - type: string
             format: date-time
           - type: 'null'
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
-        revoked_at:
-          anyOf:
-          - type: string
-            format: date-time
-          - type: 'null'
-          title: Revoked At
-          description: “revoked_at”字段；具体取值和约束见当前资源说明。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         created_at:
           anyOf:
           - type: string
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
-      - id
       - user
-      - role
+      - roles
       - expires_at
-      - revoked_at
       - created_at
       title: PlatformRoleBindingResponse
     PlatformRoleGrant:
@@ -7008,27 +7581,31 @@ components:
           format: uuid
           title: User Id
           description: 全局用户账户的服务端唯一标识。
-        role_name:
-          type: string
-          enum:
-          - platform_admin
-          - platform_operator
-          - platform_auditor
-          - tenant-admin
-          title: Role Name
-          description: 角色的显示名称。
+        role_names:
+          items:
+            type: string
+            enum:
+            - platform_admin
+            - platform_operator
+            - platform_auditor
+            - tenant-admin
+          type: array
+          maxItems: 4
+          minItems: 1
+          title: Role Names
+          description: “role_names”字段；具体取值和约束见当前资源说明。
         expires_at:
           anyOf:
           - type: string
             format: date-time
           - type: 'null'
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
       - user_id
-      - role_name
+      - role_names
       title: PlatformRoleGrant
     PlatformRolePage:
       properties:
@@ -7076,7 +7653,7 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -7138,7 +7715,7 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         deleted_at:
           anyOf:
           - type: string
@@ -7204,6 +7781,8 @@ components:
           description: 资源、错误或操作的类型标识。
         display_name:
           type: string
+          maxLength: 200
+          minLength: 1
           title: Display Name
           description: 面向用户展示的名称。
       additionalProperties: false
@@ -7750,6 +8329,26 @@ components:
       - display_name
       - password
       title: RegisterRequest
+    RenameAcceptedFile:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: 资源的服务端唯一标识。
+        object_key:
+          type: string
+          title: Object Key
+          description: 应用存储命名空间内的规范相对对象路径。
+        status:
+          type: string
+          title: Status
+          default: renaming
+          description: 资源当前生命周期状态。
+      type: object
+      required:
+      - id
+      - object_key
+      title: RenameAcceptedFile
     RoleBindingPage:
       properties:
         items:
@@ -7798,12 +8397,12 @@ components:
           type: string
           format: date-time
           title: Starts At
-          description: 授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。
+          description: 授权或支持访问开始生效的时间，采用 Asia/Shanghai（UTC+08:00）格式。
         expires_at:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         created_by:
           type: string
           title: Created By
@@ -7812,7 +8411,7 @@ components:
           type: string
           format: date-time
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         etag:
           type: string
           title: Etag
@@ -7857,12 +8456,12 @@ components:
             format: date-time
           - type: 'null'
           title: Starts At
-          description: 授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。
+          description: 授权或支持访问开始生效的时间，采用 Asia/Shanghai（UTC+08:00）格式。
         expires_at:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -7902,12 +8501,12 @@ components:
             format: date-time
           - type: 'null'
           title: Starts At
-          description: 授权或支持访问开始生效的时间，采用 UTC RFC 3339 格式。
+          description: 授权或支持访问开始生效的时间，采用 Asia/Shanghai（UTC+08:00）格式。
         expires_at:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -7966,12 +8565,12 @@ components:
           type: string
           format: date-time
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           type: string
           format: date-time
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
         etag:
           type: string
           title: Etag
@@ -8108,14 +8707,14 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
         updated_at:
           anyOf:
           - type: string
             format: date-time
           - type: 'null'
           title: Updated At
-          description: 资源最近更新时间，采用 UTC RFC 3339 格式。
+          description: 资源最近更新时间，采用 Asia/Shanghai（UTC+08:00）格式。
       type: object
       required:
       - id
@@ -8146,7 +8745,7 @@ components:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -8208,7 +8807,7 @@ components:
           type: string
           format: date-time
           title: Expires At
-          description: 资源或授权的失效时间，采用 UTC RFC 3339 格式。
+          description: 资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。
         approved_at:
           anyOf:
           - type: string
@@ -8250,7 +8849,7 @@ components:
             format: date-time
           - type: 'null'
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -8442,7 +9041,7 @@ components:
           type: string
           format: date-time
           title: Created At
-          description: 资源创建时间，采用 UTC RFC 3339 格式。
+          description: 资源创建时间，采用 Asia/Shanghai（UTC+08:00）格式。
       additionalProperties: false
       type: object
       required:
@@ -8564,6 +9163,8 @@ components:
       title: MetadataFileObjectStatus
       enum:
       - available
+      - renaming
+      - rename_failed
       - deleting
       - delete_failed
       - deleted
@@ -8595,9 +9196,13 @@ components:
       title: MetadataFileOperationStatus
       enum:
       - pending
+      - running
+      - retry_wait
+      - succeeded
       - completed
       - partial_failure
       - failed
+      - cancelled
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataSupportAccessStatus:
       type: string

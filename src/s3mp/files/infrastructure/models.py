@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,7 +25,6 @@ class FileObjectModel(Base):
     __tablename__ = "file_object"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id"),
-        UniqueConstraint("tenant_id", "storage_space_id", "object_key"),
         ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(
             ["tenant_id", "storage_space_id"],
@@ -31,6 +32,22 @@ class FileObjectModel(Base):
             ondelete="CASCADE",
         ),
         Index("ix_file_object_tenant_space_key", "tenant_id", "storage_space_id", "object_key"),
+        Index(
+            "ix_file_object_retention_due",
+            "purge_due_at",
+            postgresql_where=text("soft_deleted AND purge_due_at IS NOT NULL"),
+        ),
+        Index(
+            "uq_file_object_active_key",
+            "tenant_id",
+            "storage_space_id",
+            "object_key",
+            unique=True,
+            postgresql_where=text(
+                "soft_deleted OR status IN "
+                "('available', 'renaming', 'rename_failed', 'deleting', 'delete_failed')"
+            ),
+        ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
@@ -59,6 +76,48 @@ class FileObjectModel(Base):
     deletion_actor_application_id: Mapped[UUID | None] = mapped_column()
     deletion_authorization_version: Mapped[int | None] = mapped_column()
     deletion_authorization_evidence: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    deletion_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    # A rename tombstone is only historical.  A retained deletion keeps the
+    # provider object and reserves its canonical key until physical purge.
+    soft_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    purge_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_state: Mapped[str | None] = mapped_column(String(32))
+    purge_attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    purge_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_failure_reason: Mapped[str | None] = mapped_column(String(128))
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restore_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FileRetentionOutboxModel(Base):
+    """Durable Redis ZSET synchronisation intent; PostgreSQL stays authoritative."""
+
+    __tablename__ = "file_retention_outbox"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "file_id"),
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "file_id"],
+            ["file_object.tenant_id", "file_object.id"],
+            ondelete="CASCADE",
+        ),
+        Index("ix_file_retention_outbox_pending", "processed_at", "next_retry_at"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    file_id: Mapped[UUID] = mapped_column(nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -169,6 +228,24 @@ class FileOperationModel(Base):
             ["tenant_id", "principal_id"], ["principal.tenant_id", "principal.id"]
         ),
         Index("ix_file_operation_tenant_status", "tenant_id", "status"),
+        Index(
+            "uq_file_operation_rename_source_active",
+            "tenant_id",
+            "source_file_id",
+            unique=True,
+            postgresql_where=text(
+                "operation_type = 'rename' AND "
+                "status IN ('pending', 'running', 'retry_wait', 'partial_failure')"
+            ),
+        ),
+        Index(
+            "uq_file_operation_rename_idempotency",
+            "tenant_id",
+            "application_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("operation_type = 'rename'"),
+        ),
     )
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(nullable=False)
@@ -177,6 +254,9 @@ class FileOperationModel(Base):
     operation_type: Mapped[str] = mapped_column(String(32), nullable=False)
     source_key: Mapped[str | None] = mapped_column(String(1024))
     destination_key: Mapped[str | None] = mapped_column(String(1024))
+    source_file_id: Mapped[UUID | None] = mapped_column()
+    result_file_id: Mapped[UUID | None] = mapped_column()
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
     keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     failure_reason: Mapped[str | None] = mapped_column(String(500))

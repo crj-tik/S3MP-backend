@@ -19,3 +19,11 @@ tests/.artifacts/*
 !tests/.artifacts/.gitkeep
 tests/__pycache__/
 tests/
+/openspec/
+/.github/
+/.codex/
+/.claude/
+/openspec/
+/.github/
+/.codex/
+/.claude/

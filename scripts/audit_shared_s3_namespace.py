@@ -160,16 +160,20 @@ def _database_url() -> str | None:
         return database_url
     local_env = os.path.join(os.path.dirname(os.path.dirname(__file__)), "deploy", ".env")
     if not os.path.isfile(local_env):
-        return os.environ.get("S3MP_DOCKER_DATABASE_URL")
+        return os.environ.get("S3MP_DATABASE_URL") or os.environ.get("S3MP_DOCKER_DATABASE_URL")
     settings = Settings(_env_file=local_env)
-    database_url = settings.secret_value("database_url") or os.environ.get(
-        "S3MP_DOCKER_DATABASE_URL"
+    database_url = (
+        settings.secret_value("database_url")
+        or os.environ.get("S3MP_DATABASE_URL")
+        or os.environ.get("S3MP_DOCKER_DATABASE_URL")
     )
     if database_url:
         return database_url
     with open(local_env, encoding="utf-8") as stream:
         for line in stream:
-            if line.startswith("S3MP_DOCKER_DATABASE_URL="):
+            if line.startswith(
+                ("S3MP_DATABASE_URL=", "S3MP_DOCKER_DATABASE_URL=")
+            ):
                 return line.split("=", 1)[1].strip()
     return None
 

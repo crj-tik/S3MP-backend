@@ -25,9 +25,13 @@ class MultipartStatus(StrEnum):
 
 class OperationStatus(StrEnum):
     PENDING = "pending"
+    RUNNING = "running"
+    RETRY_WAIT = "retry_wait"
+    SUCCEEDED = "succeeded"
     COMPLETED = "completed"
     PARTIAL_FAILURE = "partial_failure"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)

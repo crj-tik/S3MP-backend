@@ -49,6 +49,31 @@ class LifecycleRequest(_Strict):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class PasswordResetRequest(_Strict):
+    password: str = Field(min_length=8, max_length=1024)
+
+
+class AccountImportRequest(_Strict):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=14_000_000)
+
+
+class AccountImportRow(_Strict):
+    row: int
+    email: str | None
+    employee_number: str | None
+    status: Literal["created", "rejected"]
+    code: str | None
+    message: str
+
+
+class AccountImportResult(_Strict):
+    total_rows: int
+    created_count: int
+    rejected_count: int
+    rows: list[AccountImportRow]
+
+
 class PlatformRoleResponse(_Strict):
     id: UUID
     name: str
@@ -63,11 +88,9 @@ class PlatformRolePage(_Strict):
 
 
 class PlatformRoleBindingResponse(_Strict):
-    id: UUID
     user: AccountSummary
-    role: PlatformRoleResponse
+    roles: list[PlatformRoleResponse]
     expires_at: datetime | None
-    revoked_at: datetime | None
     created_at: datetime | None
 
 
@@ -190,6 +213,23 @@ async def list_accounts(
     )
 
 
+@router.post(
+    "/accounts/import",
+    response_model=AccountImportResult,
+    operation_id="import_platform_accounts",
+)
+async def import_accounts(
+    body: AccountImportRequest,
+    context: AccountManageContext,
+    service: Annotated[PlatformControlPlaneService, control_service],
+) -> AccountImportResult:
+    return AccountImportResult.model_validate(
+        await service.import_accounts(
+            context, filename=body.filename, content_base64=body.content_base64
+        )
+    )
+
+
 @router.get(
     "/accounts/{user_id}", response_model=AccountSummary, operation_id="get_platform_account"
 )
@@ -231,6 +271,22 @@ async def restore_account(
 ) -> AccountSummary:
     return AccountSummary.model_validate(
         await service.restore_account(context, user_id, body.reason)
+    )
+
+
+@router.post(
+    "/accounts/{user_id}/password",
+    response_model=AccountSummary,
+    operation_id="reset_platform_account_password",
+)
+async def reset_account_password(
+    user_id: UUID,
+    body: PasswordResetRequest,
+    context: AccountManageContext,
+    service: Annotated[PlatformControlPlaneService, control_service],
+) -> AccountSummary:
+    return AccountSummary.model_validate(
+        await service.reset_account_password(context, user_id, body.password)
     )
 
 

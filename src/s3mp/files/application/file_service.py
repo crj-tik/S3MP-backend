@@ -1,6 +1,8 @@
 """File, upload, presigned download, and multipart application service."""
 
+import calendar
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -9,6 +11,7 @@ from uuid import UUID
 from s3mp.authorization.domain.evaluator import Binding, Decision, evaluate
 from s3mp.common.errors import ApiError
 from s3mp.common.middleware import current_request_id
+from s3mp.common.timezone import CHINA_TIMEZONE
 from s3mp.files.application.auth_guard import FileAuthGuard
 from s3mp.files.application.authorized_command import AuthorizedFileCommand
 from s3mp.files.application.delayed_subject_validator import validate_delayed_subject
@@ -18,6 +21,15 @@ from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
 
 MULTIPART_PART_SIZE = 8 * 1024 * 1024
+
+
+def soft_delete_due_at(deleted_at: datetime) -> datetime:
+    """Return the same local clock time three natural months later in China."""
+    local = deleted_at.astimezone(CHINA_TIMEZONE)
+    month_index = local.month - 1 + 3
+    year, month = local.year + month_index // 12, month_index % 12 + 1
+    day = min(local.day, calendar.monthrange(year, month)[1])
+    return local.replace(year=year, month=month, day=day).astimezone(UTC)
 
 
 def _require_future_expiry(value: datetime) -> datetime:
@@ -43,13 +55,22 @@ class FileStore(Protocol):
     ) -> dict[str, Any] | None: ...
     async def delete_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
+    async def restore_file(
+        self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
+    ) -> dict[str, Any] | None: ...
+    async def get_retained_file(
+        self, tenant_id: UUID, space_id: UUID, file_id: UUID
+    ) -> dict[str, Any] | None: ...
     async def list_pending_deletions(self) -> list[dict[str, Any]]: ...
     async def finalize_file_delete(self, tenant_id: UUID, file_id: UUID) -> None: ...
     async def record_delete_failure(
         self, tenant_id: UUID, file_id: UUID, max_attempts: int
     ) -> None: ...
     async def create_operation(
+        self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
+    ) -> dict[str, Any]: ...
+    async def create_rename_operation(
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
     ) -> dict[str, Any]: ...
     async def get_operation(self, tenant_id: UUID, op_id: UUID) -> dict[str, Any] | None: ...
@@ -116,6 +137,10 @@ class PrincipalStateStore(Protocol):
 
 class ApiKeyStateStore(Protocol):
     async def get_key_state(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any] | None: ...
+
+    async def get_membership_binding(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> dict[str, Any] | None: ...
 
 
 class WorkNotifier(Protocol):
@@ -386,9 +411,7 @@ class FileApplicationService:
             raise ApiError("resource_expired", "Upload session has expired", status_code=410)
         target = ProviderTarget(bucket=str(space["bucket"]), key=str(record["object_key"]))
         checksum = record.get("checksum")
-        checksum_sha256 = (
-            str(checksum).removeprefix("sha256:") if checksum is not None else None
-        )
+        checksum_sha256 = str(checksum).removeprefix("sha256:") if checksum is not None else None
         url = await self.object_storage.presign_put(
             target,
             str(record["content_type"]),
@@ -648,9 +671,7 @@ class FileApplicationService:
             # Completion revalidates the durable provider target against the
             # current space. Persist the full namespace/profile identity used
             # for the upload rather than falling back to legacy defaults.
-            "application_id": str(space["application_id"])
-            if space.get("application_id")
-            else None,
+            "application_id": str(space["application_id"]) if space.get("application_id") else None,
             "actor_application_id": str(command.authorization_evidence.get("actor_application_id"))
             if command.authorization_evidence.get("actor_application_id")
             else None,
@@ -996,7 +1017,7 @@ class FileApplicationService:
             from s3mp.common.api.etag import check_etag
 
             check_etag(record.get("etag") or "", require_if_match(if_match))
-        await self.store.delete_file(
+        deleted = await self.store.delete_file(
             ctx.tenant_id,
             UUID(space_id),
             UUID(file_id),
@@ -1007,10 +1028,152 @@ class FileApplicationService:
             object_key=record["object_key"],
             authorization_version=ctx.authorization_version,
             authorization_evidence=command.authorization_evidence,
+            purge_due_at=soft_delete_due_at(datetime.now(UTC)),
+        )
+        if deleted is None:
+            raise ApiError("resource_not_found", "File not found", status_code=404)
+        if self.work_notifier is not None:
+            await self.work_notifier.notify()
+        return {"status": "soft_deleted", "purge_due_at": deleted["purge_due_at"]}
+
+    async def restore_file(
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        file_id: str,
+        *,
+        idempotency_key: str | None = None,
+        if_match: str | None = None,
+    ) -> dict[str, Any]:
+        if ctx.subject_kind == "application":
+            raise ApiError("permission_denied", "Application API keys cannot restore files", 403)
+        # Its ordinary get path intentionally returns 404 during retention, so
+        # this management-only lookup is used solely to authorize its key.
+        if if_match is None:
+            from s3mp.common.api.etag import require_if_match
+
+            require_if_match(None)
+        record = await self.store.get_retained_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
+        if record is None:
+            raise ApiError("resource_not_found", "File not found", status_code=404)
+        command = await self._command_for_record(
+            ctx,
+            record,
+            "files.delete",
+            idempotency_key=idempotency_key,
+            semantics={"restore_file_id": file_id, "if_match": if_match},
+        )
+        restored = await self.store.restore_file(
+            ctx.tenant_id,
+            UUID(space_id),
+            UUID(file_id),
+            if_match=if_match,
+            actor_principal_id=ctx.actor_principal_id or ctx.principal_id,
+            request_id=current_request_id(),
+            authorization_version=ctx.authorization_version,
+            authorization_evidence=command.authorization_evidence,
+        )
+        if restored is None:
+            raise ApiError("resource_not_found", "File not found", status_code=404)
+        if self.work_notifier is not None:
+            await self.work_notifier.notify()
+        return self._public_file(await self._resolve_space(ctx.tenant_id, UUID(space_id)), restored)
+
+    async def rename_file(
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        file_id: str,
+        object_key: str,
+        *,
+        if_match: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Create an immutable replacement file identity for an async rename."""
+        if ctx.subject_kind != "application" or ctx.application_id is None:
+            raise ApiError("permission_denied", "Application API key is required", status_code=403)
+        if if_match is None:
+            from s3mp.common.api.etag import require_if_match
+
+            require_if_match(None)
+        record = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
+        if record is None:
+            raise ApiError("resource_not_found", "File not found", status_code=404)
+        source_read = await self._command_for_record(ctx, record, "files.read")
+        source_delete = await self._command_for_record(ctx, record, "files.delete")
+        source_move = await self._command_for_record(ctx, record, "files.move")
+        destination_write = await self._command(
+            ctx,
+            space_id,
+            object_key,
+            "files.write",
+            idempotency_key=idempotency_key,
+            semantics={"operation_type": "rename", "source_file_id": file_id},
+        )
+        if source_read.relative_key == destination_write.relative_key:
+            raise ApiError(
+                "validation_failed", "Destination key must differ from source", status_code=422
+            )
+        if record.get("etag") != if_match:
+            from s3mp.common.api.etag import check_etag, require_if_match
+
+            check_etag(record.get("etag") or "", require_if_match(if_match))
+        space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "application_id": str(ctx.application_id),
+                    "source_file_id": file_id,
+                    "source_etag": if_match,
+                    "destination_key": destination_write.relative_key,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        result = await self.store.create_rename_operation(
+            ctx.tenant_id,
+            UUID(space_id),
+            {
+                "principal_id": str(ctx.actor_principal_id or ctx.principal_id),
+                "membership_id": str(ctx.membership_id) if ctx.membership_id else None,
+                "application_id": str(ctx.application_id),
+                "actor_application_id": str(ctx.actor_application_id)
+                if ctx.actor_application_id
+                else None,
+                "source_file_id": file_id,
+                "source_key": source_read.relative_key,
+                "destination_key": destination_write.relative_key,
+                "destination_physical_key": destination_write.physical_key,
+                "if_match": if_match,
+                "idempotency_key": idempotency_key,
+                "request_fingerprint": fingerprint,
+                "storage_namespace": space.get("storage_namespace"),
+                "profile_version": space.get("profile_version", 1),
+                "provider_target_version": source_read.provider_target_version,
+                "authorization_version": ctx.authorization_version,
+                "request_id": current_request_id(),
+                "authorization_evidence": {
+                    "subject_kind": ctx.subject_kind,
+                    "application_id": str(ctx.application_id),
+                    "actor_application_id": str(ctx.actor_application_id)
+                    if ctx.actor_application_id
+                    else None,
+                    "api_key_id": str(ctx.api_key_id) if ctx.api_key_id else None,
+                    "api_key_scopes": sorted(ctx.api_key_scopes or ()),
+                    "api_key_directory_prefix": ctx.api_key_directory_prefix,
+                    "commands": [
+                        source_read.authorization_evidence,
+                        source_delete.authorization_evidence,
+                        source_move.authorization_evidence,
+                        destination_write.authorization_evidence,
+                    ],
+                },
+            },
         )
         if self.work_notifier is not None:
             await self.work_notifier.notify()
-        return {"status": "deletion_queued"}
+        return self._public_operation(result)
 
     async def create_file_operation(
         self,
@@ -1119,7 +1282,7 @@ class FileApplicationService:
                 raise ApiError("resource_not_found", "File operation not found", status_code=404)
             required: list[tuple[str, str]] = []
             operation_type = result.get("operation_type")
-            if operation_type in {"copy", "move"}:
+            if operation_type in {"copy", "move", "rename"}:
                 if not result.get("source_key") or not result.get("destination_key"):
                     raise ApiError(
                         "resource_not_found", "File operation not found", status_code=404
@@ -1128,8 +1291,10 @@ class FileApplicationService:
                     ("files.read", result["source_key"]),
                     ("files.write", result["destination_key"]),
                 ]
-                if operation_type == "move":
+                if operation_type in {"move", "rename"}:
                     required.append(("files.delete", result["source_key"]))
+                if operation_type == "rename":
+                    required.append(("files.move", result["source_key"]))
             elif operation_type == "delete":
                 required = [("files.delete", key) for key in result.get("keys") or ()]
             else:

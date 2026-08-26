@@ -24,6 +24,9 @@ class OperationStore(Protocol):
     async def renew_operation_lease(
         self, tenant_id: UUID, operation_id: UUID, worker_id: str
     ) -> bool: ...
+    async def finish_rename_operation(
+        self, tenant_id: UUID, operation_id: UUID, status: str, reason: str | None = None
+    ) -> None: ...
 
 
 class PrincipalStore(Protocol):
@@ -35,6 +38,10 @@ class PrincipalStore(Protocol):
 
 class ApiKeyStateStore(Protocol):
     async def get_key_state(self, tenant_id: UUID, key_id: UUID) -> dict[str, Any] | None: ...
+
+    async def get_membership_binding(
+        self, tenant_id: UUID, app_id: UUID
+    ) -> dict[str, Any] | None: ...
 
 
 class OperationObjectStorage(Protocol):
@@ -62,9 +69,14 @@ class FileOperationWorker:
                 heartbeat.cancel()
                 with suppress(asyncio.CancelledError):
                     await heartbeat
-            await self.store.finish_operation(
-                UUID(operation["tenant_id"]), UUID(operation["id"]), status, reason
-            )
+            if operation.get("operation_type") == "rename":
+                await self.store.finish_rename_operation(
+                    UUID(operation["tenant_id"]), UUID(operation["id"]), status, reason
+                )
+            else:
+                await self.store.finish_operation(
+                    UUID(operation["tenant_id"]), UUID(operation["id"]), status, reason
+                )
             completed.append(operation["id"])
         return completed
 
@@ -178,11 +190,15 @@ class FileOperationWorker:
         source = operation.get("source_key")
         destination = operation.get("destination_key")
         try:
-            if operation["operation_type"] in {"copy", "move"}:
+            if operation["operation_type"] in {"copy", "move", "rename"}:
                 if not source or not destination:
                     return "failed", "operation_keys_missing"
                 if not await authorize("files.read", source) or not await authorize(
                     "files.write", destination
+                ):
+                    return "cancelled", "authorization_revoked"
+                if operation["operation_type"] == "rename" and not await authorize(
+                    "files.move", source
                 ):
                     return "cancelled", "authorization_revoked"
                 source_target, destination_target = target(source), target(destination)
@@ -199,7 +215,15 @@ class FileOperationWorker:
                     destination_state = await self.object_storage.head(destination_target)
                     if destination_state is None:
                         return "retry_wait", "copy_verification_failed"
-                if operation["operation_type"] == "move":
+                source_size = getattr(source_state, "content_length", None)
+                destination_size = getattr(destination_state, "content_length", None)
+                if (
+                    source_size is not None
+                    and destination_size is not None
+                    and source_size != destination_size
+                ):
+                    return "retry_wait", "copy_verification_failed"
+                if operation["operation_type"] in {"move", "rename"}:
                     if source_state is None:
                         return "succeeded", None
                     if not await authorize("files.delete", source):

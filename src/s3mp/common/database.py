@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase
 
+from s3mp.common.timezone import POSTGRES_TIMEZONE
+
 NAMING_CONVENTION = {
     "ix": "ix_%(table_name)s_%(column_0_name)s",
     "uq": "uq_%(table_name)s_%(column_0_N_name)s",
@@ -27,7 +29,10 @@ class Base(DeclarativeBase):
 
 
 def create_engine(database_url: str) -> AsyncEngine:
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    connect_args: dict[str, Any] = {}
+    if database_url.startswith(("postgresql+asyncpg://", "postgresql://")):
+        connect_args = {"server_settings": {"timezone": POSTGRES_TIMEZONE}}
+    engine = create_async_engine(database_url, pool_pre_ping=True, connect_args=connect_args)
     if engine.dialect.name == "sqlite":
 
         @event.listens_for(engine.sync_engine, "connect")

@@ -110,7 +110,14 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
         _item("expired", "已过期", "API Key 已超过有效期。", terminal=True),
     ],
     "file_object": [
-        _item("available", "可用", "文件已入库并可按授权访问。", ("deleting", "quarantined")),
+        _item(
+            "available",
+            "可用",
+            "文件已入库并可按授权访问。",
+            ("renaming", "deleting", "quarantined"),
+        ),
+        _item("renaming", "重命名中", "目标文件已被保留，尚不可读取。", ("available", "rename_failed")),
+        _item("rename_failed", "重命名失败", "重命名需要恢复或人工处理。", ("renaming",)),
         _item("deleting", "删除中", "文件已进入受控删除流程。", ("deleted", "delete_failed")),
         _item(
             "delete_failed",
@@ -151,11 +158,15 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
             "pending",
             "待处理",
             "异步文件操作等待 worker 执行。",
-            ("completed", "partial_failure", "failed"),
+            ("running", "cancelled", "partial_failure", "failed"),
         ),
+        _item("running", "执行中", "worker 正在执行异步文件操作。", ("retry_wait", "succeeded", "partial_failure", "failed", "cancelled")),
+        _item("retry_wait", "等待重试", "临时失败后等待受控重试。", ("running", "failed", "cancelled")),
+        _item("succeeded", "成功", "异步文件操作已验证并完成。", terminal=True),
         _item("completed", "已完成", "异步文件操作已完成。", terminal=True),
-        _item("partial_failure", "部分失败", "操作部分完成，需要人工或重试处理。", terminal=True),
+        _item("partial_failure", "部分失败", "操作部分完成，需要重试或人工处理。", ("running",)),
         _item("failed", "失败", "异步文件操作执行失败。", terminal=True),
+        _item("cancelled", "已取消", "授权或依赖状态改变，操作未执行。", terminal=True),
     ],
     "support_access": [
         _item("pending", "待审批", "支持访问请求等待审批。", ("approved", "revoked", "expired")),

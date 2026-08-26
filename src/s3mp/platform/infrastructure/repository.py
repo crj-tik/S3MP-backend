@@ -109,6 +109,69 @@ class SqlAlchemyPlatformStore:
                 "display_name": user.display_name,
             }
 
+    async def import_platform_accounts(
+        self, *, actor_user_id: UUID, candidates: list[dict[str, object]]
+    ) -> list[dict[str, object]]:
+        """Create only identities that are not already occupied; never overwrite accounts."""
+        results: list[dict[str, object]] = []
+        async with self.session_factory.begin() as session:
+            for candidate in candidates:
+                email = str(candidate["email"])
+                employee_number = str(candidate["employee_number"])
+                conflict = await session.scalar(
+                    select(UserModel.id).where(
+                        UserModel.status != UserStatus.DELETED,
+                        or_(
+                            UserModel.normalized_email == str(candidate["normalized_email"]),
+                            UserModel.normalized_employee_number
+                            == str(candidate["normalized_employee_number"]),
+                        ),
+                    )
+                )
+                if conflict is not None:
+                    results.append(
+                        {
+                            "row": candidate["row"],
+                            "email": email,
+                            "employee_number": employee_number,
+                            "status": "rejected",
+                            "code": "account_already_exists",
+                            "message": "Email or employee number is already in use",
+                        }
+                    )
+                    continue
+                user = UserModel(
+                    email=email,
+                    normalized_email=str(candidate["normalized_email"]),
+                    employee_number=employee_number,
+                    normalized_employee_number=str(candidate["normalized_employee_number"]),
+                    display_name=str(candidate["display_name"]),
+                    status=UserStatus.ACTIVE,
+                    password_hash=str(candidate["password_hash"]),
+                )
+                session.add(user)
+                await session.flush()
+                session.add(
+                    PlatformAuditEventModel(
+                        actor_user_id=actor_user_id,
+                        action="platform.account_imported",
+                        resource_type="user_account",
+                        resource_id=str(user.id),
+                        details={"source": "xlsx", "row": candidate["row"]},
+                    )
+                )
+                results.append(
+                    {
+                        "row": candidate["row"],
+                        "email": email,
+                        "employee_number": employee_number,
+                        "status": "created",
+                        "code": None,
+                        "message": "Account created",
+                    }
+                )
+        return results
+
     async def create_account_session(
         self, user_id: UUID, token_digest: bytes, csrf_digest: bytes, expires_at: datetime
     ) -> UUID:
@@ -477,6 +540,9 @@ class SqlAlchemyPlatformStore:
                 )
             )
             await session.flush()
+            # Lifecycle updates use a server-side onupdate expression. Refresh
+            # before serializing so the response cannot trigger implicit async IO.
+            await session.refresh(user)
             return self._account_summary(user)
 
     async def restore_platform_account(
@@ -518,6 +584,59 @@ class SqlAlchemyPlatformStore:
                 )
             )
             await session.flush()
+            # Lifecycle updates use a server-side onupdate expression. Refresh
+            # before serializing so the response cannot trigger implicit async IO.
+            await session.refresh(user)
+            return self._account_summary(user)
+
+    async def reset_platform_account_password(
+        self, *, user_id: UUID, actor_user_id: UUID, password_hash: str
+    ) -> dict[str, object] | None:
+        """Replace a credential without leaving any existing browser session valid."""
+        from s3mp.platform.infrastructure.models import AccountSessionModel
+
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            user = await session.scalar(
+                select(UserModel)
+                .where(UserModel.id == user_id, UserModel.status == UserStatus.ACTIVE)
+                .with_for_update()
+            )
+            if user is None:
+                return None
+            user.password_hash = password_hash
+            await session.execute(
+                update(AccountSessionModel)
+                .where(
+                    AccountSessionModel.user_id == user_id,
+                    AccountSessionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            await session.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.membership_id.in_(
+                        select(MembershipModel.id).where(MembershipModel.user_id == user_id)
+                    ),
+                    SessionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=now)
+            )
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.account_password_reset",
+                    resource_type="user_account",
+                    resource_id=str(user_id),
+                    details={"sessions_revoked": True},
+                )
+            )
+            await session.flush()
+            # password_hash changes UserModel.updated_at through a server-side
+            # onupdate expression. Refresh it explicitly so serializing the
+            # response cannot trigger implicit async IO (MissingGreenlet).
+            await session.refresh(user)
             return self._account_summary(user)
 
     async def list_platform_roles(
@@ -537,20 +656,51 @@ class SqlAlchemyPlatformStore:
         self, *, limit: int, cursor: UUID | None
     ) -> tuple[list[dict[str, object]], UUID | None]:
         async with self.session_factory() as session:
+            now = datetime.now(UTC)
             statement = (
-                select(PlatformRoleBindingModel, PlatformRoleModel, UserModel)
-                .join(PlatformRoleModel, PlatformRoleModel.id == PlatformRoleBindingModel.role_id)
-                .join(UserModel, UserModel.id == PlatformRoleBindingModel.user_id)
-                .where(UserModel.status != UserStatus.DELETED)
-                .order_by(PlatformRoleBindingModel.id)
+                select(UserModel)
+                .join(PlatformRoleBindingModel, PlatformRoleBindingModel.user_id == UserModel.id)
+                .where(
+                    UserModel.status != UserStatus.DELETED,
+                    PlatformRoleBindingModel.revoked_at.is_(None),
+                    (PlatformRoleBindingModel.expires_at.is_(None))
+                    | (PlatformRoleBindingModel.expires_at > now),
+                )
+                .distinct()
+                .order_by(UserModel.id)
                 .limit(limit + 1)
             )
             if cursor is not None:
-                statement = statement.where(PlatformRoleBindingModel.id > cursor)
-            rows = list((await session.execute(statement)).all())
-            page = rows[:limit]
-            return [self._role_binding_summary(*row) for row in page], (
-                page[-1][0].id if len(rows) > limit else None
+                statement = statement.where(UserModel.id > cursor)
+            users = list((await session.scalars(statement)).all())
+            page = users[:limit]
+            if not page:
+                return [], None
+            role_rows = list(
+                (
+                    await session.execute(
+                        select(PlatformRoleBindingModel, PlatformRoleModel)
+                        .join(
+                            PlatformRoleModel,
+                            PlatformRoleModel.id == PlatformRoleBindingModel.role_id,
+                        )
+                        .where(
+                            PlatformRoleBindingModel.user_id.in_([user.id for user in page]),
+                            PlatformRoleBindingModel.revoked_at.is_(None),
+                            (PlatformRoleBindingModel.expires_at.is_(None))
+                            | (PlatformRoleBindingModel.expires_at > now),
+                        )
+                        .order_by(PlatformRoleModel.name)
+                    )
+                ).all()
+            )
+            by_user: dict[UUID, list[tuple[PlatformRoleBindingModel, PlatformRoleModel]]] = {
+                user.id: [] for user in page
+            }
+            for binding, role in role_rows:
+                by_user[binding.user_id].append((binding, role))
+            return [self._role_assignment_summary(user, by_user[user.id]) for user in page], (
+                page[-1].id if len(users) > limit else None
             )
 
     async def list_support_access(
@@ -952,6 +1102,114 @@ class SqlAlchemyPlatformStore:
                 "expires_at": expires_at.isoformat() if expires_at else None,
             }
 
+    async def replace_platform_role_assignment(
+        self,
+        *,
+        actor_user_id: UUID,
+        user_id: UUID,
+        role_names: Sequence[str],
+        expires_at: datetime | None,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            user = await session.get(UserModel, user_id, with_for_update=True)
+            if user is None or user.status != UserStatus.ACTIVE:
+                raise ValueError("platform role recipient must be an active account")
+            roles = list(
+                (
+                    await session.scalars(
+                        select(PlatformRoleModel).where(PlatformRoleModel.name.in_(role_names))
+                    )
+                ).all()
+            )
+            found_names = {role.name for role in roles}
+            if found_names != set(role_names):
+                raise ValueError("unknown platform role")
+            active = list(
+                (
+                    await session.scalars(
+                        select(PlatformRoleBindingModel)
+                        .where(
+                            PlatformRoleBindingModel.user_id == user_id,
+                            PlatformRoleBindingModel.revoked_at.is_(None),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            for binding in active:
+                binding.revoked_at = now
+            bindings = [
+                PlatformRoleBindingModel(user_id=user_id, role_id=role.id, expires_at=expires_at)
+                for role in roles
+            ]
+            session.add_all(bindings)
+            await session.flush()
+            await session.execute(
+                update(MembershipModel)
+                .where(
+                    MembershipModel.user_id == user_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                )
+                .values(authorization_version=MembershipModel.authorization_version + 1)
+            )
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.role_assignment_updated",
+                    resource_type="platform_role_assignment",
+                    resource_id=str(user_id),
+                    details={
+                        "role_names": sorted(found_names),
+                        "expires_at": str(expires_at),
+                        "replaced_binding_count": len(active),
+                    },
+                )
+            )
+            return self._role_assignment_summary(
+                user, [(binding, role) for binding, role in zip(bindings, roles, strict=True)]
+            )
+
+    async def revoke_platform_role_assignment(
+        self, *, actor_user_id: UUID, user_id: UUID
+    ) -> bool:
+        now = datetime.now(UTC)
+        async with self.session_factory.begin() as session:
+            bindings = list(
+                (
+                    await session.scalars(
+                        select(PlatformRoleBindingModel)
+                        .where(
+                            PlatformRoleBindingModel.user_id == user_id,
+                            PlatformRoleBindingModel.revoked_at.is_(None),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            if not bindings:
+                return False
+            for binding in bindings:
+                binding.revoked_at = now
+            await session.execute(
+                update(MembershipModel)
+                .where(
+                    MembershipModel.user_id == user_id,
+                    MembershipModel.status == MembershipStatus.ACTIVE,
+                )
+                .values(authorization_version=MembershipModel.authorization_version + 1)
+            )
+            session.add(
+                PlatformAuditEventModel(
+                    actor_user_id=actor_user_id,
+                    action="platform.role_assignment_revoked",
+                    resource_type="platform_role_assignment",
+                    resource_id=str(user_id),
+                    details={"revoked_binding_count": len(bindings)},
+                )
+            )
+            return True
+
     async def revoke_platform_role(self, *, actor_user_id: UUID, binding_id: UUID) -> bool:
         async with self.session_factory.begin() as session:
             binding = await session.get(PlatformRoleBindingModel, binding_id, with_for_update=True)
@@ -1183,6 +1441,18 @@ class SqlAlchemyPlatformStore:
             "expires_at": binding.expires_at,
             "revoked_at": binding.revoked_at,
             "created_at": binding.created_at,
+        }
+
+    @staticmethod
+    def _role_assignment_summary(
+        user: UserModel, rows: list[tuple[PlatformRoleBindingModel, PlatformRoleModel]]
+    ) -> dict[str, object]:
+        expiries = {binding.expires_at for binding, _ in rows}
+        return {
+            "user": SqlAlchemyPlatformStore._account_summary(user),
+            "roles": [SqlAlchemyPlatformStore._role_summary(role) for _, role in rows],
+            "expires_at": next(iter(expiries)) if len(expiries) == 1 else None,
+            "created_at": min(binding.created_at for binding, _ in rows),
         }
 
     @staticmethod

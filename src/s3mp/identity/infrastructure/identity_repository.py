@@ -1283,7 +1283,7 @@ class SqlAlchemyIdentityAdminStore:
             {
                 "id": str(principal.id),
                 "type": _enum_value(principal.type),
-                "display_name": principal.display_name,
+                "display_name": _required_display_name(principal.display_name, principal.id),
             }
             if principal
             else None
@@ -1293,6 +1293,13 @@ class SqlAlchemyIdentityAdminStore:
 
 def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
+
+
+def _required_display_name(value: str, principal_id: UUID) -> str:
+    display_name = value.strip()
+    if not display_name:
+        raise RuntimeError(f"principal {principal_id} has an empty display name")
+    return display_name
 
 
 def _time(value: datetime | None) -> str | None:

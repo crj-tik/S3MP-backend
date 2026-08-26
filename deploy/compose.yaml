@@ -1,13 +1,15 @@
-name: S3MP-backend
+name: s3mp
 
 
-# Default local integration topology: API and worker reuse the PostgreSQL,
-# Redis and MinIO containers already running on the Windows host. Docker
-# Desktop resolves localhost from these application containers.
+# Default local integration topology. PostgreSQL and Redis are managed by this
+# Compose project and persist in named volumes. MinIO/S3 remains external so
+# that this stack cannot create or modify an existing object-storage bucket.
 x-s3mp-runtime-environment: &s3mp-runtime-environment
   S3MP_ENVIRONMENT: development
-  S3MP_DATABASE_URL: ${S3MP_DOCKER_DATABASE_URL:?set S3MP_DOCKER_DATABASE_URL in deploy/.env}
-  S3MP_REDIS_URL: ${S3MP_DOCKER_REDIS_URL:?set S3MP_DOCKER_REDIS_URL in deploy/.env}
+  # These values are also the actual service passwords, so use URL-safe
+  # characters only (for example letters, digits, '.', '_' and '-').
+  S3MP_DATABASE_URL: postgresql+asyncpg://s3mp:${S3MP_POSTGRES_PASSWORD:?set S3MP_POSTGRES_PASSWORD in deploy/.env}@postgres:5432/s3mp
+  S3MP_REDIS_URL: redis://:${S3MP_REDIS_PASSWORD:?set S3MP_REDIS_PASSWORD in deploy/.env}@redis:6379/0
   S3MP_S3_ENDPOINT: ${S3MP_DOCKER_S3_ENDPOINT:-http://host.docker.internal:9000}
   S3MP_S3_REGION: ${S3MP_S3_REGION:-us-east-1}
   S3MP_S3_PATH_STYLE: ${S3MP_S3_PATH_STYLE:-true}
@@ -19,6 +21,18 @@ x-s3mp-runtime-environment: &s3mp-runtime-environment
   S3MP_API_KEY_PEPPER_VERSION: ${S3MP_API_KEY_PEPPER_VERSION:-1}
 
 services:
+  migrate:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment: *s3mp-runtime-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   api:
     build:
       context: ..
@@ -27,12 +41,10 @@ services:
       <<: *s3mp-runtime-environment
       S3MP_LOG_LEVEL: INFO
       S3MP_READINESS_TIMEOUT_SECONDS: "2"
-      S3MP_BOOTSTRAP_ADMIN_ENABLED: ${S3MP_BOOTSTRAP_ADMIN_ENABLED:-false}
-      S3MP_BOOTSTRAP_ADMIN_EMAIL: ${S3MP_BOOTSTRAP_ADMIN_EMAIL:-}
-      S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER: ${S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER:-}
-      S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME: ${S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME:-}
-      S3MP_BOOTSTRAP_ADMIN_PASSWORD: ${S3MP_BOOTSTRAP_ADMIN_PASSWORD:-}
     ports: ["19101:8000"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
 
   worker:
     build:
@@ -51,6 +63,9 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
 
   platform-scheduler:
     build:
@@ -65,3 +80,55 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  bootstrap:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    entrypoint: []
+    command: ["python", "-m", "scripts.ensure_platform_admin"]
+    environment:
+      <<: *s3mp-runtime-environment
+      S3MP_BOOTSTRAP_ADMIN_ENABLED: ${S3MP_BOOTSTRAP_ADMIN_ENABLED:-false}
+      S3MP_BOOTSTRAP_ADMIN_EMAIL: ${S3MP_BOOTSTRAP_ADMIN_EMAIL:-}
+      S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER: ${S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER:-}
+      S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME: ${S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME:-}
+      S3MP_BOOTSTRAP_ADMIN_PASSWORD: ${S3MP_BOOTSTRAP_ADMIN_PASSWORD:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: s3mp
+      POSTGRES_USER: s3mp
+      POSTGRES_PASSWORD: ${S3MP_POSTGRES_PASSWORD:?set S3MP_POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init/00-database-owner.sql:/docker-entrypoint-initdb.d/00-database-owner.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U s3mp -d s3mp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    environment:
+      S3MP_REDIS_PASSWORD: ${S3MP_REDIS_PASSWORD:?set S3MP_REDIS_PASSWORD in deploy/.env}
+    command: ["/bin/sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$${S3MP_REDIS_PASSWORD}\""]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${S3MP_REDIS_PASSWORD}\" ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  postgres-data:
+  redis-data:

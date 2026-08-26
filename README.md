@@ -16,12 +16,11 @@ uv run python scripts/check_openapi.py
 uv run alembic upgrade head --sql
 ```
 
-For local integration, `deploy/compose.yaml` starts only the API and worker and
-reuses the existing PostgreSQL, Redis, and MinIO containers. Copy
-`deploy/.env.example` to `deploy/.env`, configure the Docker-host URLs and
+For local integration, `deploy/compose.yaml` starts PostgreSQL, Redis, the
+database migration job, API, worker, and scheduler as one isolated stack.
+PostgreSQL and Redis use named Docker volumes and are not published to host
+ports. Copy `deploy/.env.example` to `deploy/.env`, configure passwords and S3
 credentials there, then run `docker compose -f deploy/compose.yaml up --build`.
-The optional `deploy/compose.managed-infra.yaml` retains the self-managed
-PostgreSQL/Redis topology for a future isolated deployment.
 
 Local integration configuration is supplied through untracked `deploy/.env`; real
 credentials must not be committed.

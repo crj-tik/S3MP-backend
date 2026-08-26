@@ -5,8 +5,8 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import pool, text
+from sqlalchemy.ext.asyncio import AsyncConnection, async_engine_from_config
 
 from s3mp.applications.infrastructure import models as application_models  # noqa: F401
 from s3mp.audit.infrastructure import models as audit_models  # noqa: F401
@@ -32,6 +32,24 @@ if database_url:
 target_metadata = Base.metadata
 
 
+async def ensure_version_table_capacity(connection: AsyncConnection) -> None:
+    """Keep Alembic revision identifiers larger than its 32-character default."""
+    result = await connection.execute(text("SELECT to_regclass('public.alembic_version')"))
+    if result.scalar() is None:
+        await connection.execute(
+            text(
+                "CREATE TABLE alembic_version ("
+                "version_num VARCHAR(128) NOT NULL, "
+                "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)"
+                ")"
+            )
+        )
+    else:
+        await connection.execute(
+            text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
+        )
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=config.get_main_option("sqlalchemy.url"),
@@ -50,6 +68,8 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
+        async with connection.begin():
+            await ensure_version_table_capacity(connection)
         await connection.run_sync(
             lambda sync_connection: context.configure(
                 connection=sync_connection, target_metadata=target_metadata

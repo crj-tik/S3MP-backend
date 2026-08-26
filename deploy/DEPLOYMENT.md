@@ -84,18 +84,13 @@ uv sync
 
 # 2. 准备本地联调配置
 cp deploy/.env.example deploy/.env
-# 在 deploy/.env 中填入现有 PostgreSQL、Redis、MinIO 的连接信息与 API key pepper
+# 在 deploy/.env 中填入 PostgreSQL/Redis 密码、MinIO 凭据与 API key pepper
 
-# 3. 确认已运行的 PostgreSQL、Redis 与 S3 兼容对象存储
-# deploy/compose.yaml 默认复用宿主机上已经部署的基础设施，
-# 连接地址在 deploy/.env 的 S3MP_DOCKER_* 变量中配置。
-# 如需由本项目管理基础设施，使用 deploy/compose.managed-infra.yaml。
+# 3. 确认外部 S3 兼容对象存储已运行，目标 Bucket 已创建。
+# compose.yaml 会自行启动 PostgreSQL、Redis 与迁移服务，并使用命名卷持久化。
 
-# 4. 运行数据库迁移
-uv run alembic upgrade head
-
-# 5. 启动 API
-uv run uvicorn s3mp.main:app --host 0.0.0.0 --port 8000 --reload
+# 4. 启动完整本地栈；迁移在 API、worker、scheduler 启动前自动执行。
+docker compose -f deploy/compose.yaml up -d --build
 ```
 
 ### 3.2.1 共享 S3 profile
@@ -267,27 +262,21 @@ uv run alembic upgrade head --sql
 
 | 组件 | 默认端口 | 用途 |
 |------|----------|------|
-| PostgreSQL | `platform-infra-postgres-1:18110` | 主数据库 |
-| Redis | `platform-infra-redis-1:18113` | 限流、缓存、幂等、worker 协调 |
+| PostgreSQL | Compose 内网 `postgres:5432` | 主数据库，使用 `postgres-data` 卷 |
+| Redis | Compose 内网 `redis:6379` | 限流、缓存、幂等、worker 协调，使用 `redis-data` 卷 |
 | MinIO | `localhost:9000` (独立) | S3 兼容对象存储 |
 
 ### 7.2 启动顺序
 
 ```bash
-# 1. 确保 PostgreSQL 和 Redis 已运行
-docker ps --filter "name=platform-infra"
-
-# 2. 启动独立 MinIO（如需要文件功能）
+# 1. 启动独立 MinIO（如需要文件功能）
 docker compose -f local-s3/compose.yaml up -d
 
-# 3. 运行数据库迁移
-uv run alembic upgrade head
+# 2. 启动 PostgreSQL、Redis、迁移、API、worker 与 scheduler
+docker compose -f deploy/compose.yaml up -d --build
 
-# 4. 启动 API
-uv run uvicorn s3mp.main:app --host 0.0.0.0 --port 8000
-
-# 5. 验证就绪
-curl http://localhost:8000/health/ready
+# 3. 验证就绪
+curl http://localhost:19101/health/ready
 # → {"status":"ok","checks":{"database":"ok","redis":"ok","object_storage":"ok"}}
 ```
 

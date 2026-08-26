@@ -1,6 +1,7 @@
 # Linux Docker 生产部署
 
-本部署方式在容器中运行前端构建、Python/uv 后端运行时和所有基础服务。Linux
+本部署方式构建一个 `s3mp` 应用镜像：其中包含前端构建产物、Nginx 和 Python/uv 后端
+运行时。迁移、初始化、API、worker 与 scheduler 复用这个相同镜像；Linux
 宿主机只需 Docker Engine、Docker Compose plugin、Git、`curl` 与 `openssl`；不需要
 安装 nvm、Node、npm、Python 或 uv。
 
@@ -20,39 +21,53 @@ docker compose version
 
 ## 2. 配置环境与密钥
 
-将配置和密钥放在仓库外：
+将全部配置和密钥放在仓库外的一个文件中：
 
 ```bash
-sudo install -d -m 700 /opt/s3mp/secrets
 sudo install -m 600 deploy/.env.production.example /opt/s3mp/s3mp.env
 sudoedit /opt/s3mp/s3mp.env
-sudoedit /opt/s3mp/secrets/postgres_password
-sudoedit /opt/s3mp/secrets/redis_password
-sudoedit /opt/s3mp/secrets/database_url
-sudoedit /opt/s3mp/secrets/redis_url
-sudoedit /opt/s3mp/secrets/s3_access_key
-sudoedit /opt/s3mp/secrets/s3_secret_key
-sudo sh -c 'openssl rand -base64 48 > /opt/s3mp/secrets/api_key_pepper'
-sudo chmod 600 /opt/s3mp/secrets/* /opt/s3mp/s3mp.env
+sudo chmod 600 /opt/s3mp/s3mp.env
+openssl rand -base64 48  # 将输出填入 S3MP_API_KEY_PEPPER
 ```
 
 在 `/opt/s3mp/s3mp.env` 中填入线上 S3 的 endpoint、region、path-style 配置、已创建的
-Bucket 名称及其容量；各密钥文件的内容说明见 [secrets.example/README.md](secrets.example/README.md)。
-生产 API 拒绝将数据库、Redis、S3 与 API Key pepper 直接写为环境变量，必须使用这些文件引用。
+Bucket 名称及其容量，以及 PostgreSQL、Redis、S3、API key pepper 和首个管理员的密码。
+`S3MP_POSTGRES_PASSWORD` 与 `S3MP_REDIS_PASSWORD` 写原始密码；连接 URL 中同一个密码必须
+URL 编码。不要将该文件提交到 Git、复制到截图或放入镜像构建上下文。
 
 ## 3. 首次部署
 
-在后端仓库根目录执行：
+在后端仓库根目录执行。若在服务器上构建，使用第一组命令；若在本机或 CI 构建并将唯一
+应用镜像上传到服务器，使用第二组命令。PostgreSQL 和 Redis 镜像仍会由 Compose 单独拉取，
+它们不是业务应用镜像的一部分。
 
 ```bash
+# 服务器构建
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml build
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml up -d
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml ps
-curl -fsS http://127.0.0.1:8080/api/v1/health/ready
+curl -fsS http://127.0.0.1:8080/health/ready
 ```
 
-`migrate` 是一次性服务：它成功完成后 API、worker 和 scheduler 才会启动。线上 S3 的
-Bucket 与最小权限应用凭据须在部署前由存储服务管理员创建好。
+```bash
+# 本机或 CI 构建一个应用镜像，然后传输至服务器（不含任何数据库数据）
+docker buildx build --load \
+  --build-context frontend=../S3MP-frontend \
+  -f deploy/Dockerfile.production \
+  -t s3mp:20260824 .
+docker save -o s3mp-20260824.tar s3mp:20260824
+
+# 服务器：上传 tar 后导入，并在 /opt/s3mp/s3mp.env 中设置
+# S3MP_APP_IMAGE=s3mp:20260824
+docker load -i s3mp-20260824.tar
+docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml up -d
+```
+
+`api` 是唯一对外发布 HTTP 端口的应用容器：镜像内的 Nginx 提供前端静态资源，并把
+`/api/` 转给同一容器中的后端进程。`migrate` 是一次性服务：它成功完成后，`bootstrap` 会对齐基础平台角色，并在首次部署时
+创建配置的平台管理员；随后 API、worker 和 scheduler 才会启动。该流程只初始化架构和
+基础数据，不导入测试或业务数据。线上 S3 的 Bucket 与最小权限应用凭据须在部署前由存储
+服务管理员创建好。
 
 部署后，在公网入口前配置 HTTPS 终止，例如由已有的 Nginx、Caddy 或负载均衡器把
 `https://s3mp.example.com` 转发到 `127.0.0.1:8080`。前端通过同源的 `/api/` 调用 API，
@@ -63,7 +78,7 @@ Bucket 与最小权限应用凭据须在部署前由存储服务管理员创建�
 ```bash
 # 查看服务状态与日志
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml ps
-docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml logs -f api worker
+docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml logs -f api worker file-retention-scheduler
 
 # 升级：先拉取指定版本，再重建并启动；迁移由 migrate 服务自动执行
 git checkout <release-tag>
@@ -74,6 +89,12 @@ docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml d
 ```
 
 禁止使用 `down -v` 作为常规停止或回滚命令；它会删除 PostgreSQL 和 Redis 数据卷。
+
+## 4.1 文件软删除保留调度
+
+`file-retention-scheduler` 每天北京时间凌晨处理到期文件。Redis 的 `s3mp:file-retention:due` ZSET 仅是调度索引；Compose 使用持久化 `redis-data` 卷，并启用 AOF（`appendfsync everysec`）。PostgreSQL 保留软删除状态、到期时间和调度 Outbox，因此 Redis 重启或短暂丢失写入后会自动补回索引。
+
+排障时查看 `file-retention-scheduler` 日志中的 `dispatched`、`reconciled`、`purged` 指标。不要手动清空该 ZSET；即使误清空，系统会补偿，但会增加恢复时间。
 
 ## 5. 备份与回滚
 

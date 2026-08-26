@@ -1,37 +1,27 @@
-name: s3mp-production
+name: s3mp
 
 x-runtime-environment: &runtime-environment
   S3MP_ENVIRONMENT: production
   S3MP_LOG_LEVEL: ${S3MP_LOG_LEVEL:-INFO}
-  S3MP_DATABASE_URL_FILE: /run/secrets/database_url
-  S3MP_REDIS_URL_FILE: /run/secrets/redis_url
+  S3MP_DATABASE_URL: ${S3MP_DATABASE_URL:?set S3MP_DATABASE_URL}
+  S3MP_REDIS_URL: ${S3MP_REDIS_URL:?set S3MP_REDIS_URL}
   S3MP_S3_ENDPOINT: ${S3MP_S3_ENDPOINT:?set S3MP_S3_ENDPOINT}
   S3MP_S3_REGION: ${S3MP_S3_REGION:-us-east-1}
   S3MP_S3_PATH_STYLE: ${S3MP_S3_PATH_STYLE:-false}
   S3MP_S3_BUCKET: ${S3MP_S3_BUCKET:?set S3MP_S3_BUCKET}
   S3MP_S3_BUCKET_CAPACITY_GIB: ${S3MP_S3_BUCKET_CAPACITY_GIB:?set S3MP_S3_BUCKET_CAPACITY_GIB}
-  S3MP_S3_ACCESS_KEY_FILE: /run/secrets/s3_access_key
-  S3MP_S3_SECRET_KEY_FILE: /run/secrets/s3_secret_key
-  S3MP_API_KEY_PEPPER_FILE: /run/secrets/api_key_pepper
+  S3MP_S3_ACCESS_KEY: ${S3MP_S3_ACCESS_KEY:?set S3MP_S3_ACCESS_KEY}
+  S3MP_S3_SECRET_KEY: ${S3MP_S3_SECRET_KEY:?set S3MP_S3_SECRET_KEY}
+  S3MP_API_KEY_PEPPER: ${S3MP_API_KEY_PEPPER:?set S3MP_API_KEY_PEPPER}
   S3MP_API_KEY_PEPPER_VERSION: ${S3MP_API_KEY_PEPPER_VERSION:-1}
   S3MP_BROWSER_COOKIE_SECURE: "true"
   S3MP_READINESS_TIMEOUT_SECONDS: "10"
 
-x-runtime-secrets: &runtime-secrets
-  - database_url
-  - redis_url
-  - s3_access_key
-  - s3_secret_key
-  - api_key_pepper
-
 services:
   migrate:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
     command: ["python", "-m", "alembic", "upgrade", "head"]
     environment: *runtime-environment
-    secrets: *runtime-secrets
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,25 +29,32 @@ services:
         condition: service_healthy
 
   api:
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: deploy/Dockerfile.production
+      additional_contexts:
+        frontend: ../../S3MP-frontend
+      args:
+        VITE_APP_TITLE: ${VITE_APP_TITLE:-S3MP 管理平台}
+        VITE_API_MODE: real
+        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     environment: *runtime-environment
-    secrets: *runtime-secrets
+    ports:
+      - "${S3MP_HTTP_PORT:-31701}:80"
     depends_on:
-      migrate:
+      bootstrap:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health/ready', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5)"]
       interval: 15s
       timeout: 8s
       retries: 10
       start_period: 20s
 
   worker:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
     command: ["python", "-m", "s3mp.files.worker"]
     environment:
       <<: *runtime-environment
@@ -66,48 +63,55 @@ services:
       S3MP_WORKER_MAX_ATTEMPTS: "5"
       S3MP_WORKER_LEASE_SECONDS: "60"
       S3MP_WORKER_RETENTION_DAYS: "30"
-    secrets: *runtime-secrets
     depends_on:
-      migrate:
+      bootstrap:
         condition: service_completed_successfully
 
   platform-scheduler:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
     command: ["python", "-m", "s3mp.platform.scheduler"]
     environment:
       <<: *runtime-environment
       S3MP_SUPPORT_EXPIRY_INTERVAL_SECONDS: "60"
-    secrets: *runtime-secrets
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  file-retention-scheduler:
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
+    command: ["python", "-m", "s3mp.files.retention_scheduler"]
+    environment:
+      <<: *runtime-environment
+      S3MP_WORKER_BATCH_SIZE: "100"
+      S3MP_WORKER_MAX_ATTEMPTS: "5"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  bootstrap:
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
+    entrypoint: []
+    command: ["python", "-m", "scripts.ensure_platform_admin"]
+    environment:
+      <<: *runtime-environment
+      S3MP_BOOTSTRAP_ADMIN_ENABLED: ${S3MP_BOOTSTRAP_ADMIN_ENABLED:-true}
+      S3MP_BOOTSTRAP_ADMIN_EMAIL: ${S3MP_BOOTSTRAP_ADMIN_EMAIL:-}
+      S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER: ${S3MP_BOOTSTRAP_ADMIN_EMPLOYEE_NUMBER:-}
+      S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME: ${S3MP_BOOTSTRAP_ADMIN_DISPLAY_NAME:-}
+      S3MP_BOOTSTRAP_ADMIN_PASSWORD: ${S3MP_BOOTSTRAP_ADMIN_PASSWORD:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
 
-  frontend:
-    build:
-      context: ../../S3MP-frontend
-      dockerfile: Dockerfile.production
-      args:
-        VITE_APP_TITLE: ${VITE_APP_TITLE:-S3MP 管理平台}
-        VITE_API_MODE: real
-        VITE_API_BASE_URL: ""
-    ports:
-      - "${S3MP_HTTP_PORT:-8080}:80"
-    depends_on:
-      api:
-        condition: service_healthy
-
   postgres:
-    image: postgres:17-alpine
+    image: postgres:15-alpine
     environment:
       POSTGRES_DB: s3mp
       POSTGRES_USER: s3mp
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    secrets:
-      - postgres_password
+      POSTGRES_PASSWORD: ${S3MP_POSTGRES_PASSWORD:?set S3MP_POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init/00-database-owner.sql:/docker-entrypoint-initdb.d/00-database-owner.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U s3mp -d s3mp"]
       interval: 5s
@@ -116,13 +120,13 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["/bin/sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$$(cat /run/secrets/redis_password)\""]
-    secrets:
-      - redis_password
+    environment:
+      S3MP_REDIS_PASSWORD: ${S3MP_REDIS_PASSWORD:?set S3MP_REDIS_PASSWORD}
+    command: ["/bin/sh", "-ec", "exec redis-server --appendonly yes --appendfsync everysec --aof-use-rdb-preamble yes --requirepass \"$${S3MP_REDIS_PASSWORD}\""]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${S3MP_REDIS_PASSWORD}\" ping"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -130,19 +134,3 @@ services:
 volumes:
   postgres-data:
   redis-data:
-
-secrets:
-  database_url:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/database_url
-  redis_url:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/redis_url
-  s3_access_key:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/s3_access_key
-  s3_secret_key:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/s3_secret_key
-  api_key_pepper:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/api_key_pepper
-  postgres_password:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/postgres_password
-  redis_password:
-    file: ${S3MP_SECRETS_DIR:?set S3MP_SECRETS_DIR}/redis_password

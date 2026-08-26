@@ -1,32 +1,35 @@
 # 本地容器联调
 
-默认 `compose.yaml` 启动 S3MP 的 API、worker 和 platform-scheduler，复用已在 Windows 主机
-运行的 PostgreSQL、Redis 和 MinIO，不会创建新的数据库、Redis 卷或 MinIO
-实例。Docker Desktop 容器通过 `host.docker.internal` 访问宿主机上的现有服务。
+默认 `compose.yaml` 启动 PostgreSQL、Redis、一次性数据库迁移、S3MP API、worker 和
+platform-scheduler。PostgreSQL 和 Redis 仅在 Compose 内网暴露，并分别使用命名卷
+`postgres-data` 与 `redis-data` 持久化；不会占用宿主机的 `5432` 或 `6379` 端口。
+MinIO/S3 仍由外部服务提供，Compose 不会创建或管理 Bucket。
 
 ## 前置条件
 
-- PostgreSQL 已在主机 `18110` 端口运行。
-- Redis 已在主机 `18113` 端口运行。
 - MinIO 已在主机 `9000` 端口运行，目标 bucket 已存在，且应用凭据有读写权限。
 
-从 `deploy/.env.example` 创建本地、未跟踪的 `deploy/.env`，填入现有服务的
-连接信息、MinIO 应用凭据和至少 32 字节的 `S3MP_API_KEY_PEPPER`。不要将该文件
-提交到 Git。
+从 `deploy/.env.example` 创建本地、未跟踪的 `deploy/.env`，填入 PostgreSQL/Redis
+密码、MinIO 应用凭据和至少 32 字节的 `S3MP_API_KEY_PEPPER`。不要将该文件提交到 Git。
+密码会同时作为服务密码和连接 URL 的一部分，使用字母、数字、`.`、`_`、`-` 等 URL-safe
+字符；不要在此处写 URL 编码后的值。
 
 ## 初始化与启动
 
 ```powershell
-docker compose -f deploy/compose.yaml build
-docker compose -f deploy/compose.yaml run --rm api python -m alembic upgrade head
-docker compose -f deploy/compose.yaml up -d api worker platform-scheduler
+docker compose -f deploy/compose.yaml up -d --build
 docker compose -f deploy/compose.yaml ps
 Invoke-WebRequest http://localhost:19101/health/ready | Select-Object -Expand Content
 ```
 
-迁移会创建或升级 PostgreSQL 的表、字段、索引和权限基线；不会清除既有数据。
-Redis 不需要 schema 初始化。MinIO bucket 不由该 Compose 自动创建，以避免误
-操作现有对象存储；就绪检查会验证 bucket 与应用凭据。
+首次启动时 PostgreSQL 会初始化 `s3mp` 数据库与 `s3mp` 用户；`migrate` 服务会创建或
+升级表、字段、索引和权限基线。后续启动会复用已有卷，不会清除数据。Redis 使用
+`requirepass` 与 AOF 持久化，Redis 不需要 schema 初始化。MinIO bucket 不由该 Compose
+自动创建，以避免误操作现有对象存储；就绪检查会验证 bucket 与应用凭据。
+
+`bootstrap` 服务在 `migrate` 成功后执行。它始终对齐内置平台角色；只有
+`S3MP_BOOTSTRAP_ADMIN_ENABLED=true` 时，才会在不存在活动平台管理员时创建配置的首个
+管理员。该流程不会插入测试数据，也不会覆盖已有管理员。
 
 ## 共享 S3 Profile
 
@@ -47,13 +50,3 @@ Bucket、凭据或物理对象前缀：新建逻辑存储空间时只绑定应�
 
 首个平台管理员须在迁移后通过受控脚本单独创建。支持访问到期回收须由外部调度
 `platform-scheduler` 会每 60 秒执行一次支持访问过期回收；发生临时故障时会记录结构化日志并在下一轮重试。仍可使用 `python scripts/expire_support_access.py` 手工执行一次回收。
-
-## 自管基础设施模式
-
-未来需要独立 PostgreSQL 与 Redis 时，使用：
-
-```powershell
-docker compose -f deploy/compose.managed-infra.yaml up -d --build
-```
-
-该模式会创建独立的 Compose 卷，仍不会启动或初始化 MinIO。

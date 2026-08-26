@@ -14,17 +14,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from s3mp.common.timezone import to_china_time
+
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def format_datetime(value: datetime | None) -> str | None:
-    return value.strftime(DATETIME_FORMAT) if value is not None else None
+    return to_china_time(value).strftime(DATETIME_FORMAT) if value is not None else None
 
 
 def _format_json_times(value: Any, key: str | None = None) -> Any:
     if isinstance(value, str) and key and (key.endswith("_at") or key in {"timestamp"}):
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime(DATETIME_FORMAT)
+            return format_datetime(datetime.fromisoformat(value.replace("Z", "+00:00")))
         except ValueError:
             return value
     if isinstance(value, dict):
