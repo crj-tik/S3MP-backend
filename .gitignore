@@ -27,3 +27,4 @@ tests/
 /.github/
 /.codex/
 /.claude/
+*.tar
