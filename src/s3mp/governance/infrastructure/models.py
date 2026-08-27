@@ -167,3 +167,57 @@ class QuotaAdjustmentModel(Base):
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     details: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TenantStorageSummaryModel(Base):
+    __tablename__ = "tenant_storage_summary"
+    __table_args__ = (ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),)
+
+    tenant_id: Mapped[UUID] = mapped_column(primary_key=True)
+    active_file_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    occupied_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    pending_cleanup_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ApplicationApiMetricModel(Base):
+    __tablename__ = "application_api_metric"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "application_id", "operation", "window_start"),
+        Index("ix_application_api_metric_tenant_window", "tenant_id", "window_start"),
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "application_id"],
+            ["application.tenant_id", "application.id"],
+            ondelete="CASCADE",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID] = mapped_column(nullable=False)
+    operation: Mapped[str] = mapped_column(String(256), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    total_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    success_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    client_error_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    server_error_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+
+class ApplicationApiErrorModel(Base):
+    __tablename__ = "application_api_error"
+    __table_args__ = (
+        Index("ix_application_api_error_tenant_occurred", "tenant_id", "occurred_at"),
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "application_id"],
+            ["application.tenant_id", "application.id"],
+            ondelete="CASCADE",
+        ),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID] = mapped_column(nullable=False)
+    operation: Mapped[str] = mapped_column(String(256), nullable=False)
+    status_code: Mapped[int] = mapped_column(nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

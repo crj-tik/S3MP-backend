@@ -23,6 +23,7 @@ from s3mp.applications.domain.credentials import ApiKeyCredentialService
 from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.authorization.api.router import router as authorization_router
 from s3mp.authorization.application.management_service import AuthorizationManagementService
+from s3mp.common.api_observability import ApiUsageObservationMiddleware
 from s3mp.common.browser_security import BrowserCSRFMiddleware
 from s3mp.common.config import Settings, get_settings
 from s3mp.common.database import create_engine, create_session_factory
@@ -31,8 +32,8 @@ from s3mp.common.health import router as health_router
 from s3mp.common.logging import configure_logging
 from s3mp.common.middleware import RequestIDMiddleware
 from s3mp.common.openapi_documentation import document_openapi
-from s3mp.common.timezone_middleware import ChinaTimeInputMiddleware
 from s3mp.common.redis import create_redis
+from s3mp.common.timezone_middleware import ChinaTimeInputMiddleware
 from s3mp.files.api.router import router as files_router
 from s3mp.files.application.file_service import FileApplicationService
 from s3mp.files.infrastructure.authorization_repository import (
@@ -49,6 +50,7 @@ from s3mp.governance.application.governance_service import (
     QuotaService,
 )
 from s3mp.governance.application.reconciliation_service import QuotaReconciliationService
+from s3mp.governance.infrastructure.dashboard_repository import SqlAlchemyDashboardStore
 from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, SqlAlchemyQuotaStore
 from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
@@ -274,6 +276,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             work_notifier=RedisWorkSignal(redis) if redis is not None else None,
         )
         quota_store: Any = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
+        app.state.dashboard_store = (
+            SqlAlchemyDashboardStore(session_factory) if session_factory else _store
+        )
         audit_store: Any = SqlAlchemyAuditStore(session_factory) if session_factory else _store
         app.state.quota_service = QuotaService(
             quota_store, getattr(app.state, "authorization_management", None)
@@ -323,6 +328,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_middleware(AuthMiddleware)
     app.add_middleware(BrowserCSRFMiddleware)
+    app.add_middleware(ApiUsageObservationMiddleware)
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(identity_router)

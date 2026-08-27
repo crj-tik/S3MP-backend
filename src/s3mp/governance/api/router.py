@@ -118,6 +118,7 @@ class QuotaResponse(BaseModel):
 class AuditActor(BaseModel):
     principal_id: str
     principal_type: str
+    display_name: str | None = None
 
 
 class AuditEventResponse(BaseModel):
@@ -144,6 +145,37 @@ class QuotaPage(BaseModel):
 class AuditEventPage(BaseModel):
     items: list[AuditEventResponse]
     next_cursor: str | None = None
+
+
+class DashboardOverviewResponse(BaseModel):
+    application_count: int
+    storage: dict[str, Any] | None = None
+    api_usage: dict[str, Any]
+
+
+class ApiUsageErrorPage(BaseModel):
+    items: list["ApiUsageErrorResponse"]
+
+
+class ApiUsageMetricResponse(BaseModel):
+    application_id: str = Field(description="发生调用的第三方应用稳定标识。")
+    operation: str = Field(description="稳定的接口 operationId，不包含请求路径参数。")
+    total_count: int = Field(description="筛选时间段内的调用总数。")
+    success_count: int = Field(description="筛选时间段内状态码小于 400 的调用数。")
+    client_error_count: int = Field(description="筛选时间段内 4xx 调用数。")
+    server_error_count: int = Field(description="筛选时间段内 5xx 调用数。")
+
+
+class ApiUsageMetricPage(BaseModel):
+    items: list[ApiUsageMetricResponse]
+
+
+class ApiUsageErrorResponse(BaseModel):
+    application_id: str = Field(description="发生异常请求的第三方应用稳定标识。")
+    operation: str = Field(description="稳定的接口 operationId，不包含请求路径参数。")
+    status_code: int = Field(description="最终 HTTP 状态码。")
+    request_id: str = Field(description="用于支持排障的请求标识，不包含异常详情。")
+    occurred_at: datetime = Field(description="异常请求完成的时间。")
 
 
 class QuotaReconciliationMode(StrEnum):
@@ -251,6 +283,81 @@ def _audit_svc(request: Request) -> Any:
     if svc is None:
         raise ApiError("internal_error", "Audit service is not configured", status_code=500)
     return svc
+
+
+def _dashboard_store(request: Request) -> Any:
+    store = getattr(request.app.state, "dashboard_store", None)
+    if store is None:
+        raise ApiError("internal_error", "Dashboard store is not configured", status_code=500)
+    return store
+
+
+@router.get(
+    "/dashboard/api-metrics",
+    response_model=ApiUsageMetricPage,
+    operation_id="list_dashboard_api_metrics",
+)
+async def dashboard_api_metrics(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("list_dashboard_api_metrics")],
+    occurred_from: Annotated[datetime | None, Query(description="统计开始时间，含该时刻。")] = None,
+    occurred_to: Annotated[datetime | None, Query(description="统计结束时间，不含该时刻。")] = None,
+    application_id: Annotated[UUID | None, Query(description="按第三方应用筛选。")] = None,
+    operation: Annotated[
+        str | None, Query(max_length=256, description="按接口 operationId 筛选。")
+    ] = None,
+    limit: int = Query(default=100, ge=1, le=200, description="单页最大聚合行数。"),
+    offset: int = Query(default=0, ge=0, description="聚合行偏移量。"),
+) -> ApiUsageMetricPage:
+    items = await _dashboard_store(request).list_api_metrics(
+        context.tenant_id,
+        occurred_from=occurred_from,
+        occurred_to=occurred_to,
+        application_id=application_id,
+        operation=operation,
+        limit=limit,
+        offset=offset,
+    )
+    return ApiUsageMetricPage.model_validate({"items": items})
+
+
+@router.get(
+    "/dashboard/overview",
+    response_model=DashboardOverviewResponse,
+    operation_id="get_dashboard_overview",
+)
+async def dashboard_overview(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("get_dashboard_overview")],
+) -> DashboardOverviewResponse:
+    return DashboardOverviewResponse.model_validate(
+        await _dashboard_store(request).overview(context.tenant_id)
+    )
+
+
+@router.get(
+    "/dashboard/api-errors",
+    response_model=ApiUsageErrorPage,
+    operation_id="list_dashboard_api_errors",
+)
+async def dashboard_api_errors(
+    request: Request,
+    context: Annotated[PrincipalContext, management_permission("list_dashboard_api_errors")],
+    occurred_from: Annotated[datetime | None, Query(description="异常开始时间，含该时刻。")] = None,
+    occurred_to: Annotated[datetime | None, Query(description="异常结束时间，不含该时刻。")] = None,
+    application_id: Annotated[UUID | None, Query(description="按第三方应用筛选。")] = None,
+    operation: Annotated[
+        str | None, Query(max_length=256, description="按接口 operationId 筛选。")
+    ] = None,
+    limit: int = Query(default=100, ge=1, le=200, description="单页最大异常行数。"),
+    offset: int = Query(default=0, ge=0, description="异常行偏移量。"),
+) -> ApiUsageErrorPage:
+    return ApiUsageErrorPage.model_validate(
+        {"items": await _dashboard_store(request).list_api_errors(
+            context.tenant_id, occurred_from=occurred_from, occurred_to=occurred_to,
+            application_id=application_id, operation=operation, limit=limit, offset=offset,
+        )}
+    )
 
 
 # ── Quotas ────────────────────────────────────────────────────────────────────

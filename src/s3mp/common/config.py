@@ -2,6 +2,7 @@
 
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -20,7 +21,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     database_url: SecretStr | None = None
+    database_url_file: Path | None = None
     redis_url: SecretStr | None = None
+    redis_url_file: Path | None = None
     s3_endpoint: str | None = None
     s3_region: str = "us-east-1"
     s3_path_style: bool = True
@@ -29,6 +32,7 @@ class Settings(BaseSettings):
     s3_access_key: SecretStr | None = None
     s3_secret_key: SecretStr | None = None
     api_key_pepper: SecretStr | None = None
+    api_key_pepper_file: Path | None = None
     api_key_pepper_version: int = Field(default=1, ge=1)
     readiness_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     worker_poll_seconds: float = Field(default=5.0, gt=0, le=300)
@@ -36,6 +40,7 @@ class Settings(BaseSettings):
     worker_max_attempts: int = Field(default=5, ge=1, le=100)
     worker_lease_seconds: int = Field(default=60, ge=15, le=3600)
     worker_retention_days: int = Field(default=30, ge=1, le=3650)
+    api_observability_error_retention_days: int = Field(default=90, ge=1, le=3650)
     browser_origins: tuple[str, ...] = ()
     browser_session_ttl_seconds: int = Field(default=28800, ge=300, le=2592000)
     browser_cookie_secure: bool | None = None
@@ -55,6 +60,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_required_settings(self) -> Self:
+        for name in ("database_url", "redis_url", "api_key_pepper"):
+            file_path = getattr(self, f"{name}_file")
+            if getattr(self, name) is None and file_path is not None:
+                setattr(self, name, SecretStr(file_path.read_text(encoding="utf-8").strip()))
         required_secrets = ["database_url", "redis_url"]
         if self.environment.lower() == "production":
             required_secrets.append("api_key_pepper")

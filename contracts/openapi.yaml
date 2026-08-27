@@ -4407,6 +4407,210 @@ paths:
         '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/dashboard/api-metrics:
+    get:
+      tags:
+      - Quotas
+      - Audit
+      summary: 执行该公开 API 操作
+      operationId: list_dashboard_api_metrics
+      parameters:
+      - name: occurred_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: 统计开始时间，含该时刻。
+          title: Occurred From
+        description: “occurred_from”字段；具体取值和约束见当前资源说明。
+      - name: occurred_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: 统计结束时间，不含该时刻。
+          title: Occurred To
+        description: “occurred_to”字段；具体取值和约束见当前资源说明。
+      - name: application_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          description: 按第三方应用筛选。
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: operation
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 256
+          - type: 'null'
+          description: 按接口 operationId 筛选。
+          title: Operation
+        description: “operation”字段；具体取值和约束见当前资源说明。
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          description: 单页最大聚合行数。
+          default: 100
+          title: Limit
+        description: 本页最多返回的记录数。
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: 聚合行偏移量。
+          default: 0
+          title: Offset
+        description: “offset”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiUsageMetricPage'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: audit.read
+  /api/v1/dashboard/overview:
+    get:
+      tags:
+      - Quotas
+      - Audit
+      summary: 执行该公开 API 操作
+      operationId: get_dashboard_overview
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardOverviewResponse'
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: audit.read
+  /api/v1/dashboard/api-errors:
+    get:
+      tags:
+      - Quotas
+      - Audit
+      summary: 执行该公开 API 操作
+      operationId: list_dashboard_api_errors
+      parameters:
+      - name: occurred_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: 异常开始时间，含该时刻。
+          title: Occurred From
+        description: “occurred_from”字段；具体取值和约束见当前资源说明。
+      - name: occurred_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          description: 异常结束时间，不含该时刻。
+          title: Occurred To
+        description: “occurred_to”字段；具体取值和约束见当前资源说明。
+      - name: application_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          description: 按第三方应用筛选。
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: operation
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 256
+          - type: 'null'
+          description: 按接口 operationId 筛选。
+          title: Operation
+        description: “operation”字段；具体取值和约束见当前资源说明。
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          description: 单页最大异常行数。
+          default: 100
+          title: Limit
+        description: 本页最多返回的记录数。
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          description: 异常行偏移量。
+          default: 0
+          title: Offset
+        description: “offset”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiUsageErrorPage'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: audit.read
   /api/v1/quotas:
     get:
       tags:
@@ -5485,6 +5689,96 @@ components:
       - revoked
       - expired
       title: ApiKeyStatus
+    ApiUsageErrorPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ApiUsageErrorResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+      type: object
+      required:
+      - items
+      title: ApiUsageErrorPage
+    ApiUsageErrorResponse:
+      properties:
+        application_id:
+          type: string
+          title: Application Id
+          description: 发生异常请求的第三方应用稳定标识。
+        operation:
+          type: string
+          title: Operation
+          description: 稳定的接口 operationId，不包含请求路径参数。
+        status_code:
+          type: integer
+          title: Status Code
+          description: 最终 HTTP 状态码。
+        request_id:
+          type: string
+          title: Request Id
+          description: 用于支持排障的请求标识，不包含异常详情。
+        occurred_at:
+          type: string
+          format: date-time
+          title: Occurred At
+          description: 异常请求完成的时间。
+      type: object
+      required:
+      - application_id
+      - operation
+      - status_code
+      - request_id
+      - occurred_at
+      title: ApiUsageErrorResponse
+    ApiUsageMetricPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ApiUsageMetricResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+      type: object
+      required:
+      - items
+      title: ApiUsageMetricPage
+    ApiUsageMetricResponse:
+      properties:
+        application_id:
+          type: string
+          title: Application Id
+          description: 发生调用的第三方应用稳定标识。
+        operation:
+          type: string
+          title: Operation
+          description: 稳定的接口 operationId，不包含请求路径参数。
+        total_count:
+          type: integer
+          title: Total Count
+          description: 筛选时间段内的调用总数。
+        success_count:
+          type: integer
+          title: Success Count
+          description: 筛选时间段内状态码小于 400 的调用数。
+        client_error_count:
+          type: integer
+          title: Client Error Count
+          description: 筛选时间段内 4xx 调用数。
+        server_error_count:
+          type: integer
+          title: Server Error Count
+          description: 筛选时间段内 5xx 调用数。
+      type: object
+      required:
+      - application_id
+      - operation
+      - total_count
+      - success_count
+      - client_error_count
+      - server_error_count
+      title: ApiUsageMetricResponse
     ApplicationCreate:
       properties:
         name:
@@ -5875,6 +6169,12 @@ components:
           type: string
           title: Principal Type
           description: “principal_type”字段；具体取值和约束见当前资源说明。
+        display_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Display Name
+          description: 面向用户展示的名称。
       type: object
       required:
       - principal_id
@@ -6083,6 +6383,29 @@ components:
       - description
       - terminal
       title: CatalogItem
+    DashboardOverviewResponse:
+      properties:
+        application_count:
+          type: integer
+          title: Application Count
+          description: “application_count”字段；具体取值和约束见当前资源说明。
+        storage:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Storage
+          description: “storage”字段；具体取值和约束见当前资源说明。
+        api_usage:
+          additionalProperties: true
+          type: object
+          title: Api Usage
+          description: “api_usage”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - application_count
+      - api_usage
+      title: DashboardOverviewResponse
     DecisionSource:
       properties:
         source_type:

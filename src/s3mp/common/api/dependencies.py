@@ -60,17 +60,26 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "update_quota": "quotas.manage",
     "start_quota_reconciliation": "quotas.read",
     "get_quota_reconciliation": "quotas.read",
+    "list_audit_events": "audit.read",
+    "get_audit_event": "audit.read",
+    "get_dashboard_overview": "audit.read",
+    "list_dashboard_api_metrics": "audit.read",
+    "list_dashboard_api_errors": "audit.read",
+    "restore_file": "files.delete",
+}
+
+# Platform operations use account-session authorization rather than the tenant
+# management dependency above.  They still participate in OpenAPI permission
+# classification, but must not be validated as tenant-management routes.
+PLATFORM_OPERATION_PERMISSIONS = {
     "list_platform_quotas": "platform.quotas.read",
     "create_platform_quota": "platform.quotas.manage",
     "update_platform_quota": "platform.quotas.manage",
     "revoke_platform_quota": "platform.quotas.manage",
-    "list_audit_events": "audit.read",
-    "get_audit_event": "audit.read",
     "list_platform_accounts": "platform.accounts.read",
     "get_platform_account": "platform.accounts.read",
     "reset_platform_account_password": "platform.accounts.manage",
     "import_platform_accounts": "platform.accounts.manage",
-    "restore_file": "files.delete",
     "list_platform_roles": "platform.roles.read",
     "list_platform_role_bindings": "platform.roles.read",
     "list_support_access": "platform.support.read",
@@ -106,6 +115,7 @@ DATA_PLANE_OPERATION_PERMISSIONS = {
 # x-permission.  Contract validation compares this map with the contract.
 OPERATION_PERMISSION_CLASSIFICATIONS = {
     **MANAGEMENT_OPERATION_PERMISSIONS,
+    **PLATFORM_OPERATION_PERMISSIONS,
     **DATA_PLANE_OPERATION_PERMISSIONS,
 }
 

@@ -508,7 +508,7 @@ class SqlAlchemyAuditStore:
     ) -> tuple[list[dict[str, Any]], str | None]:
         async with self._sf() as session:
             stmt = (
-                select(AuditEventModel, PrincipalModel.type)
+                select(AuditEventModel, PrincipalModel.type, PrincipalModel.display_name)
                 .outerjoin(
                     PrincipalModel,
                     and_(
@@ -528,7 +528,7 @@ class SqlAlchemyAuditStore:
                 stmt = stmt.where(AuditEventModel.id > UUID(cursor))
             rows = (await session.execute(stmt.order_by(AuditEventModel.id).limit(limit + 1))).all()
         page, extra = rows[:limit], len(rows) > limit
-        views = [_audit_dict(row[0], row[1]) for row in page]
+        views = [_audit_dict(row[0], row[1], row[2]) for row in page]
         position = str(page[-1][0].id) if extra and page else None
         return views, position
 
@@ -536,7 +536,7 @@ class SqlAlchemyAuditStore:
         async with self._sf() as session:
             row = (
                 await session.execute(
-                    select(AuditEventModel, PrincipalModel.type)
+                    select(AuditEventModel, PrincipalModel.type, PrincipalModel.display_name)
                     .outerjoin(
                         PrincipalModel,
                         and_(
@@ -550,7 +550,7 @@ class SqlAlchemyAuditStore:
                     )
                 )
             ).first()
-            return _audit_dict(row[0], row[1]) if row else None
+            return _audit_dict(row[0], row[1], row[2]) if row else None
 
 
 def _quota_dict(m: QuotaModel, snapshot: AllocationSnapshot | None = None) -> dict[str, Any]:
@@ -595,12 +595,15 @@ def _quota_dict(m: QuotaModel, snapshot: AllocationSnapshot | None = None) -> di
     return result
 
 
-def _audit_dict(m: AuditEventModel, principal_type: Any = None) -> dict[str, Any]:
+def _audit_dict(
+    m: AuditEventModel, principal_type: Any = None, display_name: str | None = None
+) -> dict[str, Any]:
     details = dict(m.details or {})
     actor = (
         {
             "principal_id": str(m.actor_principal_id),
             "principal_type": getattr(principal_type, "value", principal_type) or "unknown",
+            "display_name": display_name,
         }
         if m.actor_principal_id
         else None

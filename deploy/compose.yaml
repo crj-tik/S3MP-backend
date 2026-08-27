@@ -22,9 +22,7 @@ x-s3mp-runtime-environment: &s3mp-runtime-environment
 
 services:
   migrate:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
     command: ["python", "-m", "alembic", "upgrade", "head"]
     environment: *s3mp-runtime-environment
     depends_on:
@@ -34,22 +32,35 @@ services:
         condition: service_healthy
 
   api:
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: deploy/Dockerfile.production
+      additional_contexts:
+        frontend: ../../S3MP-frontend
+      args:
+        VITE_APP_TITLE: ${VITE_APP_TITLE:-S3MP 管理平台}
+        VITE_API_MODE: real
+        VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     environment:
       <<: *s3mp-runtime-environment
       S3MP_LOG_LEVEL: INFO
+      S3MP_BROWSER_COOKIE_SECURE: "false"
       S3MP_READINESS_TIMEOUT_SECONDS: "2"
-    ports: ["19101:8000"]
+    ports: ["${S3MP_HTTP_PORT:-19101}:80"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 20s
     depends_on:
       bootstrap:
         condition: service_completed_successfully
 
   worker:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
     command: ["python", "-m", "s3mp.files.worker"]
     environment:
       <<: *s3mp-runtime-environment
@@ -68,9 +79,7 @@ services:
         condition: service_completed_successfully
 
   platform-scheduler:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
     command: ["python", "-m", "s3mp.platform.scheduler"]
     environment:
       <<: *s3mp-runtime-environment
@@ -84,10 +93,40 @@ services:
       bootstrap:
         condition: service_completed_successfully
 
+  file-retention-scheduler:
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
+    command: ["python", "-m", "s3mp.files.retention_scheduler"]
+    environment:
+      <<: *s3mp-runtime-environment
+      S3MP_WORKER_BATCH_SIZE: "100"
+      S3MP_WORKER_MAX_ATTEMPTS: "5"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  api-observability-worker:
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
+    command: ["python", "-m", "s3mp.governance.api_observability_worker"]
+    environment:
+      <<: *s3mp-runtime-environment
+      S3MP_WORKER_BATCH_SIZE: "100"
+      S3MP_API_OBSERVABILITY_ERROR_RETENTION_DAYS: ${S3MP_API_OBSERVABILITY_ERROR_RETENTION_DAYS:-90}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  dashboard-summary-scheduler:
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
+    command: ["python", "-m", "s3mp.governance.dashboard_scheduler"]
+    environment:
+      <<: *s3mp-runtime-environment
+      S3MP_DASHBOARD_SUMMARY_INTERVAL_SECONDS: "3600"
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
   bootstrap:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ${S3MP_APP_IMAGE:-s3mp-local:latest}
     entrypoint: []
     command: ["python", "-m", "scripts.ensure_platform_admin"]
     environment:

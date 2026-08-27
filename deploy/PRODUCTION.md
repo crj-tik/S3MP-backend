@@ -94,6 +94,23 @@ docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml d
 
 `file-retention-scheduler` 每天北京时间凌晨处理到期文件。Redis 的 `s3mp:file-retention:due` ZSET 仅是调度索引；Compose 使用持久化 `redis-data` 卷，并启用 AOF（`appendfsync everysec`）。PostgreSQL 保留软删除状态、到期时间和调度 Outbox，因此 Redis 重启或短暂丢失写入后会自动补回索引。
 
+## 概览统计与第三方 API 调用观测
+
+同一应用镜像还运行 `dashboard-summary-scheduler` 和 `api-observability-worker`：前者每小时生成一次租户文件空间快照，后者消费 Redis Stream `s3mp:api-usage:events` 并写入 PostgreSQL 聚合指标。Redis 使用命名卷和 AOF 持久化；它只是异步缓冲，数据库才是指标与异常请求引用的最终存储。
+
+异常请求引用默认保留 90 天，可通过 `S3MP_API_OBSERVABILITY_ERROR_RETENTION_DAYS` 调整。不要记录或导出该 Stream 的请求内容、文件路径、凭据或异常堆栈。
+
+```bash
+# 查看观测 worker 的处理/积压诊断
+sudo docker compose --env-file deploy/.env -f deploy/compose.production.yaml logs --tail=200 api-observability-worker
+sudo docker compose --env-file deploy/.env -f deploy/compose.production.yaml exec redis \
+  sh -c 'redis-cli -a "$S3MP_REDIS_PASSWORD" XLEN s3mp:api-usage:events'
+
+# 查看最近一次文件空间快照是否已生成
+sudo docker compose --env-file deploy/.env -f deploy/compose.production.yaml exec postgres \
+  psql -U s3mp -d s3mp -c 'SELECT tenant_id, generated_at FROM tenant_storage_summary ORDER BY generated_at DESC LIMIT 20;'
+```
+
 排障时查看 `file-retention-scheduler` 日志中的 `dispatched`、`reconciled`、`purged` 指标。不要手动清空该 ZSET；即使误清空，系统会补偿，但会增加恢复时间。
 
 ## 5. 备份与回滚
