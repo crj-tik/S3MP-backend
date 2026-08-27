@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from s3mp.common.logging import log_event
+
 logger = logging.getLogger(__name__)
 API_USAGE_STREAM = "s3mp:api-usage:events"
 
@@ -36,7 +38,15 @@ class ApiUsageObservationMiddleware:
             if context is not None and getattr(context, "api_key_id", None) is not None:
                 redis = getattr(scope.get("app").state, "redis", None) if scope.get("app") else None
                 if redis is None:
-                    logger.warning("api_usage_observation_dropped reason=redis_unavailable")
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        "api_usage_observation.dropped",
+                        layer="middleware",
+                        dependency="redis",
+                        dependency_operation="stream_publish",
+                        outcome="failed",
+                    )
                 else:
                     route = scope.get("route")
                     operation = getattr(route, "operation_id", None) or getattr(route, "path", None)
@@ -60,4 +70,13 @@ class ApiUsageObservationMiddleware:
         try:
             task.result()
         except Exception:
-            logger.exception("api_usage_observation_delivery_failed")
+            logger.exception(
+                "api_usage_observation_delivery_failed",
+                extra={
+                    "event": "api_usage_observation.delivery_failed",
+                    "layer": "infrastructure",
+                    "dependency": "redis",
+                    "dependency_operation": "stream_publish",
+                    "outcome": "failed",
+                },
+            )

@@ -4,6 +4,7 @@ from typing import Protocol, cast
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.identity.application.security import PasswordHasher
 from s3mp.platform.application.account_import import (
     ImportCandidate,
@@ -70,6 +71,7 @@ class PlatformControlPlaneStore(Protocol):
     async def get_platform_audit_event(self, event_id: UUID) -> dict[str, object] | None: ...
 
 
+@instrument_service_mutations("platform.control")
 class PlatformControlPlaneService:
     def __init__(self, store: PlatformControlPlaneStore) -> None:
         self._store = store

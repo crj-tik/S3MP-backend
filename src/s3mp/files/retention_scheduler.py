@@ -6,6 +6,7 @@ and outbox make restart and AOF-loss recovery safe.
 
 import argparse
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from redis.exceptions import RedisError
 
 from s3mp.common.config import get_settings
 from s3mp.common.database import create_engine, create_session_factory
+from s3mp.common.logging import bind_log_context, configure_logging, log_event, reset_log_context
 from s3mp.common.redis import create_redis
 from s3mp.common.timezone import CHINA_TIMEZONE
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
@@ -22,6 +24,7 @@ from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
 from s3mp.storage.infrastructure.repositories import SqlAlchemyStorageStore
 
 RETENTION_DUE_KEY = "s3mp:file-retention:due"
+logger = logging.getLogger(__name__)
 
 
 async def _dispatch_outbox(store: SqlAlchemyFileStore, redis: Redis, limit: int) -> int:
@@ -107,6 +110,7 @@ async def run_once(limit: int) -> dict[str, int]:
         raise RuntimeError("retention scheduler requires database, redis, and object storage")
     engine = create_engine(database_url)
     redis = create_redis(redis_url)
+    operation_token = bind_log_context(operation_id="file-retention-batch")
     try:
         sessions = create_session_factory(engine)
         store = SqlAlchemyFileStore(sessions)
@@ -121,8 +125,18 @@ async def run_once(limit: int) -> dict[str, int]:
             limit,
             settings.worker_max_attempts,
         )
-        return {"dispatched": dispatched, "reconciled": reconciled, "purged": purged}
+        metrics = {"dispatched": dispatched, "reconciled": reconciled, "purged": purged}
+        log_event(
+            logger,
+            logging.INFO,
+            "file.retention.batch.completed",
+            layer="worker",
+            count=sum(metrics.values()),
+            outcome="succeeded",
+        )
+        return metrics
     finally:
+        reset_log_context(operation_token)
         await redis.aclose()
         await engine.dispose()
 
@@ -135,29 +149,45 @@ def _seconds_until_china_midnight() -> float:
 
 
 def main() -> None:
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format, settings.log_slow_operation_ms)
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--limit", type=int, default=get_settings().worker_batch_size)
+    parser.add_argument("--limit", type=int, default=settings.worker_batch_size)
     args = parser.parse_args()
     if args.once:
-        print(
-            "retention metrics: "
-            + ", ".join(f"{k}={v}" for k, v in asyncio.run(run_once(args.limit)).items())
-        )
+        asyncio.run(run_once(args.limit))
         return
 
     async def loop() -> None:
         # Reconciliation/outbox dispatch runs at process start; physical due
         # purge is scheduled for each Asia/Shanghai midnight thereafter.
-        print(
-            "retention metrics: "
-            + ", ".join(f"{k}={v}" for k, v in (await run_once(args.limit)).items())
-        )
+        try:
+            await run_once(args.limit)
+        except Exception:
+            logger.exception(
+                "file_retention_initial_batch_failed",
+                extra={
+                    "event": "file.retention.batch.failed",
+                    "layer": "worker",
+                    "outcome": "failed",
+                },
+            )
         while True:
             await asyncio.sleep(_seconds_until_china_midnight())
             while True:
-                metrics = await run_once(args.limit)
-                print("retention metrics: " + ", ".join(f"{k}={v}" for k, v in metrics.items()))
+                try:
+                    metrics = await run_once(args.limit)
+                except Exception:
+                    logger.exception(
+                        "file_retention_batch_failed",
+                        extra={
+                            "event": "file.retention.batch.failed",
+                            "layer": "worker",
+                            "outcome": "failed",
+                        },
+                    )
+                    break
                 if metrics["purged"] < args.limit:
                     break
 

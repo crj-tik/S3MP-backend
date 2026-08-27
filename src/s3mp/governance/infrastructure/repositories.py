@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_async_methods
 from s3mp.governance.domain.allocation import AllocationSnapshot, build_snapshot
 from s3mp.governance.domain.quota import QuotaAllocationMode, QuotaScope
 from s3mp.governance.domain.units import bytes_to_gib
@@ -19,6 +20,7 @@ from s3mp.storage.infrastructure.models import StorageSpaceModel
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyQuotaStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -294,9 +296,7 @@ class SqlAlchemyQuotaStore:
                         422,
                     )
             else:
-                tenant_quota = await self._lock_tenant_quota(
-                    session, row.tenant_id
-                )
+                tenant_quota = await self._lock_tenant_quota(session, row.tenant_id)
                 allocations = await self._lock_application_quotas(
                     session, row.tenant_id, exclude=row.application_id
                 )
@@ -495,6 +495,7 @@ class SqlAlchemyQuotaStore:
             return await self._quota_view(session, row)
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyAuditStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_async_methods
 from s3mp.files.domain.ingestion import (
     VALID_TRANSITIONS,
     IngestionEventType,
@@ -38,6 +39,7 @@ from s3mp.governance.infrastructure.models import (
 from s3mp.storage.infrastructure.models import StorageSpaceModel
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyIngestionStore:
     """Durable ingestion lifecycle backed by PostgreSQL.
 
@@ -87,6 +89,7 @@ class SqlAlchemyIngestionStore:
                 declared_length=session_data["content_length"],
                 content_type=session_data["content_type"],
                 checksum=session_data.get("checksum"),
+                metadata_json=session_data.get("metadata"),
                 expires_at=session_data["expires_at"],
                 status="pending",
             )
@@ -144,6 +147,7 @@ class SqlAlchemyIngestionStore:
                 object_key=session_data["object_key"],
                 declared_length=session_data["content_length"],
                 content_type=session_data["content_type"],
+                metadata_json=session_data.get("metadata"),
                 quota_reservation_id=quota_reservation_id or uuid4(),
                 expires_at=session_data["expires_at"],
                 status="pending",
@@ -519,6 +523,7 @@ class SqlAlchemyIngestionStore:
                 content_type=row.actual_content_type or "application/octet-stream",
                 etag=row.provider_etag,
                 checksum=row.checksum,
+                metadata_json=row.metadata_json,
             )
             session.add(file_obj)
             await session.flush()
@@ -1038,6 +1043,7 @@ def _build_ingestion_model(tenant_id: UUID, data: dict[str, Any]) -> FileIngesti
         request_id=data.get("request_id"),
         idempotency_key=data.get("idempotency_key"),
         idempotency_fingerprint=data.get("idempotency_fingerprint"),
+        metadata_json=data.get("metadata"),
         upload_session_id=(
             UUID(data["upload_session_id"]) if data.get("upload_session_id") else None
         ),
@@ -1081,6 +1087,7 @@ def _ingestion_dict(m: FileIngestionRecordModel) -> dict[str, Any]:
         "actual_size": m.actual_size,
         "actual_content_type": m.actual_content_type,
         "checksum": m.checksum,
+        "metadata": m.metadata_json,
         "request_id": m.request_id,
         "idempotency_key": m.idempotency_key,
         "idempotency_fingerprint": m.idempotency_fingerprint,
@@ -1111,5 +1118,6 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "content_type": m.content_type,
         "etag": m.etag,
         "checksum": m.checksum,
+        "metadata": m.metadata_json,
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }

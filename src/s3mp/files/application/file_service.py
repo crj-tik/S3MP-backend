@@ -10,6 +10,7 @@ from uuid import UUID
 
 from s3mp.authorization.domain.evaluator import Binding, Decision, evaluate
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_operation
 from s3mp.common.middleware import current_request_id
 from s3mp.common.timezone import CHINA_TIMEZONE
 from s3mp.files.application.auth_guard import FileAuthGuard
@@ -53,6 +54,9 @@ class FileStore(Protocol):
     async def get_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID
     ) -> dict[str, Any] | None: ...
+    async def file_name_is_occupied(
+        self, tenant_id: UUID, space_id: UUID, physical_key: str
+    ) -> bool: ...
     async def delete_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
     ) -> dict[str, Any] | None: ...
@@ -660,6 +664,7 @@ class FileApplicationService:
         command: AuthorizedFileCommand,
         idempotency_key: str | None,
         space: dict[str, Any],
+        metadata: object | None = None,
     ) -> dict[str, Any]:
         return {
             "creator_principal_id": str(command.acting_principal_id),
@@ -686,8 +691,10 @@ class FileApplicationService:
             "request_id": command.request_id,
             "idempotency_key": idempotency_key,
             "idempotency_fingerprint": command.idempotency_fingerprint or None,
+            "metadata": metadata,
         }
 
+    @instrument_service_operation("file.ingestion.reconciliation")
     async def reconcile_pending_ingestions(self) -> list[dict[str, Any]]:
         """Re-verify durable pending intents after provider/DB partial failure.
 
@@ -835,10 +842,16 @@ class FileApplicationService:
             subject_kind=subject.subject_kind,
         )
         return (
-            evaluate("files.write", bindings, object_key=record["relative_key"]).decision
+            evaluate(
+                "files.write",
+                bindings,
+                storage_space_id=UUID(record["storage_space_id"]),
+                object_key=record["relative_key"],
+            ).decision
             == Decision.ALLOW
         )
 
+    @instrument_service_operation("file.deletion.reconciliation")
     async def reconcile_pending_deletions(self) -> list[str]:
         """Finish durable delete intents after the provider operation succeeds."""
         if self.object_storage is None:
@@ -959,6 +972,31 @@ class FileApplicationService:
             )
         ]
 
+    @instrument_service_operation("file.upload.precheck")
+    async def precheck_upload(
+        self, ctx: PrincipalContext, space_id: str, object_key: str, content_length: int
+    ) -> dict[str, Any]:
+        """Check whether an upload target is already occupied in the caller's scope.
+
+        This is deliberately advisory: a competing request can still claim the
+        name after this check, so upload completion remains protected by the
+        database uniqueness constraint.
+        """
+        command = await self._command(
+            ctx,
+            space_id,
+            object_key,
+            "files.write",
+            semantics={"content_length": content_length, "operation": "upload_precheck"},
+        )
+        return {
+            "object_key": self._key_relative_public_key(ctx, command.relative_key),
+            "content_length": content_length,
+            "exists": await self.store.file_name_is_occupied(
+                ctx.tenant_id, command.storage_space_id, command.physical_key
+            ),
+        }
+
     async def get_ingestion_provenance(
         self, ctx: PrincipalContext, ingestion_id: str
     ) -> dict[str, Any]:
@@ -989,6 +1027,7 @@ class FileApplicationService:
         await self._command_for_record(ctx, result, "files.read")
         return self._public_file(await self._resolve_space(ctx.tenant_id, UUID(space_id)), result)
 
+    @instrument_service_operation("file.delete")
     async def delete_file(
         self,
         ctx: PrincipalContext,
@@ -1175,6 +1214,7 @@ class FileApplicationService:
             await self.work_notifier.notify()
         return self._public_operation(result)
 
+    @instrument_service_operation("file.operation.create")
     async def create_file_operation(
         self,
         ctx: PrincipalContext,
@@ -1312,6 +1352,7 @@ class FileApplicationService:
 
     # ── Uploads ────────────────────────────────────────────────────────────
 
+    @instrument_service_operation("file.direct_upload.create")
     async def create_direct_upload(
         self,
         ctx: PrincipalContext,
@@ -1336,6 +1377,7 @@ class FileApplicationService:
                 "content_length": body.content_length,
                 "content_type": body.content_type.lower(),
                 "checksum": body.checksum,
+                "metadata": body.metadata,
                 "expires_at": expires_at.isoformat(),
             },
         )
@@ -1347,6 +1389,7 @@ class FileApplicationService:
             "content_length": body.content_length,
             "content_type": body.content_type,
             "checksum": body.checksum,
+            "metadata": body.metadata,
             "expires_at": expires_at,
             "idempotency_key": idempotency_key,
         }
@@ -1370,7 +1413,7 @@ class FileApplicationService:
                     **data,
                     "storage_space_id": str(command.storage_space_id),
                 },
-                self._ingestion_data(command, idempotency_key, space),
+                self._ingestion_data(command, idempotency_key, space, body.metadata),
             )
             record.pop("replayed", None)
         try:
@@ -1569,6 +1612,7 @@ class FileApplicationService:
 
     # ── Multipart ──────────────────────────────────────────────────────────
 
+    @instrument_service_operation("file.multipart_upload.create")
     async def create_multipart_upload(
         self,
         ctx: PrincipalContext,
@@ -1593,6 +1637,7 @@ class FileApplicationService:
                 "content_length": body.content_length,
                 "content_type": body.content_type.lower(),
                 "expires_at": expires_at.isoformat(),
+                "metadata": body.metadata,
             },
         )
         data = {
@@ -1602,6 +1647,7 @@ class FileApplicationService:
             "provider_target_version": command.provider_target_version,
             "content_length": body.content_length,
             "content_type": body.content_type,
+            "metadata": body.metadata,
             "expires_at": expires_at,
             "idempotency_key": idempotency_key,
         }
@@ -1628,7 +1674,7 @@ class FileApplicationService:
                     **data,
                     "storage_space_id": str(command.storage_space_id),
                 },
-                self._ingestion_data(command, idempotency_key, space),
+                self._ingestion_data(command, idempotency_key, space, body.metadata),
             )
             ingestion = {"id": record["ingestion_id"]}
             if record.pop("replayed", False):
@@ -1741,6 +1787,7 @@ class FileApplicationService:
         await self._ensure_multipart_active(record)
         return await self.store.list_multipart_parts(ctx.tenant_id, UUID(multipart_id))
 
+    @instrument_service_operation("file.multipart_upload.part")
     async def upload_multipart_part(
         self,
         ctx: PrincipalContext,

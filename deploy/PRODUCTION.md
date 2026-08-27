@@ -80,6 +80,8 @@ docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml u
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml ps
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml logs -f api worker file-retention-scheduler
 
+运行日志默认每行一个 JSON 对象，包含 `request_id` 或后台 `operation_id`。审计记录和 API 使用量投影仍保存在原有数据库表中；运行日志只输出到容器标准输出。可用 `S3MP_LOG_SLOW_OPERATION_MS` 调整 MinIO、Redis 与 Repository 的慢操作告警阈值，本地排查时可将 `S3MP_LOG_FORMAT=text` 改为文本格式。
+
 # 升级：先拉取指定版本，再重建并启动；迁移由 migrate 服务自动执行
 git checkout <release-tag>
 docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml up -d --build

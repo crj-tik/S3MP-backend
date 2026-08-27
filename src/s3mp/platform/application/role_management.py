@@ -6,6 +6,7 @@ from typing import Protocol
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.platform.domain.context import PlatformContext
 
 
@@ -28,6 +29,7 @@ class PlatformRoleStore(Protocol):
     ) -> bool: ...
 
 
+@instrument_service_mutations("platform.role")
 class PlatformRoleManagementService:
     def __init__(self, store: PlatformRoleStore) -> None:
         self._store = store

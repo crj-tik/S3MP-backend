@@ -16,6 +16,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from s3mp.common.database import Base
@@ -65,6 +66,7 @@ class FileObjectModel(Base):
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     etag: Mapped[str | None] = mapped_column(String(512))
     checksum: Mapped[str | None] = mapped_column(String(512))
+    metadata_json: Mapped[object | None] = mapped_column("metadata", JSONB)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
     deletion_attempt_count: Mapped[int] = mapped_column(
         nullable=False, default=0, server_default="0"
@@ -157,6 +159,7 @@ class UploadSessionModel(Base):
     declared_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     checksum: Mapped[str | None] = mapped_column(String(512))
+    metadata_json: Mapped[object | None] = mapped_column("metadata", JSONB)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -192,6 +195,7 @@ class MultipartSessionModel(Base):
     provider_upload_id: Mapped[str | None] = mapped_column(String(512))
     declared_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    metadata_json: Mapped[object | None] = mapped_column("metadata", JSONB)
     quota_reservation_id: Mapped[UUID] = mapped_column(nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

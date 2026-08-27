@@ -1,5 +1,7 @@
 FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
+# Keep local and production images independent from ghcr.io, whose metadata
+# requests can fail before Docker starts the actual build.
+RUN python -m pip install --no-cache-dir "uv>=0.7,<0.8"
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY src ./src

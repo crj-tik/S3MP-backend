@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     log_level: str = "INFO"
+    log_format: str = "json"
+    log_slow_operation_ms: int = Field(default=500, ge=1, le=300000)
     database_url: SecretStr | None = None
     database_url_file: Path | None = None
     redis_url: SecretStr | None = None
@@ -49,6 +51,14 @@ class Settings(BaseSettings):
     @classmethod
     def empty_bucket_capacity_is_unset(cls, value: object) -> object:
         return None if value == "" else value
+
+    @field_validator("log_format")
+    @classmethod
+    def validate_log_format(cls, value: str) -> str:
+        normalized = value.lower()
+        if normalized not in {"json", "text"}:
+            raise ValueError("log_format must be json or text")
+        return normalized
 
     @property
     def s3_bucket_capacity_bytes(self) -> int | None:

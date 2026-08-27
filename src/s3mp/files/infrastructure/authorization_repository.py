@@ -18,10 +18,12 @@ from s3mp.authorization.infrastructure.models import (
     RoleBindingModel,
     RolePermissionModel,
 )
+from s3mp.common.logging import instrument_async_methods
 from s3mp.identity.infrastructure.models import MembershipModel, PrincipalModel, UserModel
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyFileAuthorizationStore:
     """Load active direct and representative-derived tenant bindings."""
 
@@ -66,10 +68,7 @@ class SqlAlchemyFileAuthorizationStore:
                     .join(
                         ApplicationMembershipBindingModel,
                         (ApplicationMembershipBindingModel.tenant_id == MembershipModel.tenant_id)
-                        & (
-                            ApplicationMembershipBindingModel.membership_id
-                            == MembershipModel.id
-                        ),
+                        & (ApplicationMembershipBindingModel.membership_id == MembershipModel.id),
                     )
                     .join(
                         ApplicationModel,
@@ -89,8 +88,7 @@ class SqlAlchemyFileAuthorizationStore:
                         ApplicationModel.status == "active",
                         ApplicationMembershipBindingModel.status == "active",
                         MembershipModel.status == "active",
-                        MembershipModel.expires_at.is_(None)
-                        | (MembershipModel.expires_at > now),
+                        MembershipModel.expires_at.is_(None) | (MembershipModel.expires_at > now),
                         PrincipalModel.enabled.is_(True),
                         UserModel.status == "active",
                         TenantModel.status == "active",

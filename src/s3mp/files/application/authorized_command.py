@@ -95,7 +95,13 @@ class AuthorizedFileCommand:
             raise ApiError(
                 "permission_denied", "API key scope does not allow this action", status_code=403
             )
-        decision = evaluate(action, bindings, object_key=rel, now=now)
+        decision = evaluate(
+            action,
+            bindings,
+            storage_space_id=UUID(str(storage_space["id"])),
+            object_key=rel,
+            now=now,
+        )
 
         if decision.decision is not Decision.ALLOW:
             raise ApiError("permission_denied", decision.reason_code, status_code=403)

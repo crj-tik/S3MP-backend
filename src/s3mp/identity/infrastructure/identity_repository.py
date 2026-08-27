@@ -23,6 +23,7 @@ from s3mp.authorization.infrastructure.models import (
     RolePermissionModel,
 )
 from s3mp.common.api.etag import etag_value
+from s3mp.common.logging import instrument_async_methods
 from s3mp.identity.infrastructure.models import (
     MembershipModel,
     MembershipStatus,
@@ -41,6 +42,7 @@ from s3mp.platform.infrastructure.models import (
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyIdentityAdminStore:
     """Explicit persistence boundary for identity and authorization services."""
 
@@ -71,9 +73,7 @@ class SqlAlchemyIdentityAdminStore:
             # only to ``get_membership_state`` for session/worker validation.
             return _membership_dict(row, user)
 
-    async def get_membership(
-        self, tenant_id: UUID, membership_id: UUID
-    ) -> dict[str, Any] | None:
+    async def get_membership(self, tenant_id: UUID, membership_id: UUID) -> dict[str, Any] | None:
         """Return internal session-validation state, never the public DTO."""
         return await self.get_membership_state(tenant_id, membership_id)
 
@@ -754,10 +754,15 @@ class SqlAlchemyIdentityAdminStore:
             role = await session.scalar(
                 select(RoleModel).where(RoleModel.tenant_id == tenant_id, RoleModel.id == role_id)
             )
-            if principal is None or role is None or principal.type not in {
-                PrincipalType.USER,
-                PrincipalType.GROUP,
-            }:
+            if (
+                principal is None
+                or role is None
+                or principal.type
+                not in {
+                    PrincipalType.USER,
+                    PrincipalType.GROUP,
+                }
+            ):
                 return None
             row = RoleBindingModel(
                 tenant_id=tenant_id,
@@ -878,8 +883,7 @@ class SqlAlchemyIdentityAdminStore:
                     ApplicationModel.status == "active",
                     ApplicationMembershipBindingModel.status == "active",
                     MembershipModel.status == "active",
-                    MembershipModel.expires_at.is_(None)
-                    | (MembershipModel.expires_at > now),
+                    MembershipModel.expires_at.is_(None) | (MembershipModel.expires_at > now),
                     PrincipalModel.enabled.is_(True),
                     UserModel.status == "active",
                     TenantModel.status == "active",

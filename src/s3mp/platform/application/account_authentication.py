@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.identity.application.security import (
     AuthenticationFailed,
     LocalPasswordAuthenticator,
@@ -67,6 +68,7 @@ class AccountLoginRateLimiter(Protocol):
     async def allow(self, key: str, *, now: float | None = None) -> bool: ...
 
 
+@instrument_service_mutations("platform.account")
 class AccountAuthenticationService:
     """Issue account and selected-tenant sessions from verified browser credentials."""
 

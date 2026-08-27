@@ -14,11 +14,13 @@ from s3mp.authorization.domain.evaluator import (
     evaluate,
 )
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.identity.application.management_ports import AuthorizationManagementStore
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.platform.application.baseline import TENANT_MEMBER_PERMISSIONS
 
 
+@instrument_service_mutations("authorization")
 @dataclass(slots=True)
 class AuthorizationManagementService:
     store: AuthorizationManagementStore
@@ -76,9 +78,7 @@ class AuthorizationManagementService:
             )
         tenant_admin = await self._is_platform_tenant_admin(context)
         self._validate_permissions(body.permissions)
-        self._validate_delegable_permissions(
-            body.permissions, allow_non_delegable=tenant_admin
-        )
+        self._validate_delegable_permissions(body.permissions, allow_non_delegable=tenant_admin)
         await self._require_delegable_subset(
             context, body.permissions, None, None, bypass=tenant_admin
         )
@@ -107,9 +107,7 @@ class AuthorizationManagementService:
         if body.permissions is not None:
             tenant_admin = await self._is_platform_tenant_admin(context)
             self._validate_permissions(body.permissions)
-            self._validate_delegable_permissions(
-                body.permissions, allow_non_delegable=tenant_admin
-            )
+            self._validate_delegable_permissions(body.permissions, allow_non_delegable=tenant_admin)
             await self._require_delegable_subset(
                 context, body.permissions, None, None, bypass=tenant_admin
             )
@@ -217,9 +215,7 @@ class AuthorizationManagementService:
                 "tenant-admin is a platform role and cannot be bound as a tenant role",
                 status_code=422,
             )
-        self._validate_delegable_permissions(
-            role["permissions"], allow_non_delegable=tenant_admin
-        )
+        self._validate_delegable_permissions(role["permissions"], allow_non_delegable=tenant_admin)
         await self._require_delegable_subset(
             context, role["permissions"], None, None, bypass=tenant_admin
         )
@@ -229,9 +225,7 @@ class AuthorizationManagementService:
             context, role["permissions"], None, None, expires_at
         )
 
-    async def maximum_role_grant_expiry(
-        self, context: PrincipalContext, role_id: UUID
-    ) -> datetime:
+    async def maximum_role_grant_expiry(self, context: PrincipalContext, role_id: UUID) -> datetime:
         """Return the latest safe expiry for an invited member's initial role."""
         tenant_admin = await self._is_platform_tenant_admin(context)
         role = await self.store.get_role(context.tenant_id, role_id)
@@ -243,9 +237,7 @@ class AuthorizationManagementService:
                 "tenant-admin is a platform role and cannot be bound as a tenant role",
                 status_code=422,
             )
-        self._validate_delegable_permissions(
-            role["permissions"], allow_non_delegable=tenant_admin
-        )
+        self._validate_delegable_permissions(role["permissions"], allow_non_delegable=tenant_admin)
         await self._require_delegable_subset(
             context, role["permissions"], None, None, bypass=tenant_admin
         )

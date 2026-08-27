@@ -4,6 +4,7 @@ from typing import Protocol
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.platform.domain.context import PlatformContext
 from s3mp.platform.infrastructure.models import TenantLifecycleStatus
 
@@ -37,6 +38,7 @@ class PlatformTenantStore(Protocol):
     ) -> dict[str, object] | None: ...
 
 
+@instrument_service_mutations("platform.tenant")
 class PlatformTenantLifecycleService:
     def __init__(self, store: PlatformTenantStore) -> None:
         self._store = store

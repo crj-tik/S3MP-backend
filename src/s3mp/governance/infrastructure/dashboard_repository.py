@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import ApplicationModel
+from s3mp.common.logging import instrument_async_methods
 from s3mp.files.infrastructure.models import FileObjectModel
 from s3mp.governance.infrastructure.models import (
     ApplicationApiErrorModel,
@@ -17,6 +18,7 @@ from s3mp.governance.infrastructure.models import (
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyDashboardStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -29,11 +31,7 @@ class SqlAlchemyDashboardStore:
                 select(
                     TenantModel.id,
                     func.coalesce(
-                        func.sum(
-                            case(
-                                (FileObjectModel.soft_deleted.is_(False), 1), else_=0
-                            )
-                        ),
+                        func.sum(case((FileObjectModel.soft_deleted.is_(False), 1), else_=0)),
                         0,
                     ),
                     func.coalesce(
@@ -94,46 +92,54 @@ class SqlAlchemyDashboardStore:
         async with self._sf() as session:
             summary = await session.get(TenantStorageSummaryModel, tenant_id)
             app_count = await session.scalar(
-                select(func.count()).select_from(ApplicationModel).where(
-                    ApplicationModel.tenant_id == tenant_id, ApplicationModel.status == "active"
-                )
+                select(func.count())
+                .select_from(ApplicationModel)
+                .where(ApplicationModel.tenant_id == tenant_id, ApplicationModel.status == "active")
             )
-            totals = (await session.execute(
-                select(
-                    func.coalesce(func.sum(ApplicationApiMetricModel.total_count), 0),
-                    func.coalesce(func.sum(ApplicationApiMetricModel.success_count), 0),
-                    func.coalesce(func.sum(ApplicationApiMetricModel.client_error_count), 0)
-                    + func.coalesce(func.sum(ApplicationApiMetricModel.server_error_count), 0),
-                    func.count(func.distinct(ApplicationApiMetricModel.application_id)),
-                ).where(
-                    ApplicationApiMetricModel.tenant_id == tenant_id,
-                    ApplicationApiMetricModel.window_start >= since,
+            totals = (
+                await session.execute(
+                    select(
+                        func.coalesce(func.sum(ApplicationApiMetricModel.total_count), 0),
+                        func.coalesce(func.sum(ApplicationApiMetricModel.success_count), 0),
+                        func.coalesce(func.sum(ApplicationApiMetricModel.client_error_count), 0)
+                        + func.coalesce(func.sum(ApplicationApiMetricModel.server_error_count), 0),
+                        func.count(func.distinct(ApplicationApiMetricModel.application_id)),
+                    ).where(
+                        ApplicationApiMetricModel.tenant_id == tenant_id,
+                        ApplicationApiMetricModel.window_start >= since,
+                    )
                 )
-            )).one()
-            top = (await session.execute(
-                select(
-                    ApplicationApiMetricModel.operation,
-                    func.sum(ApplicationApiMetricModel.total_count).label("count"),
+            ).one()
+            top = (
+                await session.execute(
+                    select(
+                        ApplicationApiMetricModel.operation,
+                        func.sum(ApplicationApiMetricModel.total_count).label("count"),
+                    )
+                    .where(
+                        ApplicationApiMetricModel.tenant_id == tenant_id,
+                        ApplicationApiMetricModel.window_start >= since,
+                    )
+                    .group_by(ApplicationApiMetricModel.operation)
+                    .order_by(func.sum(ApplicationApiMetricModel.total_count).desc())
+                    .limit(3)
                 )
-                .where(
-                    ApplicationApiMetricModel.tenant_id == tenant_id,
-                    ApplicationApiMetricModel.window_start >= since,
-                )
-                .group_by(ApplicationApiMetricModel.operation)
-                .order_by(func.sum(ApplicationApiMetricModel.total_count).desc())
-                .limit(3)
-            )).all()
+            ).all()
             return {
                 "application_count": int(app_count or 0),
-                "storage": None if summary is None else {
+                "storage": None
+                if summary is None
+                else {
                     "active_file_count": summary.active_file_count,
                     "occupied_bytes": summary.occupied_bytes,
                     "pending_cleanup_bytes": summary.pending_cleanup_bytes,
                     "generated_at": summary.generated_at,
                 },
                 "api_usage": {
-                    "total_calls": int(totals[0]), "success_calls": int(totals[1]),
-                    "abnormal_calls": int(totals[2]), "active_applications": int(totals[3]),
+                    "total_calls": int(totals[0]),
+                    "success_calls": int(totals[1]),
+                    "abnormal_calls": int(totals[2]),
+                    "active_applications": int(totals[3]),
                     "top_operations": [{"operation": row[0], "count": int(row[1])} for row in top],
                 },
             }
@@ -159,24 +165,30 @@ class SqlAlchemyDashboardStore:
         if operation:
             predicates.append(ApplicationApiMetricModel.operation == operation)
         async with self._sf() as session:
-            rows = (await session.execute(
-                select(
-                    ApplicationApiMetricModel.application_id,
-                    ApplicationApiMetricModel.operation,
-                    func.sum(ApplicationApiMetricModel.total_count).label("total_count"),
-                    func.sum(ApplicationApiMetricModel.success_count).label("success_count"),
-                    func.sum(ApplicationApiMetricModel.client_error_count).label("client_error_count"),
-                    func.sum(ApplicationApiMetricModel.server_error_count).label("server_error_count"),
+            rows = (
+                await session.execute(
+                    select(
+                        ApplicationApiMetricModel.application_id,
+                        ApplicationApiMetricModel.operation,
+                        func.sum(ApplicationApiMetricModel.total_count).label("total_count"),
+                        func.sum(ApplicationApiMetricModel.success_count).label("success_count"),
+                        func.sum(ApplicationApiMetricModel.client_error_count).label(
+                            "client_error_count"
+                        ),
+                        func.sum(ApplicationApiMetricModel.server_error_count).label(
+                            "server_error_count"
+                        ),
+                    )
+                    .where(*predicates)
+                    .group_by(
+                        ApplicationApiMetricModel.application_id,
+                        ApplicationApiMetricModel.operation,
+                    )
+                    .order_by(func.sum(ApplicationApiMetricModel.total_count).desc())
+                    .offset(offset)
+                    .limit(limit)
                 )
-                .where(*predicates)
-                .group_by(
-                    ApplicationApiMetricModel.application_id,
-                    ApplicationApiMetricModel.operation,
-                )
-                .order_by(func.sum(ApplicationApiMetricModel.total_count).desc())
-                .offset(offset)
-                .limit(limit)
-            )).all()
+            ).all()
         return [
             {
                 "application_id": str(row.application_id),
@@ -210,11 +222,22 @@ class SqlAlchemyDashboardStore:
         if operation:
             predicates.append(ApplicationApiErrorModel.operation == operation)
         async with self._sf() as session:
-            rows = (await session.scalars(
-                select(ApplicationApiErrorModel)
-                .where(*predicates)
-                .order_by(ApplicationApiErrorModel.occurred_at.desc()).offset(offset).limit(limit)
-            )).all()
-            return [{"operation": row.operation, "status_code": row.status_code,
-                     "request_id": row.request_id, "occurred_at": row.occurred_at,
-                     "application_id": str(row.application_id)} for row in rows]
+            rows = (
+                await session.scalars(
+                    select(ApplicationApiErrorModel)
+                    .where(*predicates)
+                    .order_by(ApplicationApiErrorModel.occurred_at.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).all()
+            return [
+                {
+                    "operation": row.operation,
+                    "status_code": row.status_code,
+                    "request_id": row.request_id,
+                    "occurred_at": row.occurred_at,
+                    "application_id": str(row.application_id),
+                }
+                for row in rows
+            ]

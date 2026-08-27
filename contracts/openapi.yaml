@@ -2897,6 +2897,46 @@ paths:
         '500': *id001
       description: 在当前应用的固定命名空间内列出文件对象。
       x-permission: files.list
+  /api/v1/storage_spaces/{space_id}/upload_prechecks:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: precheck_upload
+      deprecated: true
+      parameters:
+      - name: space_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Space Id
+        description: “space_id”字段；具体取值和约束见当前资源说明。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPrecheckCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPrecheckRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
   /api/v1/storage_spaces/{space_id}/files/{file_id}:
     get:
       tags:
@@ -3732,6 +3772,84 @@ paths:
                 items:
                   $ref: '#/components/schemas/FileObjectRuntime'
                 title: Response List Current Application Files
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/applications/{application_id}/upload_prechecks:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: precheck_application_upload
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPrecheckCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPrecheckRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/upload_prechecks:
+    post:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 执行该公开 API 操作
+      operationId: precheck_current_application_upload
+      parameters:
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          title: Application Code
+        description: “application_code”字段；具体取值和约束见当前资源说明。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadPrecheckCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadPrecheckRuntime'
         '422': *id001
         '400': *id001
         '401': *id001
@@ -6472,6 +6590,11 @@ components:
           - type: 'null'
           title: Checksum
           description: 内容校验和，用于验证上传数据的完整性。
+        metadata:
+          anyOf:
+          - $ref: '#/components/schemas/JsonValue'
+          - type: 'null'
+          description: 应用提供的 JSON 元数据；平台不解析其业务含义。
         expires_at:
           type: string
           format: date-time
@@ -6681,6 +6804,11 @@ components:
           - type: 'null'
           title: Checksum
           description: 内容校验和，用于验证上传数据的完整性。
+        metadata:
+          anyOf:
+          - $ref: '#/components/schemas/JsonValue'
+          - type: 'null'
+          description: “metadata”字段；具体取值和约束见当前资源说明。
         created_at:
           anyOf:
           - type: string
@@ -7098,6 +7226,7 @@ components:
       - status
       - content_length
       title: IngestionProvenanceFile
+    JsonValue: {}
     LifecycleRequest:
       properties:
         reason:
@@ -7529,6 +7658,11 @@ components:
           minLength: 1
           title: Content Type
           description: 对象的媒体类型。
+        metadata:
+          anyOf:
+          - $ref: '#/components/schemas/JsonValue'
+          - type: 'null'
+          description: 应用提供的 JSON 元数据；平台不解析其业务含义。
         expires_at:
           type: string
           format: date-time
@@ -9317,6 +9451,48 @@ components:
       additionalProperties: false
       type: object
       title: UploadComplete
+    UploadPrecheckCreate:
+      properties:
+        object_key:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Object Key
+          description: 应用存储命名空间内的规范相对对象路径。
+        content_length:
+          type: integer
+          minimum: 0.0
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+      additionalProperties: false
+      type: object
+      required:
+      - object_key
+      - content_length
+      title: UploadPrecheckCreate
+      description: Caller-proposed name and size before creating an upload session.
+    UploadPrecheckRuntime:
+      properties:
+        object_key:
+          type: string
+          title: Object Key
+          description: 应用存储命名空间内的规范相对对象路径。
+        content_length:
+          type: integer
+          minimum: 0.0
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        exists:
+          type: boolean
+          title: Exists
+          description: “exists”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - object_key
+      - content_length
+      - exists
+      title: UploadPrecheckRuntime
+      description: Advisory result; upload completion remains the authoritative collision check.
     UserPage:
       properties:
         items:

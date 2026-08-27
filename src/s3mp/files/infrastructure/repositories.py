@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_async_methods
 from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.files.infrastructure.models import (
     FileObjectModel,
@@ -24,6 +25,7 @@ from s3mp.storage.infrastructure.models import StorageSpaceModel
 from s3mp.tenant.infrastructure.models import TenantModel
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyFileStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -90,6 +92,34 @@ class SqlAlchemyFileStore:
                 )
             )
             return _file_dict(row) if row else None
+
+    async def file_name_is_occupied(
+        self, tenant_id: UUID, space_id: UUID, physical_key: str
+    ) -> bool:
+        """Mirror the active-key index so preflight cannot claim a busy name is free."""
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(FileObjectModel.id)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.storage_space_id == space_id,
+                    FileObjectModel.object_key == physical_key,
+                    or_(
+                        FileObjectModel.soft_deleted.is_(True),
+                        FileObjectModel.status.in_(
+                            (
+                                "available",
+                                "renaming",
+                                "rename_failed",
+                                "deleting",
+                                "delete_failed",
+                            )
+                        ),
+                    ),
+                )
+                .limit(1)
+            )
+            return row is not None
 
     async def delete_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
@@ -974,6 +1004,7 @@ class SqlAlchemyFileStore:
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
                 checksum=data.get("checksum"),
+                metadata_json=data.get("metadata"),
                 expires_at=data["expires_at"],
                 status="pending",
             )
@@ -1041,6 +1072,7 @@ class SqlAlchemyFileStore:
                 content_length=row.declared_length,
                 content_type=row.content_type,
                 checksum=data.get("checksum") or row.checksum,
+                metadata_json=row.metadata_json,
                 etag=data.get("etag"),
             )
             session.add(file_obj)
@@ -1088,6 +1120,7 @@ class SqlAlchemyFileStore:
                 provider_target_version=int(data.get("provider_target_version", 1)),
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
+                metadata_json=data.get("metadata"),
                 quota_reservation_id=uuid4(),
                 expires_at=data["expires_at"],
                 status="pending",
@@ -1232,6 +1265,7 @@ class SqlAlchemyFileStore:
                 content_length=data["content_length"],
                 content_type=data["content_type"],
                 checksum=data.get("checksum"),
+                metadata_json=row.metadata_json,
                 etag=data.get("etag"),
             )
             session.add(file_obj)
@@ -1255,6 +1289,7 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "content_type": m.content_type,
         "etag": m.etag,
         "checksum": m.checksum,
+        "metadata": m.metadata_json,
         "status": m.status,
         "deletion_attempt_count": m.deletion_attempt_count,
         "deletion_principal_id": str(m.deletion_principal_id) if m.deletion_principal_id else None,
@@ -1289,6 +1324,7 @@ def _upload_dict(m: UploadSessionModel) -> dict[str, Any]:
         "content_type": m.content_type,
         "status": m.status,
         "checksum": m.checksum,
+        "metadata": m.metadata_json,
         "expires_at": m.expires_at.isoformat() if m.expires_at else None,
     }
 
@@ -1307,6 +1343,7 @@ def _mp_dict(m: MultipartSessionModel) -> dict[str, Any]:
         "profile_version": m.profile_version,
         "content_length": m.declared_length,
         "content_type": m.content_type,
+        "metadata": m.metadata_json,
         "status": m.status,
         "provider_upload_id": m.provider_upload_id,
         "expires_at": m.expires_at.isoformat() if m.expires_at else None,

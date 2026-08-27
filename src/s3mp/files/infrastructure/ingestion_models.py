@@ -14,6 +14,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from s3mp.common.database import Base
@@ -66,6 +67,7 @@ class FileIngestionRecordModel(Base):
     actual_size: Mapped[int | None] = mapped_column(BigInteger())
     actual_content_type: Mapped[str | None] = mapped_column(String(255))
     checksum: Mapped[str | None] = mapped_column(String(512))
+    metadata_json: Mapped[object | None] = mapped_column("metadata", JSONB)
     authorization_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     authorization_version: Mapped[int] = mapped_column(nullable=False)
     request_id: Mapped[str | None] = mapped_column(String(128))

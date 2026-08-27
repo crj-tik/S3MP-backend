@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from s3mp.applications.infrastructure.models import ApplicationModel
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_operation
 from s3mp.files.infrastructure.models import FileObjectModel
 from s3mp.governance.application.quota_reconciliation import (
     ReconciliationDifference,
@@ -42,6 +43,7 @@ class QuotaReconciliationService:
     object_storage: InventoryProvider | None
     authorizer: Any
 
+    @instrument_service_operation("quota.reconciliation")
     async def reconcile(
         self,
         context: PrincipalContext | None,
@@ -207,10 +209,7 @@ class QuotaReconciliationService:
                         for obj in provider_objects
                     ],
                     known_namespace_prefixes=tuple(
-                        (
-                            row.storage_namespace
-                            or f"v1/tenants/{row.tenant_id}/spaces/{row.id}"
-                        )
+                        (row.storage_namespace or f"v1/tenants/{row.tenant_id}/spaces/{row.id}")
                         + "/"
                         for row in spaces
                     ),
@@ -312,9 +311,7 @@ class QuotaReconciliationService:
                         await session.commit()
                 raise
             finally:
-                await session.execute(
-                    select(func.pg_advisory_unlock(_tenant_lock_key(tenant_id)))
-                )
+                await session.execute(select(func.pg_advisory_unlock(_tenant_lock_key(tenant_id))))
                 await session.commit()
 
     async def reconcile_internal(

@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_operation
 from s3mp.governance.domain.quota import QuotaAllocationMode, QuotaScope
 from s3mp.governance.domain.units import gib_to_bytes
 from s3mp.identity.domain.context import PrincipalContext
@@ -97,6 +98,7 @@ class QuotaService:
             raise ApiError("resource_not_found", "Quota not found", status_code=404)
         return result
 
+    @instrument_service_operation("quota.application.create")
     async def create_application_quota(
         self, context: PrincipalContext, application_id: str, limit_gib: int
     ) -> dict[str, Any]:
@@ -186,6 +188,7 @@ class PlatformQuotaService:
             cursor=cursor,
         )
 
+    @instrument_service_operation("quota.tenant.create")
     async def create_quota(
         self,
         context: PlatformContext,
@@ -220,6 +223,7 @@ class PlatformQuotaService:
             raise ApiError("resource_not_found", "Platform quota not found", 404)
         return result
 
+    @instrument_service_operation("quota.tenant.revoke")
     async def revoke_quota(self, context: PlatformContext, quota_id: UUID) -> dict[str, Any]:
         result = await self.store.revoke_platform_quota(
             actor_user_id=context.user_id, quota_id=quota_id

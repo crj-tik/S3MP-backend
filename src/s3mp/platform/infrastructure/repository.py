@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from s3mp.authorization.infrastructure.models import BindingEffect, RoleBindingModel
+from s3mp.common.logging import instrument_async_methods
 from s3mp.identity.application.security import PasswordCredential
 from s3mp.identity.infrastructure.models import (
     MembershipModel,
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from s3mp.platform.domain.context import PlatformContext
 
 
+@instrument_async_methods("repository")
 @dataclass(slots=True)
 class SqlAlchemyPlatformStore:
     session_factory: async_sessionmaker[AsyncSession]
@@ -783,9 +785,7 @@ class SqlAlchemyPlatformStore:
             if action:
                 statement = statement.where(PlatformAuditEventModel.action == action)
             if resource_type:
-                statement = statement.where(
-                    PlatformAuditEventModel.resource_type == resource_type
-                )
+                statement = statement.where(PlatformAuditEventModel.resource_type == resource_type)
             if resource_id:
                 statement = statement.where(PlatformAuditEventModel.resource_id == resource_id)
             rows = list((await session.scalars(statement)).all())
@@ -1170,9 +1170,7 @@ class SqlAlchemyPlatformStore:
                 user, [(binding, role) for binding, role in zip(bindings, roles, strict=True)]
             )
 
-    async def revoke_platform_role_assignment(
-        self, *, actor_user_id: UUID, user_id: UUID
-    ) -> bool:
+    async def revoke_platform_role_assignment(self, *, actor_user_id: UUID, user_id: UUID) -> bool:
         now = datetime.now(UTC)
         async with self.session_factory.begin() as session:
             bindings = list(

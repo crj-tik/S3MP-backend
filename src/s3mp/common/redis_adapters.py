@@ -6,7 +6,10 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from s3mp.common.logging import instrument_async_methods
 
+
+@instrument_async_methods("redis")
 class RedisIdempotencyStore:
     def __init__(self, redis: Redis, *, ttl_seconds: int = 86400) -> None:
         self._redis = redis
@@ -25,6 +28,7 @@ class RedisIdempotencyStore:
         await self._redis.setex(self._key(fingerprint), self._ttl, json.dumps(result, default=str))
 
 
+@instrument_async_methods("redis")
 class RedisRateLimiter:
     """Redis-backed sliding-window rate limiter."""
 
@@ -51,6 +55,7 @@ class RedisRateLimiter:
         return int(count) < self._limit
 
 
+@instrument_async_methods("redis")
 class RedisOutboxAdapter:
     """Redis-backed outbox coordination with retry-safe ownership."""
 

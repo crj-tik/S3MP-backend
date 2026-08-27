@@ -15,6 +15,7 @@ from s3mp.applications.infrastructure.models import (
     ApplicationStatus,
 )
 from s3mp.audit.infrastructure.models import AuditEventModel
+from s3mp.common.logging import instrument_async_methods
 from s3mp.identity.infrastructure.models import (
     MembershipModel,
     PrincipalModel,
@@ -105,6 +106,7 @@ def _api_key(model: ApiKeyModel) -> dict[str, object]:
     }
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyApplicationStore:
     """Implements application and API-key ports with a fresh session per call."""
 
@@ -135,31 +137,32 @@ class SqlAlchemyApplicationStore:
             )
             if cursor:
                 statement = statement.where(ApplicationModel.id > UUID(cursor))
-            rows = (await session.execute(
-                statement.order_by(ApplicationModel.id).limit(limit + 1)
-            )).all()
+            rows = (
+                await session.execute(statement.order_by(ApplicationModel.id).limit(limit + 1))
+            ).all()
         page, extra = rows[:limit], len(rows) > limit
-        return [
-            _application(application, storage) for application, storage in page
-        ], str(page[-1][0].id) if extra and page else None
+        return [_application(application, storage) for application, storage in page], str(
+            page[-1][0].id
+        ) if extra and page else None
 
     async def get_app(self, tenant_id: UUID, app_id: UUID) -> dict[str, object] | None:
         async with self._sessions() as session:
             row = (
                 await session.execute(
-                select(ApplicationModel, StorageSpaceModel)
-                .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
-                .outerjoin(
-                    StorageSpaceModel,
-                    (StorageSpaceModel.tenant_id == ApplicationModel.tenant_id)
-                    & (StorageSpaceModel.application_id == ApplicationModel.id),
+                    select(ApplicationModel, StorageSpaceModel)
+                    .join(TenantModel, TenantModel.id == ApplicationModel.tenant_id)
+                    .outerjoin(
+                        StorageSpaceModel,
+                        (StorageSpaceModel.tenant_id == ApplicationModel.tenant_id)
+                        & (StorageSpaceModel.application_id == ApplicationModel.id),
+                    )
+                    .where(
+                        ApplicationModel.tenant_id == tenant_id,
+                        ApplicationModel.id == app_id,
+                        ApplicationModel.status != "deleted",
+                        TenantModel.status == "active",
+                    )
                 )
-                .where(
-                    ApplicationModel.tenant_id == tenant_id,
-                    ApplicationModel.id == app_id,
-                    ApplicationModel.status != "deleted",
-                    TenantModel.status == "active",
-                ))
             ).one_or_none()
         return _application(row[0], row[1]) if row else None
 

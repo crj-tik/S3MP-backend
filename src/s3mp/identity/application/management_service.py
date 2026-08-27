@@ -6,10 +6,12 @@ from uuid import UUID
 
 from s3mp.authorization.application.management_service import AuthorizationManagementService
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.identity.application.management_ports import IdentityManagementStore
 from s3mp.identity.domain.context import PrincipalContext
 
 
+@instrument_service_mutations("identity")
 @dataclass(slots=True)
 class IdentityManagementService:
     store: IdentityManagementStore

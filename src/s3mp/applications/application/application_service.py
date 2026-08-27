@@ -14,6 +14,7 @@ from s3mp.applications.domain.credentials import (
 )
 from s3mp.applications.infrastructure.models import ApiKeyStatus, ApplicationStatus
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_operation
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import StoragePolicyError, canonical_object_key
 
@@ -181,6 +182,7 @@ class ApplicationService:
         await self._require_owner_or_permission(context, app_id, "applications.read")
         return await _application_view(self.store, context.tenant_id, result)
 
+    @instrument_service_operation("application.create")
     async def create_app(
         self, context: PrincipalContext, name: str, code: str, membership_id: UUID | None = None
     ) -> dict[str, Any]:
@@ -194,8 +196,7 @@ class ApplicationService:
             create_app = self.store.create_app
             parameters = signature(create_app).parameters
             accepts_membership = "membership_id" in parameters or any(
-                parameter.kind == Parameter.VAR_POSITIONAL
-                for parameter in parameters.values()
+                parameter.kind == Parameter.VAR_POSITIONAL for parameter in parameters.values()
             )
             if accepts_membership:
                 created = await self.store.create_app(
@@ -234,9 +235,7 @@ class ApplicationService:
                     status_code=503,
                 ) from exc
             if str(exc) == "tenant_not_active":
-                raise ApiError(
-                    "resource_not_found", "Tenant not found", status_code=404
-                ) from exc
+                raise ApiError("resource_not_found", "Tenant not found", status_code=404) from exc
             raise
         return await _application_view(
             self.store,
@@ -326,6 +325,7 @@ class ApplicationService:
             raise ApiError("resource_not_found", "Application not found", status_code=404)
         return await _application_view(self.store, context.tenant_id, result)
 
+    @instrument_service_operation("application.delete")
     async def delete_app(
         self, context: PrincipalContext, app_id: UUID, reason: str
     ) -> dict[str, Any]:
@@ -431,8 +431,13 @@ class ApiKeyService:
         )
         return _public_api_key(result)
 
+    @instrument_service_operation("application.api_key.issue")
     async def issue(
-        self, context: PrincipalContext, app_id: UUID, scopes: list[str], ttl_days: int = 90,
+        self,
+        context: PrincipalContext,
+        app_id: UUID,
+        scopes: list[str],
+        ttl_days: int = 90,
         directory_prefix: str | None = None,
     ) -> dict[str, Any]:
         await self._require_owner_or_permission(context, app_id, "api_keys.manage")
@@ -462,6 +467,7 @@ class ApiKeyService:
         record["credential"] = issued.credential
         return _public_api_key(record)
 
+    @instrument_service_operation("application.api_key.rotate")
     async def rotate(
         self, context: PrincipalContext, key_id: UUID, overlap_seconds: int = 300
     ) -> dict[str, Any]:
@@ -498,6 +504,7 @@ class ApiKeyService:
         record["credential"] = issued.credential
         return _public_api_key(record)
 
+    @instrument_service_operation("application.api_key.revoke")
     async def revoke(self, context: PrincipalContext, key_id: UUID, reason: str) -> dict[str, Any]:
         existing = await self.get_key(context, key_id)
         await self._require_owner_or_permission(

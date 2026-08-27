@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import logging
 import os
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from redis.asyncio import Redis
 from s3mp.applications.infrastructure.repositories import SqlAlchemyApplicationStore
 from s3mp.common.config import get_settings
 from s3mp.common.database import create_engine, create_session_factory
+from s3mp.common.logging import bind_log_context, configure_logging, log_event, reset_log_context
 from s3mp.common.redis import create_redis
 from s3mp.files.application.file_service import FileApplicationService
 from s3mp.files.application.operation_worker import FileOperationWorker
@@ -21,6 +23,8 @@ from s3mp.identity.infrastructure.identity_repository import SqlAlchemyIdentityA
 from s3mp.storage.infrastructure.minio import MinioObjectStorageAdapter
 from s3mp.storage.infrastructure.repositories import SqlAlchemyStorageStore
 
+logger = logging.getLogger(__name__)
+
 
 async def run_once(limit: int, *, redis: Redis | None = None) -> dict[str, int | bool]:
     settings = get_settings()
@@ -28,6 +32,7 @@ async def run_once(limit: int, *, redis: Redis | None = None) -> dict[str, int |
     if not database_url or not settings.s3_endpoint:
         raise RuntimeError("worker requires database and object-storage configuration")
     engine = create_engine(database_url)
+    operation_token = bind_log_context(operation_id=uuid4().hex)
     try:
         sessions = create_session_factory(engine)
         file_store = SqlAlchemyFileStore(sessions)
@@ -73,9 +78,17 @@ async def run_once(limit: int, *, redis: Redis | None = None) -> dict[str, int |
             purged_files=purged_files,
             redis_wakeup_available=redis is not None,
         )
-        print("worker metrics: " + ", ".join(f"{key}={value}" for key, value in metrics.items()))
+        log_event(
+            logger,
+            logging.INFO,
+            "file.worker.batch.completed",
+            layer="worker",
+            count=len(completed),
+            outcome="succeeded",
+        )
         return metrics
     finally:
+        reset_log_context(operation_token)
         await engine.dispose()
 
 
@@ -83,6 +96,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format, settings.log_slow_operation_ms)
     parser.add_argument("--limit", type=int, default=settings.worker_batch_size)
     parser.add_argument("--poll-seconds", type=float, default=settings.worker_poll_seconds)
     args = parser.parse_args()
@@ -96,7 +110,17 @@ def main() -> None:
         signal = RedisWorkSignal(redis) if redis is not None else None
         try:
             while True:
-                await run_once(args.limit, redis=redis)
+                try:
+                    await run_once(args.limit, redis=redis)
+                except Exception:
+                    logger.exception(
+                        "file_worker_batch_failed",
+                        extra={
+                            "event": "file.worker.batch.failed",
+                            "layer": "worker",
+                            "outcome": "failed",
+                        },
+                    )
                 if signal is None or not await signal.wait(args.poll_seconds):
                     # Redis failure is degraded latency only; polling PostgreSQL
                     # on every loop guarantees durable work is still consumed.

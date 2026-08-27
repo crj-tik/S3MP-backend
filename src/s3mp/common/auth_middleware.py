@@ -1,5 +1,6 @@
 """Authentication middleware: resolve credentials to PrincipalContext."""
 
+import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -8,6 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import bind_log_context, log_event, reset_log_context
 from s3mp.identity.domain.context import PrincipalContext
 
 PUBLIC_PATHS: frozenset[str] = frozenset(
@@ -46,13 +48,36 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in PUBLIC_PATHS or request.method == "OPTIONS":
             return await call_next(request)
 
-        # Allow test harness to pre-inject context (test middleware runs before us)
-        if hasattr(request.state, "principal_context"):
-            return await call_next(request)
+        # Allow a test harness to pre-inject an already trusted context, while
+        # still applying the same safe runtime-log attribution as real auth.
+        injected_context = getattr(request.state, "principal_context", None)
+        if isinstance(injected_context, PrincipalContext):
+            token = bind_log_context(
+                tenant_id=str(injected_context.tenant_id),
+                principal_id=str(injected_context.principal_id),
+                application_id=(
+                    str(injected_context.application_id)
+                    if injected_context.application_id
+                    else None
+                ),
+                auth_mode="api_key" if injected_context.api_key_id else "session",
+            )
+            try:
+                return await call_next(request)
+            finally:
+                reset_log_context(token)
 
         try:
             await _resolve_available_contexts(request)
         except ApiError as exc:
+            log_event(
+                logging.getLogger(__name__),
+                logging.WARNING,
+                "authentication.rejected",
+                layer="middleware",
+                error_code=exc.code,
+                outcome="rejected",
+            )
             return JSONResponse(
                 status_code=exc.status_code,
                 content={
@@ -61,7 +86,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     "request_id": getattr(request.state, "request_id", "unknown"),
                 },
             )
-        return await call_next(request)
+        context = getattr(request.state, "principal_context", None)
+        if context is None:
+            return await call_next(request)
+        token = bind_log_context(
+            tenant_id=str(context.tenant_id),
+            principal_id=str(context.principal_id),
+            application_id=str(context.application_id) if context.application_id else None,
+            auth_mode="api_key" if context.api_key_id else "session",
+        )
+        try:
+            return await call_next(request)
+        finally:
+            reset_log_context(token)
 
 
 async def _resolve_available_contexts(request: Request) -> None:

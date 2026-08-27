@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import ApplicationModel
+from s3mp.common.logging import instrument_async_methods
 from s3mp.authorization.infrastructure.models import (
     BindingEffect,
     RoleBindingModel,
@@ -72,6 +73,7 @@ def _profile(model: PlatformStorageProfileModel) -> dict[str, object]:
     }
 
 
+@instrument_async_methods("repository")
 class SqlAlchemyStorageStore:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory

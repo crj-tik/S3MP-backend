@@ -3,6 +3,8 @@ name: s3mp
 x-runtime-environment: &runtime-environment
   S3MP_ENVIRONMENT: production
   S3MP_LOG_LEVEL: ${S3MP_LOG_LEVEL:-INFO}
+  S3MP_LOG_FORMAT: ${S3MP_LOG_FORMAT:-json}
+  S3MP_LOG_SLOW_OPERATION_MS: ${S3MP_LOG_SLOW_OPERATION_MS:-500}
   S3MP_DATABASE_URL: ${S3MP_DATABASE_URL:?set S3MP_DATABASE_URL}
   S3MP_REDIS_URL: ${S3MP_REDIS_URL:?set S3MP_REDIS_URL}
   S3MP_S3_ENDPOINT: ${S3MP_S3_ENDPOINT:?set S3MP_S3_ENDPOINT}
@@ -138,6 +140,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+#      解决服务器内核兼容问题
+    security_opt:
+      - seccomp=unconfined
 
   redis:
     image: redis:7-alpine

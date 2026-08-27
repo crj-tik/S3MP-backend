@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert
 from s3mp.common.api_observability import API_USAGE_STREAM
 from s3mp.common.config import get_settings
 from s3mp.common.database import create_engine, create_session_factory
+from s3mp.common.logging import bind_log_context, configure_logging, log_event, reset_log_context
 from s3mp.common.redis import create_redis
 from s3mp.governance.infrastructure.models import (
     ApplicationApiErrorModel,
@@ -76,9 +77,7 @@ async def run_once(redis: Redis, session_factory: object, count: int) -> int:
     except ResponseError as exc:
         if "BUSYGROUP" not in str(exc):
             raise
-    rows = await redis.xreadgroup(
-        GROUP, CONSUMER, {API_USAGE_STREAM: ">"}, count=count, block=1000
-    )
+    rows = await redis.xreadgroup(GROUP, CONSUMER, {API_USAGE_STREAM: ">"}, count=count, block=1000)
     processed = 0
     for _, events in rows:
         for event_id, fields in events:
@@ -118,6 +117,7 @@ async def main_async() -> None:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format, settings.log_slow_operation_ms)
     database_url, redis_url = (
         settings.secret_value("database_url"),
         settings.secret_value("redis_url"),
@@ -129,17 +129,47 @@ async def main_async() -> None:
         sessions = create_session_factory(engine)
         iteration = 0
         while True:
-            processed = await run_once(redis, sessions, settings.worker_batch_size)
-            iteration += 1
-            if iteration % 60 == 0:
-                removed = await purge_errors(
-                    sessions, settings.api_observability_error_retention_days
+            operation_token = bind_log_context(operation_id="api-observability-batch")
+            try:
+                processed = await run_once(redis, sessions, settings.worker_batch_size)
+                iteration += 1
+                if iteration % 60 == 0:
+                    removed = await purge_errors(
+                        sessions, settings.api_observability_error_retention_days
+                    )
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "api_observability.errors_purged",
+                        layer="worker",
+                        count=removed,
+                        outcome="succeeded",
+                    )
+                    await log_backlog(redis)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "api_observability.batch.completed",
+                    layer="worker",
+                    count=processed,
+                    outcome="succeeded",
                 )
-                logger.info("api_observability_errors_purged", extra={"count": removed})
-                await log_backlog(redis)
-            logger.info("api_observability_processed", extra={"count": processed})
-            if args.once:
-                return
+                if args.once:
+                    return
+            except Exception:
+                logger.exception(
+                    "api_observability_batch_failed",
+                    extra={
+                        "event": "api_observability.batch.failed",
+                        "layer": "worker",
+                        "outcome": "failed",
+                    },
+                )
+                if args.once:
+                    raise
+                await asyncio.sleep(1)
+            finally:
+                reset_log_context(operation_token)
     finally:
         await redis.aclose()
         await engine.dispose()

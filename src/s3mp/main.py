@@ -306,7 +306,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if engine is not None:
                 await engine.dispose()
 
-    configure_logging(configured.log_level)
+    configure_logging(
+        configured.log_level, configured.log_format, configured.log_slow_operation_ms
+    )
     app = FastAPI(title="S3MP API", version="1.1.0", lifespan=lifespan)
     app.state.settings = configured
     app.state.readiness_timeout = configured.readiness_timeout_seconds
@@ -319,7 +321,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type", "X-S3MP-CSRF", "If-Match", "Idempotency-Key"],
         )
-    app.add_middleware(RequestIDMiddleware)
     app.add_middleware(ChinaTimeInputMiddleware)
     from s3mp.common.datetime_format import DateTimeFormatMiddleware
 
@@ -329,6 +330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(AuthMiddleware)
     app.add_middleware(BrowserCSRFMiddleware)
     app.add_middleware(ApiUsageObservationMiddleware)
+    app.add_middleware(RequestIDMiddleware)
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(identity_router)

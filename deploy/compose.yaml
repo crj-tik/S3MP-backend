@@ -46,6 +46,8 @@ services:
     environment:
       <<: *s3mp-runtime-environment
       S3MP_LOG_LEVEL: INFO
+      S3MP_LOG_FORMAT: ${S3MP_LOG_FORMAT:-json}
+      S3MP_LOG_SLOW_OPERATION_MS: ${S3MP_LOG_SLOW_OPERATION_MS:-500}
       S3MP_BROWSER_COOKIE_SECURE: "false"
       S3MP_READINESS_TIMEOUT_SECONDS: "2"
     ports: ["${S3MP_HTTP_PORT:-19101}:80"]
@@ -149,6 +151,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init/00-database-owner.sql:/docker-entrypoint-initdb.d/00-database-owner.sql:ro
+    ports:
+      - "${S3MP_POSTGRES_PORT:-18110}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U s3mp -d s3mp"]
       interval: 5s
@@ -162,6 +166,8 @@ services:
     command: ["/bin/sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$${S3MP_REDIS_PASSWORD}\""]
     volumes:
       - redis-data:/data
+    ports:
+      - "${S3MP_REDIS_PORT:-18113}:6379"
     healthcheck:
       test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${S3MP_REDIS_PASSWORD}\" ping"]
       interval: 5s

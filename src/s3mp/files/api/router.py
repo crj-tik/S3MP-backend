@@ -5,7 +5,7 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Header, Path, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.application.idempotency import IdempotencyGuard
@@ -38,9 +38,28 @@ class DirectUploadCreate(BaseModel):
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
     checksum: str | None = Field(default=None, max_length=512)
+    metadata: JsonValue | None = Field(
+        default=None, description="应用提供的 JSON 元数据；平台不解析其业务含义。"
+    )
     expires_at: datetime = Field(
         description="资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。"
     )
+
+
+class UploadPrecheckCreate(BaseModel):
+    """Caller-proposed name and size before creating an upload session."""
+
+    model_config = ConfigDict(extra="forbid")
+    object_key: str = Field(min_length=1, max_length=1024)
+    content_length: int = Field(ge=0)
+
+
+class UploadPrecheckRuntime(BaseModel):
+    """Advisory result; upload completion remains the authoritative collision check."""
+
+    object_key: str
+    content_length: int = Field(ge=0)
+    exists: bool
 
 
 class UploadComplete(BaseModel):
@@ -59,6 +78,9 @@ class MultipartCreate(BaseModel):
     object_key: str = Field(min_length=1, max_length=1024)
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
+    metadata: JsonValue | None = Field(
+        default=None, description="应用提供的 JSON 元数据；平台不解析其业务含义。"
+    )
     expires_at: datetime = Field(
         description="资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。"
     )
@@ -83,6 +105,7 @@ class FileObjectRuntime(BaseModel):
     status: str | None = None
     etag: str | None = None
     checksum: str | None = None
+    metadata: JsonValue | None = None
     created_at: str | None = None
 
 
@@ -253,6 +276,22 @@ async def list_files(
             _context(request), space_id, prefix or "", status
         )
     ]
+
+
+@router.post(
+    "/storage_spaces/{space_id}/upload_prechecks",
+    response_model=UploadPrecheckRuntime,
+    operation_id="precheck_upload",
+    deprecated=True,
+)
+async def precheck_upload(
+    request: Request, body: UploadPrecheckCreate, space_id: str = Path(min_length=1)
+) -> UploadPrecheckRuntime:
+    return UploadPrecheckRuntime.model_validate(
+        await _file_svc(request).precheck_upload(
+            _context(request), space_id, body.object_key, body.content_length
+        )
+    )
 
 
 @router.get(
@@ -608,6 +647,31 @@ async def list_current_application_files(
 ) -> list[FileObjectRuntime]:
     await _application_api_context(request, application_code)
     return await list_files(request, await _implicit_space_id(request), prefix, status)
+
+
+@router.post(
+    "/applications/{application_id}/upload_prechecks",
+    response_model=UploadPrecheckRuntime,
+    operation_id="precheck_application_upload",
+)
+async def precheck_application_upload(
+    request: Request, application_id: UUID, body: UploadPrecheckCreate
+) -> UploadPrecheckRuntime:
+    return await precheck_upload(request, body, await _implicit_space_id(request, application_id))
+
+
+@router.post(
+    "/application/upload_prechecks",
+    response_model=UploadPrecheckRuntime,
+    operation_id="precheck_current_application_upload",
+)
+async def precheck_current_application_upload(
+    request: Request,
+    body: UploadPrecheckCreate,
+    application_code: str = Query(min_length=1),
+) -> UploadPrecheckRuntime:
+    await _application_api_context(request, application_code)
+    return await precheck_upload(request, body, await _implicit_space_id(request))
 
 
 @router.get(

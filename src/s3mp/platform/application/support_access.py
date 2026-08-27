@@ -5,6 +5,7 @@ from typing import Protocol
 from uuid import UUID
 
 from s3mp.common.errors import ApiError
+from s3mp.common.logging import instrument_service_mutations
 from s3mp.platform.domain.context import PlatformContext
 
 
@@ -24,6 +25,7 @@ class SupportAccessStore(Protocol):
     async def expire_support_access(self, *, now: datetime) -> int: ...
 
 
+@instrument_service_mutations("platform.support_access")
 class SupportAccessService:
     def __init__(self, store: SupportAccessStore) -> None:
         self._store = store

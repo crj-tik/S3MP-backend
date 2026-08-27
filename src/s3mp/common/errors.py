@@ -70,11 +70,18 @@ def install_error_handlers(app: FastAPI) -> None:
         # Keep the public response generic, but retain the request id and full
         # traceback in server logs so production 500s are diagnosable.
         logger.exception(
-            "Unhandled API exception request_id=%s method=%s path=%s",
-            request.state.request_id,
-            request.method,
-            request.url.path,
-            exc_info=exc,
+            "unhandled_api_exception",
+            extra={
+                "event": "http.request.unhandled_exception",
+                "layer": "middleware",
+                "method": request.method,
+                "operation": getattr(
+                    getattr(request, "scope", {}).get("route"), "operation_id", None
+                ),
+                "status_code": 500,
+                "outcome": "failed",
+                "error_type": type(exc).__name__,
+            },
         )
         return JSONResponse(
             status_code=500,
