@@ -104,6 +104,13 @@ class AuthorizedFileCommand:
         )
 
         if decision.decision is not Decision.ALLOW:
+            if ctx.subject_kind == "application" and not bindings:
+                raise ApiError(
+                    "role_not_configured",
+                    "No active role binding is configured for this application "
+                    "in the target storage space",
+                    status_code=403,
+                )
             raise ApiError("permission_denied", decision.reason_code, status_code=403)
 
         evidence = {

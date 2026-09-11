@@ -40,7 +40,9 @@ class MetadataCatalogResponse(BaseModel):
 
     version: str = Field(description="目录版本；值集合变化时递增。")
     statuses: dict[str, list[CatalogItem]] = Field(description="按资源类型分组的生命周期状态目录。")
-    scopes: list[CatalogItem] = Field(description="角色授权模型目录；角色绑定始终在当前租户内生效。")
+    scopes: list[CatalogItem] = Field(
+        description="角色授权模型目录；角色绑定始终在当前租户内生效。"
+    )
     effects: list[CatalogItem] = Field(description="授权效果目录。")
     operations: list[CatalogItem] = Field(description="文件和对象存储操作类型目录。")
     quota_scopes: list[CatalogItem] = Field(description="配额统计范围目录。")
@@ -116,7 +118,9 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
             "文件已入库并可按授权访问。",
             ("renaming", "deleting", "quarantined"),
         ),
-        _item("renaming", "重命名中", "目标文件已被保留，尚不可读取。", ("available", "rename_failed")),
+        _item(
+            "renaming", "重命名中", "目标文件已被保留，尚不可读取。", ("available", "rename_failed")
+        ),
         _item("rename_failed", "重命名失败", "重命名需要恢复或人工处理。", ("renaming",)),
         _item("deleting", "删除中", "文件已进入受控删除流程。", ("deleted", "delete_failed")),
         _item(
@@ -155,18 +159,54 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
     ],
     "file_operation": [
         _item(
-            "pending",
-            "待处理",
-            "异步文件操作等待 worker 执行。",
-            ("running", "cancelled", "partial_failure", "failed"),
+            "queued",
+            "已排队",
+            "异步文件操作已持久化，等待消息接收者处理。",
+            ("processing", "cancelled", "dead_lettered"),
         ),
-        _item("running", "执行中", "worker 正在执行异步文件操作。", ("retry_wait", "succeeded", "partial_failure", "failed", "cancelled")),
-        _item("retry_wait", "等待重试", "临时失败后等待受控重试。", ("running", "failed", "cancelled")),
+        _item(
+            "processing",
+            "执行中",
+            "消息接收者正在执行异步文件操作。",
+            (
+                "retry_scheduled",
+                "succeeded",
+                "partial_failure",
+                "failed",
+                "cancelled",
+                "dead_lettered",
+            ),
+        ),
+        _item(
+            "retry_scheduled",
+            "等待重试",
+            "临时失败后等待延迟重投。",
+            ("processing", "dead_lettered", "cancelled"),
+        ),
         _item("succeeded", "成功", "异步文件操作已验证并完成。", terminal=True),
         _item("completed", "已完成", "异步文件操作已完成。", terminal=True),
-        _item("partial_failure", "部分失败", "操作部分完成，需要重试或人工处理。", ("running",)),
+        _item("partial_failure", "部分失败", "操作部分完成，需要人工处理。", terminal=True),
         _item("failed", "失败", "异步文件操作执行失败。", terminal=True),
         _item("cancelled", "已取消", "授权或依赖状态改变，操作未执行。", terminal=True),
+        _item("dead_lettered", "已死信", "操作需要人工检查或受控重放。", terminal=True),
+        _item(
+            "pending",
+            "待处理（兼容）",
+            "旧版持久化操作等待处理；新写入使用 queued。",
+            ("running", "retry_wait", "completed", "failed", "cancelled"),
+        ),
+        _item(
+            "running",
+            "执行中（兼容）",
+            "旧版持久化操作正在执行；新写入使用 processing。",
+            ("retry_wait", "completed", "partial_failure", "failed", "cancelled"),
+        ),
+        _item(
+            "retry_wait",
+            "等待重试（兼容）",
+            "旧版持久化操作等待重试；新写入使用 retry_scheduled。",
+            ("running", "failed", "cancelled"),
+        ),
     ],
     "support_access": [
         _item("pending", "待审批", "支持访问请求等待审批。", ("approved", "revoked", "expired")),
@@ -181,7 +221,9 @@ STATUS_CATALOG: dict[str, list[dict[str, Any]]] = {
     ],
     "application_storage": [
         _item("active", "正常", "应用派生存储路径可用于文件操作。", ("suspended", "deleted")),
-        _item("suspended", "已暂停", "应用派生存储路径暂时不能进行文件操作。", ("active", "deleted")),
+        _item(
+            "suspended", "已暂停", "应用派生存储路径暂时不能进行文件操作。", ("active", "deleted")
+        ),
         _item("deleted", "已删除", "应用派生存储路径已软删除。", terminal=True),
     ],
     "ingestion": [
@@ -245,7 +287,11 @@ OPERATIONS = [
 QUOTA_SCOPES = [
     _item("tenant", "租户", "统计租户全部应用的容量。"),
     _item("application", "应用", "统计单个应用命名空间的容量。"),
-    _item("storage_space", "历史存储空间配额", "旧模型配额，仅用于迁移和审计；活动配额按租户或应用统计。"),
+    _item(
+        "storage_space",
+        "历史存储空间配额",
+        "旧模型配额，仅用于迁移和审计；活动配额按租户或应用统计。",
+    ),
 ]
 QUOTA_ALLOCATION_MODES = [
     _item("tenant_total", "租户总配额", "租户在共享 Bucket 中的总容量上限。"),

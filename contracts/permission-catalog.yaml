@@ -16,6 +16,7 @@ permissions:
   - {name: platform.audit.read, display_name: "平台审计", resource_type: platform_audit, delegable: false, description: "查看平台审计事件。"}
   - {name: platform.quotas.read, display_name: "配额查看", resource_type: platform_quota, delegable: false, description: "查看跨租户的配额分配。"}
   - {name: platform.quotas.manage, display_name: "配额管理", resource_type: platform_quota, delegable: false, description: "分配和撤销租户或应用配额。"}
+  - {name: platform.file_trash.read, display_name: "回收站查看", resource_type: platform_file_trash, delegable: false, description: "查看删除记录并受控下载保留文件。"}
   - {name: members.read, display_name: "成员查看", resource_type: membership, delegable: true, description: "查看租户成员列表和资料。"}
   - {name: members.manage, display_name: "成员管理", resource_type: membership, delegable: true, description: "邀请、停用、恢复和移除成员。"}
   - {name: groups.read, display_name: "用户组查看", resource_type: group, delegable: true, description: "查看用户组及其成员。"}
@@ -38,6 +39,8 @@ permissions:
   - {name: files.delete, display_name: "文件删除", resource_type: application_namespace, delegable: true, description: "删除当前应用目录中的文件。"}
   - {name: files.copy, display_name: "文件复制", resource_type: application_namespace, delegable: true, description: "在当前应用目录内复制文件。"}
   - {name: files.move, display_name: "文件移动", resource_type: application_namespace, delegable: true, description: "在当前应用目录内移动文件。"}
+  - {name: knowledge.exclusions.read, display_name: "知识免解析规则查看", resource_type: application_namespace, delegable: true, description: "查看当前应用的知识免解析目录规则。"}
+  - {name: knowledge.exclusions.manage, display_name: "知识免解析规则管理", resource_type: application_namespace, delegable: true, description: "管理知识免解析目录规则。"}
   - {name: presigned_urls.issue, display_name: "临时链接", resource_type: application_namespace, delegable: true, description: "签发受限的文件上传或下载链接。"}
   - {name: quotas.read, display_name: "配额查看", resource_type: quota, delegable: true, description: "查看容量限额、用量和预留。"}
   - {name: quotas.manage, display_name: "配额管理", resource_type: quota, delegable: false, description: "配置租户和应用的配额。"}

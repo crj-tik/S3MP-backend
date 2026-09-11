@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
 from s3mp.common.logging import instrument_async_methods
+from s3mp.files.domain.file_reference import generate_file_ref
 from s3mp.files.domain.ingestion import (
     VALID_TRANSITIONS,
     IngestionEventType,
@@ -36,6 +37,14 @@ from s3mp.governance.infrastructure.models import (
     QuotaModel,
     QuotaReservationModel,
 )
+from s3mp.knowledge.contracts import load_contract
+from s3mp.knowledge.domain.exclusions import is_excluded
+from s3mp.knowledge.domain.source_hash import InvalidSourceChecksum, normalize_declared_sha256
+from s3mp.knowledge.infrastructure.models import (
+    KnowledgeAnalysisTaskModel,
+    KnowledgeEventOutboxModel,
+    KnowledgeExtractionExclusionRuleModel,
+)
 from s3mp.storage.infrastructure.models import StorageSpaceModel
 
 
@@ -47,8 +56,14 @@ class SqlAlchemyIngestionStore:
     the state-machine transition before persisting.
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        knowledge_extraction_enabled: bool = True,
+    ) -> None:
         self._sf = session_factory
+        self._knowledge_extraction_enabled = knowledge_extraction_enabled
 
     async def create_upload_intent(
         self, tenant_id: UUID, session_data: dict[str, Any], ingestion_data: dict[str, Any]
@@ -147,6 +162,7 @@ class SqlAlchemyIngestionStore:
                 object_key=session_data["object_key"],
                 declared_length=session_data["content_length"],
                 content_type=session_data["content_type"],
+                checksum=session_data.get("checksum"),
                 metadata_json=session_data.get("metadata"),
                 quota_reservation_id=quota_reservation_id or uuid4(),
                 expires_at=session_data["expires_at"],
@@ -523,6 +539,13 @@ class SqlAlchemyIngestionStore:
                 content_type=row.actual_content_type or "application/octet-stream",
                 etag=row.provider_etag,
                 checksum=row.checksum,
+                public_file_ref=generate_file_ref(
+                    tenant_id=tenant_id,
+                    application_id=row.application_id,
+                    relative_key=row.relative_key,
+                    metadata=row.metadata_json,
+                    checksum=row.checksum,
+                ),
                 metadata_json=row.metadata_json,
             )
             session.add(file_obj)
@@ -624,9 +647,97 @@ class SqlAlchemyIngestionStore:
                     },
                 )
             )
+            await self._enqueue_knowledge_task(session, row, file_obj)
             await session.flush()
 
             return await _committed_result(session, row)
+
+    async def _enqueue_knowledge_task(
+        self,
+        session: AsyncSession,
+        ingestion: FileIngestionRecordModel,
+        file_obj: FileObjectModel,
+    ) -> None:
+        """Create an analysis task in the file commit transaction, never afterward."""
+        if not self._knowledge_extraction_enabled or ingestion.application_id is None:
+            return
+        contract = load_contract()
+        existing = await session.scalar(
+            select(KnowledgeAnalysisTaskModel).where(
+                KnowledgeAnalysisTaskModel.tenant_id == ingestion.tenant_id,
+                KnowledgeAnalysisTaskModel.source_file_id == file_obj.id,
+                KnowledgeAnalysisTaskModel.contract_manifest_hash == contract.manifest_hash,
+            )
+        )
+        if existing is not None:
+            return
+        try:
+            source_sha256 = normalize_declared_sha256(ingestion.checksum)
+        except InvalidSourceChecksum:
+            # Existing uploads remain committable; the worker will calculate the canonical hash.
+            source_sha256 = None
+        duplicate = None
+        if source_sha256:
+            duplicate = await session.scalar(
+                select(KnowledgeAnalysisTaskModel).where(
+                    KnowledgeAnalysisTaskModel.tenant_id == ingestion.tenant_id,
+                    KnowledgeAnalysisTaskModel.source_sha256 == source_sha256,
+                    KnowledgeAnalysisTaskModel.contract_manifest_hash == contract.manifest_hash,
+                    KnowledgeAnalysisTaskModel.state == "completed",
+                )
+            )
+        rules = (
+            await session.scalars(
+                select(KnowledgeExtractionExclusionRuleModel).where(
+                    KnowledgeExtractionExclusionRuleModel.tenant_id == ingestion.tenant_id,
+                    KnowledgeExtractionExclusionRuleModel.application_id
+                    == ingestion.application_id,
+                    KnowledgeExtractionExclusionRuleModel.enabled.is_(True),
+                )
+            )
+        ).all()
+        excluded = any(is_excluded(ingestion.relative_key, rule.directory_path) for rule in rules)
+        supported = _is_supported_knowledge_content(
+            ingestion.relative_key, ingestion.actual_content_type
+        )
+        state = "skipped" if excluded or not supported or duplicate is not None else "queued"
+        reason = (
+            "excluded_by_directory_rule"
+            if excluded
+            else (
+                "unsupported_format"
+                if not supported
+                else ("duplicate_content" if duplicate else None)
+            )
+        )
+        task = KnowledgeAnalysisTaskModel(
+            tenant_id=ingestion.tenant_id,
+            source_file_id=file_obj.id,
+            source_application_id=ingestion.application_id,
+            source_storage_space_id=ingestion.storage_space_id,
+            source_storage_namespace=ingestion.storage_namespace,
+            source_object_key=ingestion.relative_key,
+            source_content_type=ingestion.actual_content_type or "application/octet-stream",
+            source_content_hash=ingestion.checksum,
+            source_sha256=source_sha256,
+            contract_version=contract.version,
+            contract_manifest_hash=contract.manifest_hash,
+            state=state,
+            phase=state,
+            failure_reason=reason,
+            completed_at=datetime.now(UTC) if state == "skipped" else None,
+        )
+        session.add(task)
+        await session.flush()
+        if state == "queued":
+            session.add(
+                KnowledgeEventOutboxModel(
+                    tenant_id=ingestion.tenant_id,
+                    task_id=task.id,
+                    event_type="knowledge.analysis.requested",
+                    payload={"tenant_id": str(ingestion.tenant_id), "task_id": str(task.id)},
+                )
+            )
 
     # ── Terminal states ──────────────────────────────────────────────────────
 
@@ -1118,6 +1229,22 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "content_type": m.content_type,
         "etag": m.etag,
         "checksum": m.checksum,
+        "file_ref": m.public_file_ref,
         "metadata": m.metadata_json,
         "created_at": m.created_at.isoformat() if m.created_at else None,
+    }
+
+
+def _is_supported_knowledge_content(relative_key: str, content_type: str | None) -> bool:
+    suffix = relative_key.rsplit(".", 1)[-1].lower() if "." in relative_key else ""
+    if suffix in {"pdf", "docx", "xlsx", "pptx", "md", "markdown", "html", "htm"}:
+        return True
+    normalized = (content_type or "").lower().split(";", 1)[0].strip()
+    return normalized in {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/markdown",
+        "text/html",
     }

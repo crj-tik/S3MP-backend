@@ -7,12 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.applications.infrastructure.models import ApplicationModel
-from s3mp.common.logging import instrument_async_methods
 from s3mp.authorization.infrastructure.models import (
     BindingEffect,
     RoleBindingModel,
     RoleModel,
 )
+from s3mp.common.logging import instrument_async_methods
 from s3mp.storage.infrastructure.models import (
     PlatformStorageProfileModel,
     StorageConnectionModel,

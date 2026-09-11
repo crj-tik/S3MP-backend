@@ -5,6 +5,8 @@ prefixes and authorization remain application-service responsibilities.
 """
 
 import asyncio
+import hashlib
+import logging
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -13,12 +15,16 @@ from botocore.config import Config  # type: ignore[import-untyped]
 from botocore.exceptions import BotoCoreError, ClientError  # type: ignore[import-untyped]
 
 from s3mp.common.config import Settings
-from s3mp.common.logging import instrument_dependency
+from s3mp.common.logging import instrument_dependency, log_event
+from s3mp.storage.domain.checksum import provider_checksum_to_hex
 from s3mp.storage.domain.policy import ProviderTarget
 
 
 class ObjectStorageUnavailable(RuntimeError):
     """Configured object storage could not be contacted or authorized."""
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -74,7 +80,10 @@ class MinioObjectStorageAdapter:
         self._assert_shared_bucket(target)
         try:
             response: dict[str, Any] = await asyncio.to_thread(
-                self._client.head_object, Bucket=target.bucket, Key=target.key
+                self._client.head_object,
+                Bucket=target.bucket,
+                Key=target.key,
+                ChecksumMode="ENABLED",
             )
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
@@ -86,8 +95,82 @@ class MinioObjectStorageAdapter:
             etag=str(response.get("ETag", "")).strip('"') or None,
             content_type=response.get("ContentType"),
             version_id=response.get("VersionId"),
-            checksum_sha256=response.get("ChecksumSHA256"),
+            checksum_sha256=provider_checksum_to_hex(response.get("ChecksumSHA256")),
         )
+
+    @instrument_dependency("storage", "get")
+    async def get(self, target: ProviderTarget, *, max_bytes: int) -> bytes | None:
+        """Read one object with a server-enforced size limit.
+
+        This is intentionally only used by trusted platform workers. API callers
+        continue to receive presigned URLs rather than object content.
+        """
+        self._assert_shared_bucket(target)
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+        metadata = await self.head(target)
+        if metadata is None:
+            return None
+        if metadata.content_length > max_bytes:
+            raise ObjectStorageUnavailable("S3 object exceeds configured worker size limit")
+        try:
+            response: dict[str, Any] = await asyncio.to_thread(
+                self._client.get_object, Bucket=target.bucket, Key=target.key
+            )
+            stream = response["Body"]
+            try:
+                body = await asyncio.to_thread(stream.read, max_bytes + 1)
+            finally:
+                await asyncio.to_thread(stream.close)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                return None
+            raise ObjectStorageUnavailable("S3 object read failed") from exc
+        except BotoCoreError as exc:
+            raise ObjectStorageUnavailable("S3 object read failed") from exc
+        if len(body) > max_bytes:
+            raise ObjectStorageUnavailable("S3 object exceeds configured worker size limit")
+        return cast(bytes, body)
+
+    @instrument_dependency("storage", "hash_sha256")
+    async def hash_sha256(
+        self, target: ProviderTarget, *, chunk_size: int = 8 * 1024 * 1024
+    ) -> str:
+        """Stream an object through SHA-256 without buffering the full body."""
+        self._assert_shared_bucket(target)
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be positive")
+        try:
+            response: dict[str, Any] = await asyncio.to_thread(
+                self._client.get_object, Bucket=target.bucket, Key=target.key
+            )
+            stream = response["Body"]
+            digest = hashlib.sha256()
+            bytes_read = 0
+            try:
+                while True:
+                    chunk = await asyncio.to_thread(stream.read, chunk_size)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    bytes_read += len(chunk)
+            finally:
+                await asyncio.to_thread(stream.close)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                raise ObjectStorageUnavailable("S3 object read failed: object not found") from exc
+            raise ObjectStorageUnavailable("S3 object hash read failed") from exc
+        except (BotoCoreError, OSError) as exc:
+            raise ObjectStorageUnavailable("S3 object hash read failed") from exc
+        log_event(
+            logger,
+            logging.INFO,
+            "storage_object_sha256_completed",
+            layer="storage",
+            count=bytes_read,
+            outcome="success",
+        )
+        return f"sha256:{digest.hexdigest()}"
 
     @instrument_dependency("storage", "put")
     async def put(self, target: ProviderTarget, body: bytes, content_type: str) -> ObjectMetadata:
@@ -220,15 +303,21 @@ class MinioObjectStorageAdapter:
     # ── Multipart ──────────────────────────────────────────────────────────
 
     @instrument_dependency("storage", "create_multipart_upload")
-    async def create_multipart_upload(self, target: ProviderTarget, content_type: str) -> str:
+    async def create_multipart_upload(
+        self, target: ProviderTarget, content_type: str, checksum_sha256: str | None = None
+    ) -> str:
         """Initiate a provider-side multipart upload; returns the provider upload ID."""
         self._assert_shared_bucket(target)
         try:
+            params: dict[str, Any] = {
+                "Bucket": target.bucket,
+                "Key": target.key,
+                "ContentType": content_type,
+            }
+            if checksum_sha256 is not None:
+                params["ChecksumAlgorithm"] = "SHA256"
             response: dict[str, Any] = await asyncio.to_thread(
-                self._client.create_multipart_upload,
-                Bucket=target.bucket,
-                Key=target.key,
-                ContentType=content_type,
+                self._client.create_multipart_upload, **params
             )
         except (BotoCoreError, ClientError) as exc:
             raise ObjectStorageUnavailable("S3 multipart create failed") from exc

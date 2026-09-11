@@ -6,14 +6,15 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import or_, select, true, update
+from sqlalchemy import delete, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import aliased
 
 from s3mp.authorization.infrastructure.models import BindingEffect, RoleBindingModel
 from s3mp.common.logging import instrument_async_methods
-from s3mp.identity.application.security import PasswordCredential
+from s3mp.identity.application.security import PasswordCredential, PasswordHasher
 from s3mp.identity.infrastructure.models import (
+    ExternalIdentityModel,
     MembershipModel,
     MembershipStatus,
     MembershipStatusHistoryModel,
@@ -26,6 +27,7 @@ from s3mp.identity.infrastructure.models import (
 from s3mp.platform.application.baseline import ensure_support_role, ensure_tenant_admin_role
 from s3mp.platform.domain.support_access import SupportAccessStatus
 from s3mp.platform.infrastructure.models import (
+    CasServiceTicketSessionModel,
     PlatformAuditEventModel,
     PlatformBootstrapStateModel,
     PlatformRoleBindingModel,
@@ -72,6 +74,65 @@ class SqlAlchemyPlatformStore:
             if row is None:
                 return None
             return PasswordCredential(user_id=row.id, password_hash=row.password_hash)
+
+    async def resolve_or_link_external_identity(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        employee_number: str | None,
+        email: str | None,
+        display_name: str | None,
+    ) -> UUID | None:
+        async with self.session_factory.begin() as session:
+            link = await session.scalar(
+                select(ExternalIdentityModel).where(
+                    ExternalIdentityModel.issuer == issuer, ExternalIdentityModel.subject == subject
+                )
+            )
+            if link is not None:
+                user = await session.get(UserModel, link.user_id)
+                return user.id if user is not None and user.status == UserStatus.ACTIVE else None
+            user = None
+            if employee_number:
+                user = await session.scalar(
+                    select(UserModel).where(
+                        UserModel.normalized_employee_number == employee_number.casefold(),
+                        UserModel.status == UserStatus.ACTIVE,
+                    )
+                )
+            if user is None and email:
+                user = await session.scalar(
+                    select(UserModel).where(
+                        UserModel.normalized_email == email.casefold(),
+                        UserModel.status == UserStatus.ACTIVE,
+                    )
+                )
+            if user is None:
+                if not employee_number or not email or not display_name:
+                    return None
+                user = UserModel(
+                    email=email,
+                    normalized_email=email.casefold(),
+                    employee_number=employee_number,
+                    normalized_employee_number=employee_number.casefold(),
+                    display_name=display_name,
+                    status=UserStatus.ACTIVE,
+                    password_hash=PasswordHasher().hash("11111111"),
+                )
+                session.add(user)
+                await session.flush()
+                session.add(
+                    PlatformAuditEventModel(
+                        actor_user_id=None,
+                        action="platform.account_cas_provisioned",
+                        resource_type="user_account",
+                        resource_id=str(user.id),
+                        details={"issuer": issuer},
+                    )
+                )
+            session.add(ExternalIdentityModel(issuer=issuer, subject=subject, user_id=user.id))
+            return UUID(str(user.id))
 
     async def create_account(
         self,
@@ -175,7 +236,12 @@ class SqlAlchemyPlatformStore:
         return results
 
     async def create_account_session(
-        self, user_id: UUID, token_digest: bytes, csrf_digest: bytes, expires_at: datetime
+        self,
+        user_id: UUID,
+        token_digest: bytes,
+        csrf_digest: bytes,
+        expires_at: datetime,
+        cas_service_ticket_digest: bytes | None = None,
     ) -> UUID:
         from s3mp.platform.infrastructure.models import AccountSessionModel
 
@@ -188,6 +254,14 @@ class SqlAlchemyPlatformStore:
             )
             session.add(row)
             await session.flush()
+            if cas_service_ticket_digest is not None:
+                session.add(
+                    CasServiceTicketSessionModel(
+                        ticket_digest=cas_service_ticket_digest,
+                        account_session_id=row.id,
+                        expires_at=expires_at,
+                    )
+                )
             return row.id
 
     async def resolve_account_session(self, token_digest: bytes) -> "PlatformContext | None":
@@ -212,6 +286,11 @@ class SqlAlchemyPlatformStore:
 
         async with self.session_factory.begin() as session:
             await session.execute(
+                delete(CasServiceTicketSessionModel).where(
+                    CasServiceTicketSessionModel.account_session_id == session_id
+                )
+            )
+            await session.execute(
                 update(AccountSessionModel)
                 .where(
                     AccountSessionModel.id == session_id, AccountSessionModel.revoked_at.is_(None)
@@ -231,6 +310,42 @@ class SqlAlchemyPlatformStore:
                 )
                 .values(revoked_at=datetime.now(UTC))
             )
+
+    async def revoke_cas_service_ticket_session(self, ticket_digest: bytes) -> bool:
+        """Revoke exactly the account session created by a CAS ST, idempotently."""
+        from s3mp.platform.infrastructure.models import AccountSessionModel
+
+        async with self.session_factory.begin() as session:
+            mapping = await session.scalar(
+                select(CasServiceTicketSessionModel)
+                .where(CasServiceTicketSessionModel.ticket_digest == ticket_digest)
+                .with_for_update()
+            )
+            if mapping is None:
+                return False
+            account = await session.get(AccountSessionModel, mapping.account_session_id)
+            await session.delete(mapping)
+            if account is None:
+                return False
+            await session.execute(
+                update(AccountSessionModel)
+                .where(
+                    AccountSessionModel.id == account.id,
+                    AccountSessionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=datetime.now(UTC))
+            )
+            await session.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.membership_id.in_(
+                        select(MembershipModel.id).where(MembershipModel.user_id == account.user_id)
+                    ),
+                    SessionModel.revoked_at.is_(None),
+                )
+                .values(revoked_at=datetime.now(UTC))
+            )
+            return True
 
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None:
         async with self.session_factory() as session:
@@ -1447,6 +1562,7 @@ class SqlAlchemyPlatformStore:
     ) -> dict[str, object]:
         expiries = {binding.expires_at for binding, _ in rows}
         return {
+            "id": user.id,
             "user": SqlAlchemyPlatformStore._account_summary(user),
             "roles": [SqlAlchemyPlatformStore._role_summary(role) for _, role in rows],
             "expires_at": next(iter(expiries)) if len(expiries) == 1 else None,

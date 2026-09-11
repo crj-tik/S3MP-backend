@@ -32,16 +32,18 @@ from s3mp.common.health import router as health_router
 from s3mp.common.logging import configure_logging
 from s3mp.common.middleware import RequestIDMiddleware
 from s3mp.common.openapi_documentation import document_openapi
+from s3mp.common.rabbitmq import connect_rabbitmq, declare_file_operation_topology
 from s3mp.common.redis import create_redis
 from s3mp.common.timezone_middleware import ChinaTimeInputMiddleware
+from s3mp.files.api.platform_trash_router import router as platform_trash_router
 from s3mp.files.api.router import router as files_router
 from s3mp.files.application.file_service import FileApplicationService
+from s3mp.files.application.trash_service import PlatformTrashService
 from s3mp.files.infrastructure.authorization_repository import (
     SqlAlchemyFileAuthorizationStore,
 )
 from s3mp.files.infrastructure.ingestion_repository import SqlAlchemyIngestionStore
 from s3mp.files.infrastructure.repositories import SqlAlchemyFileStore
-from s3mp.files.infrastructure.work_signal import RedisWorkSignal
 from s3mp.governance.api.platform_router import router as platform_quota_router
 from s3mp.governance.api.router import router as governance_router
 from s3mp.governance.application.governance_service import (
@@ -55,6 +57,8 @@ from s3mp.governance.infrastructure.repositories import SqlAlchemyAuditStore, Sq
 from s3mp.identity.api.router import router as identity_router
 from s3mp.identity.application.management_service import IdentityManagementService
 from s3mp.identity.application.security import InMemoryLoginRateLimiter, LocalPasswordAuthenticator
+from s3mp.knowledge.api.router import router as knowledge_router
+from s3mp.knowledge.infrastructure.repositories import SqlAlchemyKnowledgeStore
 from s3mp.metadata.api import router as metadata_router
 from s3mp.platform.api.control_router import router as platform_control_router
 from s3mp.platform.api.role_router import router as platform_role_router
@@ -63,6 +67,7 @@ from s3mp.platform.api.router import router as account_auth_router
 from s3mp.platform.api.support_router import router as platform_support_router
 from s3mp.platform.api.tenant_router import router as platform_tenant_router
 from s3mp.platform.application.account_authentication import AccountAuthenticationService
+from s3mp.platform.application.cas_authentication import CasAuthentication
 from s3mp.platform.application.control_plane import PlatformControlPlaneService
 from s3mp.platform.application.role_management import PlatformRoleManagementService
 from s3mp.platform.application.support_access import SupportAccessService
@@ -103,6 +108,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         database_url = configured.secret_value("database_url")
         redis_url = configured.secret_value("redis_url")
+        rabbitmq_url = configured.secret_value("rabbitmq_url")
         engine: AsyncEngine | None = create_engine(database_url) if database_url else None
         redis: Redis | None = create_redis(redis_url) if redis_url else None
         app.state.engine = engine
@@ -174,6 +180,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.session_token_service,
                 session_ttl_seconds=configured.browser_session_ttl_seconds,
             )
+            if configured.cas_enabled:
+                if redis is None:
+                    raise RuntimeError("CAS authentication requires Redis")
+                app.state.cas_authentication = CasAuthentication(configured, redis)
             app.state.identity_context_provider = IdentityContextProvider(
                 session_store=_SessionStoreAdapter(session_factory),
                 membership_store=identity_store,
@@ -210,9 +220,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise RuntimeError("object storage is not configured")
             await object_storage.readiness_probe()
 
+        async def rabbitmq_check() -> None:
+            if not rabbitmq_url:
+                raise RuntimeError("rabbitmq is not configured")
+            connection = await connect_rabbitmq(rabbitmq_url)
+            try:
+                await declare_file_operation_topology(
+                    connection, prefetch=configured.rabbitmq_prefetch
+                )
+            finally:
+                await connection.close()
+
         app.state.readiness_checks = {"database": database_check, "redis": redis_check}
         if object_storage is not None:
             app.state.readiness_checks["object_storage"] = object_storage_check
+        if rabbitmq_url:
+            app.state.readiness_checks["rabbitmq"] = rabbitmq_check
 
         # ── Application services ──────────────────────────────────────────
         # Registered routes receive concrete stores when database access is configured.
@@ -264,7 +287,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file_authorization_store = (
             SqlAlchemyFileAuthorizationStore(session_factory) if session_factory else None
         )
-        ingestion_store = SqlAlchemyIngestionStore(session_factory) if session_factory else None
+        ingestion_store = (
+            SqlAlchemyIngestionStore(
+                session_factory,
+                knowledge_extraction_enabled=configured.knowledge_extraction_enabled,
+            )
+            if session_factory
+            else None
+        )
+        app.state.knowledge_store = (
+            SqlAlchemyKnowledgeStore(session_factory, redis) if session_factory else None
+        )
         app.state.file_service = FileApplicationService(
             file_store,
             object_storage=object_storage,
@@ -273,8 +306,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ingestion_store=ingestion_store,
             principal_store=identity_store if session_factory else None,
             api_key_state_store=application_store if session_factory else None,
-            work_notifier=RedisWorkSignal(redis) if redis is not None else None,
         )
+        app.state.platform_trash_service = PlatformTrashService(file_store, object_storage)
         quota_store: Any = SqlAlchemyQuotaStore(session_factory) if session_factory else _store
         app.state.dashboard_store = (
             SqlAlchemyDashboardStore(session_factory) if session_factory else _store
@@ -306,9 +339,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if engine is not None:
                 await engine.dispose()
 
-    configure_logging(
-        configured.log_level, configured.log_format, configured.log_slow_operation_ms
-    )
+    configure_logging(configured.log_level, configured.log_format, configured.log_slow_operation_ms)
     app = FastAPI(title="S3MP API", version="1.1.0", lifespan=lifespan)
     app.state.settings = configured
     app.state.readiness_timeout = configured.readiness_timeout_seconds
@@ -345,8 +376,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(applications_router)
     app.include_router(storage_router)
     app.include_router(files_router)
+    app.include_router(knowledge_router)
     app.include_router(governance_router)
     app.include_router(platform_quota_router)
+    app.include_router(platform_trash_router)
 
     def custom_openapi() -> dict[str, Any]:
         """Generate the public schema and enrich it with canonical Chinese guidance."""

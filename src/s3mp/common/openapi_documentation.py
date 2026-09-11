@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 OPERATION_DESCRIPTIONS: dict[str, str] = {
+    "update_current_application_file_metadata": (
+        "使用 record_etag 原子替换文件记录元数据，不修改对象内容或对象 ETag。"
+    ),
     "live_health_live_get": "检查 API 进程是否存活；不检查数据库、Redis 或对象存储。",
     "ready_health_ready_get": "检查 API 是否已就绪，并验证已启用的外部依赖。",
     "get_metadata_catalog": "获取前端使用的状态、枚举、授权效果和状态流转目录。",
@@ -37,8 +40,8 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
         "s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。"
     ),
     "account_logout": (
-        "撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；客户端必须把 "
-        "s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF 请求头。"
+        "撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；浏览器随后跟随 302 到"
+        "配置的 CAS 全局登出地址。客户端必须以携带 csrf_token 的原生表单提交该请求。"
     ),
     "select_tenant_session": (
         "为账户选择一个活跃租户成员关系，并建立独立的租户会话；客户端必须把 "
@@ -101,17 +104,21 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "probe_storage_connection": "探测对象存储连接与其声明能力。",
     "list_files": "在当前应用的固定命名空间内列出文件对象。",
     "get_file": "获取指定文件对象的元数据；不直接返回对象存储凭据。",
-    "delete_file": "提交文件删除；接口按声明的幂等与并发前置条件执行。",
+    "delete_file": (
+        "提交文件删除；file_ref 新轨无需 provider ETag，旧 UUID 轨继续按 If-Match 并发校验。"
+    ),
     "restore_file": "在三个月保留期内恢复文件；仅租户管理主体可调用。",
     "create_file_operation": "创建文件复制、移动或其他受控异步操作。",
     "get_file_operation": "查询文件操作的状态、结果和可恢复错误。",
     "rename_current_application_file": (
-        "异步重命名当前应用文件；必须提供当前 ETag 和幂等键，并返回新的文件标识。"
+        "异步重命名当前应用文件；必须提供当前 ETag 和幂等键。受理响应返回预创建目标"
+        "文件的 ID、元数据、内容 ETag 与记录 ETag，但只有操作成功且文件状态为 "
+        "available 后才可读取或下载。"
     ),
     "get_current_application_file_operation": "查询当前应用异步文件操作的状态和结果文件标识。",
     "create_direct_upload": "创建受授权、配额和幂等保护的直传会话，并返回短期 presigned PUT URL。",
     "get_direct_upload": "查询直传会话状态并重新签发仍有效的短期 PUT URL。",
-    "complete_direct_upload": "校验直传对象的元数据并将直传会话提交为可用文件。",
+    "complete_direct_upload": "服务端流式计算正文 SHA-256，校验直传对象并同步返回 file_ref。",
     "create_presigned_download": "为已授权的单个文件签发短期下载 URL。",
     "create_multipart_upload": "创建受配额和授权保护的分段上传会话。",
     "get_multipart_upload": "查询分段上传会话状态。",
@@ -120,7 +127,9 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "upload_multipart_part": (
         "接收一个分片二进制并由服务端写入对象存储，同时保存 provider 返回的 ETag。"
     ),
-    "complete_multipart_upload": "按已确认分片完成分段上传并验证最终对象。",
+    "complete_multipart_upload": (
+        "合并分片后由服务端对完整对象流式计算 SHA-256，并同步返回 file_ref。"
+    ),
     "list_quotas": "列出当前租户或应用的配额与使用量；历史空间记录仅作迁移兼容。",
     "get_quota": "获取指定配额的限制、已用量和预留量。",
     "update_quota": "更新配额上限；需要当前 ETag 以防并发覆盖。",
@@ -130,6 +139,22 @@ OPERATION_DESCRIPTIONS: dict[str, str] = {
     "revoke_platform_quota": "撤销没有使用量和进行中预留的应用独立配额，使容量回到共享池。",
     "list_audit_events": "检索当前租户可见的脱敏审计事件。",
     "get_audit_event": "获取单条脱敏审计事件详情。",
+}
+
+OPERATION_PARAMETER_DESCRIPTIONS: dict[tuple[str, str], str] = {
+    ("update_current_application_file_metadata", "application_code"): (
+        "调用方应用代码，用于确认应用身份与审计归属。"
+    ),
+    ("update_current_application_file_metadata", "If-Match"): (
+        "当前文件记录的 record_etag；用于拒绝覆盖较新的元数据。"
+    ),
+    ("update_current_application_file_metadata", "Idempotency-Key"): (
+        "客户端生成的幂等键；相同业务动作重试时必须复用。"
+    ),
+}
+
+OPERATION_SUMMARIES: dict[str, str] = {
+    "update_current_application_file_metadata": "更新当前应用文件元数据",
 }
 
 FIELD_DESCRIPTIONS: dict[str, str] = {
@@ -186,7 +211,8 @@ FIELD_DESCRIPTIONS: dict[str, str] = {
     "details": "非敏感的补充错误或结果信息。",
     "available_tenants": "当前账户可选择的活跃租户摘要列表。",
     "bucket": "对象存储服务中承载数据的存储桶名称。",
-    "checksum": "内容校验和，用于验证上传数据的完整性。",
+    "checksum": "服务端从最终对象正文计算的 SHA-256；客户端可不提交，完成响应会同步返回。",
+    "file_ref": "S3MP 签发的确定性文件引用；新客户端用它进行增删改查，不需要保存 provider ETag。",
     "coarse_permissions": "用于快速判定的粗粒度有效权限名称集合。",
     "created_by": "创建该资源的主体标识。",
     "credential_reference": "服务端保存的存储凭据引用；不返回凭据明文。",
@@ -502,13 +528,18 @@ def document_openapi(schema: dict[str, Any]) -> dict[str, Any]:
             responses = operation.setdefault("responses", {})
             for status_code in ("400", "401", "403", "404", "409", "412", "422", "500"):
                 responses[status_code] = error_response
-            operation["summary"] = description.split("；", 1)[0]
+            operation["summary"] = OPERATION_SUMMARIES.get(
+                operation_id, description.split("；", 1)[0]
+            )
             permission = OPERATION_PERMISSION_CLASSIFICATIONS.get(operation_id)
             if permission is not None:
                 operation["x-permission"] = permission
             for parameter in operation.get("parameters", []):
                 if isinstance(parameter, dict) and isinstance(parameter.get("name"), str):
-                    parameter["description"] = _field_description(parameter["name"])
+                    parameter_name = parameter["name"]
+                    parameter["description"] = OPERATION_PARAMETER_DESCRIPTIONS.get(
+                        (operation_id, parameter_name), _field_description(parameter_name)
+                    )
     _document_node(schema)
     return schema
 

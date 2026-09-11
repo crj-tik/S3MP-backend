@@ -66,6 +66,9 @@ MANAGEMENT_OPERATION_PERMISSIONS = {
     "list_dashboard_api_metrics": "audit.read",
     "list_dashboard_api_errors": "audit.read",
     "restore_file": "files.delete",
+    "list_knowledge_exclusions_tenant_admin": "knowledge.exclusions.read",
+    "create_knowledge_exclusion_tenant_admin": "knowledge.exclusions.manage",
+    "delete_knowledge_exclusion_tenant_admin": "knowledge.exclusions.manage",
 }
 
 # Platform operations use account-session authorization rather than the tenant
@@ -76,6 +79,9 @@ PLATFORM_OPERATION_PERMISSIONS = {
     "create_platform_quota": "platform.quotas.manage",
     "update_platform_quota": "platform.quotas.manage",
     "revoke_platform_quota": "platform.quotas.manage",
+    "list_platform_file_trash": "platform.file_trash.read",
+    "get_platform_file_trash": "platform.file_trash.read",
+    "download_platform_file_trash": "platform.file_trash.read",
     "list_platform_accounts": "platform.accounts.read",
     "get_platform_account": "platform.accounts.read",
     "reset_platform_account_password": "platform.accounts.manage",
@@ -98,6 +104,7 @@ DATA_PLANE_OPERATION_PERMISSIONS = {
     "delete_file": "files.delete",
     "create_file_operation": "files.copy",
     "rename_current_application_file": "files.move",
+    "update_current_application_file_metadata": "files.write",
     "get_current_application_file_operation": "files.read",
     "create_direct_upload": "files.write",
     "get_direct_upload": "files.write",

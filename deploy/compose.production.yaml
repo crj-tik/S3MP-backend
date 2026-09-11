@@ -7,6 +7,7 @@ x-runtime-environment: &runtime-environment
   S3MP_LOG_SLOW_OPERATION_MS: ${S3MP_LOG_SLOW_OPERATION_MS:-500}
   S3MP_DATABASE_URL: ${S3MP_DATABASE_URL:?set S3MP_DATABASE_URL}
   S3MP_REDIS_URL: ${S3MP_REDIS_URL:?set S3MP_REDIS_URL}
+  S3MP_RABBITMQ_URL: ${S3MP_RABBITMQ_URL:?set S3MP_RABBITMQ_URL}
   S3MP_S3_ENDPOINT: ${S3MP_S3_ENDPOINT:?set S3MP_S3_ENDPOINT}
   S3MP_S3_REGION: ${S3MP_S3_REGION:-us-east-1}
   S3MP_S3_PATH_STYLE: ${S3MP_S3_PATH_STYLE:-false}
@@ -16,8 +17,29 @@ x-runtime-environment: &runtime-environment
   S3MP_S3_SECRET_KEY: ${S3MP_S3_SECRET_KEY:?set S3MP_S3_SECRET_KEY}
   S3MP_API_KEY_PEPPER: ${S3MP_API_KEY_PEPPER:?set S3MP_API_KEY_PEPPER}
   S3MP_API_KEY_PEPPER_VERSION: ${S3MP_API_KEY_PEPPER_VERSION:-1}
+  S3MP_KNOWLEDGE_EXTRACTION_ENABLED: ${S3MP_KNOWLEDGE_EXTRACTION_ENABLED:-true}
+  S3MP_KNOWLEDGE_LLM_PROVIDER: ${S3MP_KNOWLEDGE_LLM_PROVIDER:?set S3MP_KNOWLEDGE_LLM_PROVIDER}
+  S3MP_KNOWLEDGE_LLM_MODEL: ${S3MP_KNOWLEDGE_LLM_MODEL:?set S3MP_KNOWLEDGE_LLM_MODEL}
+  S3MP_KNOWLEDGE_LLM_BASE_URL: ${S3MP_KNOWLEDGE_LLM_BASE_URL:?set S3MP_KNOWLEDGE_LLM_BASE_URL}
+  S3MP_KNOWLEDGE_LLM_API_KEY: ${S3MP_KNOWLEDGE_LLM_API_KEY:?set S3MP_KNOWLEDGE_LLM_API_KEY}
+  S3MP_ELASTICSEARCH_URL: ${S3MP_ELASTICSEARCH_URL:?set S3MP_ELASTICSEARCH_URL}
+  S3MP_ELASTICSEARCH_API_KEY: ${S3MP_ELASTICSEARCH_API_KEY:-}
+  S3MP_KNOWLEDGE_ELASTICSEARCH_INDEX: ${S3MP_KNOWLEDGE_ELASTICSEARCH_INDEX:-s3mp-knowledge-cards-v1}
   S3MP_BROWSER_COOKIE_SECURE: "true"
   S3MP_READINESS_TIMEOUT_SECONDS: "10"
+  S3MP_CAS_ENABLED: ${S3MP_CAS_ENABLED:-false}
+  S3MP_CAS_LOGIN_URL: ${S3MP_CAS_LOGIN_URL:-}
+  S3MP_CAS_VALIDATE_URL: ${S3MP_CAS_VALIDATE_URL:-}
+  S3MP_CAS_SERVICE_URL: ${S3MP_CAS_SERVICE_URL:-}
+  S3MP_CAS_ISSUER: ${S3MP_CAS_ISSUER:-}
+  S3MP_CAS_SESSION_HOST: ${S3MP_CAS_SESSION_HOST:-}
+  S3MP_CAS_SESSION_SOURCE: ${S3MP_CAS_SESSION_SOURCE:-}
+  S3MP_CAS_SESSION_SIGNATURE: ${S3MP_CAS_SESSION_SIGNATURE:-}
+  S3MP_CAS_LOGOUT_URL: ${S3MP_CAS_LOGOUT_URL:-}
+  S3MP_CAS_LOGOUT_RETURN_URL: ${S3MP_CAS_LOGOUT_RETURN_URL:-}
+  S3MP_CAS_LOGOUT_RETURN_PARAMETER: ${S3MP_CAS_LOGOUT_RETURN_PARAMETER:-service}
+  S3MP_CAS_LOG_IDENTITY_DETAILS: ${S3MP_CAS_LOG_IDENTITY_DETAILS:-false}
+  S3MP_CAS_LOG_RESPONSE_BODIES: ${S3MP_CAS_LOG_RESPONSE_BODIES:-false}
 
 services:
   migrate:
@@ -28,6 +50,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   api:
@@ -42,6 +66,7 @@ services:
         VITE_API_MODE: real
         VITE_APP_BASE_PATH: ${VITE_APP_BASE_PATH:-/}
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_CAS_ENABLED: ${S3MP_CAS_ENABLED:-false}
     environment: *runtime-environment
     ports:
       - "${S3MP_HTTP_PORT:-31701}:80"
@@ -64,7 +89,23 @@ services:
       S3MP_WORKER_BATCH_SIZE: "10"
       S3MP_WORKER_MAX_ATTEMPTS: "5"
       S3MP_WORKER_LEASE_SECONDS: "60"
-      S3MP_WORKER_RETENTION_DAYS: "30"
+      S3MP_WORKER_RETENTION_DAYS: ${S3MP_WORKER_RETENTION_DAYS:-90}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  knowledge-analysis-worker:
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
+    command: ["python", "-m", "s3mp.knowledge.worker", "analysis"]
+    environment: *runtime-environment
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  knowledge-index-worker:
+    image: ${S3MP_APP_IMAGE:-s3mp:latest}
+    command: ["python", "-m", "s3mp.knowledge.worker", "index"]
+    environment: *runtime-environment
     depends_on:
       bootstrap:
         condition: service_completed_successfully
@@ -157,6 +198,20 @@ services:
       timeout: 3s
       retries: 20
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${S3MP_RABBITMQ_USER:-s3mp_app}
+      RABBITMQ_DEFAULT_PASS: ${S3MP_RABBITMQ_PASSWORD:?set S3MP_RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
 volumes:
   postgres-data:
   redis-data:
+  rabbitmq-data:

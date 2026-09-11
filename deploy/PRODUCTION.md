@@ -73,6 +73,39 @@ docker compose --env-file /opt/s3mp/s3mp.env -f deploy/compose.production.yaml u
 `https://s3mp.example.com` 转发到 `127.0.0.1:8080`。前端通过同源的 `/api/` 调用 API，
 因此不要把 API 单独暴露到公网。
 
+## CAS 登录联调（可选）
+
+在启用 CAS 前，将 `S3MP_CAS_SERVICE_URL` 的完整 HTTPS 地址登记到 CAS，例如
+`https://gz-ai.ke.com/s3mp/api/v1/auth/cas/callback`。在服务器私有配置文件中设置
+`S3MP_CAS_SESSION_SIGNATURE`，并配置 CAS login、serviceValidate、issuer、Session 服务地址与
+source。生产环境还应设置 `S3MP_ENVIRONMENT=production`；这会关闭本地账号密码登录，只允许 CAS
+建立新会话。
+
+### CAS 上线烟测与回滚
+
+1. 配置完成并重启后，访问
+   `https://<public-host>/<base-path>/api/v1/auth/cas/login?return_to=/<base-path>/`；响应必须是
+   `302`，其 `Location` 的 `service` 参数必须与登记的 `S3MP_CAS_SERVICE_URL` **逐字一致**，且
+   `s3mp_cas_state` Cookie 的 `Path` 必须是该回调路径。
+2. 用浏览器完成 CAS 登录。回调成功后应回到原业务页并建立 `s3mp_account_session` Cookie；若
+   Session 服务返回的员工号、邮箱和姓名在 S3MP 中没有账号，系统会创建仅含该账号本身的记录，
+   不会授予租户成员关系、角色或平台权限。
+3. 用已使用的 callback URL 再访问一次，或提供无效 ticket；请求必须失败，且不得创建新的
+   `s3mp_account_session`。临时使 Session 服务不可用时也必须安全失败。
+4. 用户点击退出后，浏览器必须先清除 S3MP Cookie 并 302 到配置的 CAS logout URL；CAS 回跳到
+   `S3MP_CAS_LOGOUT_RETURN_URL` 后应显示已退出状态而不是本地密码登录表单。
+5. 使用 CAS 提供的 form-urlencoded `logoutRequest` 向 `S3MP_CAS_SERVICE_URL` POST。请求应返回
+   200；随后用该浏览器的旧 S3MP Cookie 访问受保护接口必须得到 401。重复回调应仍返回 200。
+
+回滚：将 `S3MP_CAS_ENABLED=false` 并重新创建 API 容器。不要删除数据库或 Redis 卷；已有会话可按
+原过期策略结束。生产环境若同时需要恢复本地密码登录，必须把 `S3MP_ENVIRONMENT` 从 `production`
+改回非生产环境后再重启，不能只关闭 CAS。
+
+若需要 CAS 全局退出，向 CAS 管理员确认 logout URL、回跳参数名（常见为 `service`）以及是否需要
+登记回跳地址。然后配置 `S3MP_CAS_LOGOUT_URL`、`S3MP_CAS_LOGOUT_RETURN_URL`（例如
+`https://gz-ai.ke.com/s3mp/login?cas_logged_out=1`）和 `S3MP_CAS_LOGOUT_RETURN_PARAMETER`。退出时
+S3MP 会先撤销本地会话，浏览器再跳转 CAS logout URL 清除 CAS TGC。
+
 ## 4. 日常操作
 
 ```bash

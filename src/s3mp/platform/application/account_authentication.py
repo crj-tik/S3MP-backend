@@ -26,7 +26,12 @@ class AccountAuthStore(Protocol):
     ) -> PasswordCredential | None: ...
 
     async def create_account_session(
-        self, user_id: UUID, token_digest: bytes, csrf_digest: bytes, expires_at: datetime
+        self,
+        user_id: UUID,
+        token_digest: bytes,
+        csrf_digest: bytes,
+        expires_at: datetime,
+        cas_service_ticket_digest: bytes | None = None,
     ) -> UUID: ...
 
     async def resolve_account_session(self, token_digest: bytes) -> PlatformContext | None: ...
@@ -34,6 +39,8 @@ class AccountAuthStore(Protocol):
     async def revoke_account_session(self, session_id: UUID) -> None: ...
 
     async def revoke_tenant_sessions(self, user_id: UUID) -> None: ...
+
+    async def revoke_cas_service_ticket_session(self, ticket_digest: bytes) -> bool: ...
 
     async def account_summary(self, user_id: UUID) -> dict[str, object] | None: ...
 
@@ -49,6 +56,18 @@ class AccountAuthStore(Protocol):
         csrf_digest: bytes,
         expires_at: datetime,
     ) -> bool: ...
+
+
+class ExternalIdentityAccountStore(Protocol):
+    async def resolve_or_link_external_identity(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        employee_number: str | None,
+        email: str | None,
+        display_name: str | None,
+    ) -> UUID | None: ...
 
 
 class AccountRegistrationStore(Protocol):
@@ -123,16 +142,47 @@ class AccountAuthenticationService:
             raise ApiError(
                 "authentication_failed", "Invalid email or password", status_code=401
             ) from exc
+        return await self._issue_account_session(user_id)
+
+    async def login_external(
+        self,
+        *,
+        issuer: str,
+        subject: str,
+        employee_number: str | None,
+        email: str | None,
+        display_name: str | None,
+        service_ticket: str,
+    ) -> tuple[dict[str, object], str, str]:
+        user_id = await cast(
+            ExternalIdentityAccountStore, self._store
+        ).resolve_or_link_external_identity(
+            issuer=issuer,
+            subject=subject,
+            employee_number=employee_number,
+            email=email,
+            display_name=display_name,
+        )
+        if user_id is None:
+            raise ApiError("authentication_failed", "Authentication failed", status_code=401)
+        return await self._issue_account_session(
+            user_id, cas_service_ticket_digest=self._tokens.digest(service_ticket)
+        )
+
+    async def _issue_account_session(
+        self, user_id: UUID, *, cas_service_ticket_digest: bytes | None = None
+    ) -> tuple[dict[str, object], str, str]:
         issued = self._tokens.issue()
         await self._store.create_account_session(
             user_id,
             self._tokens.digest(issued.session_token),
             self._tokens.digest(issued.csrf_token),
             datetime.now(UTC) + self._ttl,
+            cas_service_ticket_digest,
         )
         summary = await self._store.account_summary(user_id)
         if summary is None:
-            raise ApiError("authentication_failed", "Invalid email or password", status_code=401)
+            raise ApiError("authentication_failed", "Authentication failed", status_code=401)
         permissions = await self._store.effective_permissions(user_id)
         return (
             {**summary, "platform_permissions": sorted(permissions)},
@@ -164,6 +214,11 @@ class AccountAuthenticationService:
     async def logout(self, context: PlatformContext) -> None:
         await self._store.revoke_account_session(context.session_id)
         await self._store.revoke_tenant_sessions(context.user_id)
+
+    async def logout_cas_service_ticket(self, service_ticket: str) -> bool:
+        """Complete an idempotent CAS single-logout callback without retaining its ST."""
+        ticket_digest = self._tokens.digest(service_ticket)
+        return await self._store.revoke_cas_service_ticket_session(ticket_digest)
 
     async def select_tenant(self, context: PlatformContext, tenant_id: UUID) -> tuple[str, str]:
         issued = self._tokens.issue()

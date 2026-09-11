@@ -24,6 +24,10 @@ class MultipartStatus(StrEnum):
 
 
 class OperationStatus(StrEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    RETRY_SCHEDULED = "retry_scheduled"
+    DEAD_LETTERED = "dead_lettered"
     PENDING = "pending"
     RUNNING = "running"
     RETRY_WAIT = "retry_wait"
@@ -42,7 +46,7 @@ class ObjectOperation:
     kind: str
     source_key: str | None
     destination_key: str | None
-    status: OperationStatus = OperationStatus.PENDING
+    status: OperationStatus = OperationStatus.QUEUED
     failure_reason: str | None = None
 
 

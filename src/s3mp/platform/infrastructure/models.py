@@ -82,6 +82,20 @@ class AccountSessionModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CasServiceTicketSessionModel(Base):
+    """One CAS service-ticket digest mapped to the local browser account session it created."""
+
+    __tablename__ = "cas_service_ticket_session"
+    __table_args__ = (Index("ix_cas_service_ticket_session_account", "account_session_id"),)
+
+    ticket_digest: Mapped[bytes] = mapped_column(LargeBinary(32), primary_key=True)
+    account_session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("account_session.id", ondelete="CASCADE"), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class SupportAccessRequestModel(Base):
     __tablename__ = "support_access_request"
     __table_args__ = (Index("ix_support_access_request_tenant_expiry", "tenant_id", "expires_at"),)

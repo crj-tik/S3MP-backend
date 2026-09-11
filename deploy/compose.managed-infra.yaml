@@ -4,6 +4,7 @@ x-s3mp-runtime-environment: &s3mp-runtime-environment
   S3MP_ENVIRONMENT: development
   S3MP_DATABASE_URL: ${S3MP_MANAGED_DATABASE_URL:?set S3MP_MANAGED_DATABASE_URL in deploy/.env}
   S3MP_REDIS_URL: ${S3MP_MANAGED_REDIS_URL:-redis://redis:6379/0}
+  S3MP_RABBITMQ_URL: ${S3MP_MANAGED_RABBITMQ_URL:?set S3MP_MANAGED_RABBITMQ_URL in deploy/.env}
   S3MP_S3_ENDPOINT: ${S3MP_DOCKER_S3_ENDPOINT:-http://host.docker.internal:9000}
   S3MP_S3_REGION: ${S3MP_S3_REGION:-us-east-1}
   S3MP_S3_PATH_STYLE: ${S3MP_S3_PATH_STYLE:-true}
@@ -28,6 +29,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
 
   worker:
@@ -66,6 +69,19 @@ services:
       timeout: 3s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${S3MP_RABBITMQ_USER:-s3mp_app}
+      RABBITMQ_DEFAULT_PASS: ${S3MP_RABBITMQ_PASSWORD:?set S3MP_RABBITMQ_PASSWORD in deploy/.env}
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres-data:
   redis-data:
+  rabbitmq-data:

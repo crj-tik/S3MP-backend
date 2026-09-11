@@ -18,6 +18,9 @@ SENSITIVE_KEYS = frozenset(
         "password",
         "secret",
         "token",
+        "ticket",
+        "signature",
+        "business_token",
         "api_key",
         "x-api-key",
         "access_key",
@@ -30,7 +33,7 @@ SENSITIVE_KEYS = frozenset(
 REDACTED = "[REDACTED]"
 BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 HEADER_PATTERN = re.compile(
-    r"(?i)\b(authorization|x-api-key|api[_-]?key|password|secret|token)\s*[:=]\s*([^\s,;]+)"
+    r"(?i)\b(authorization|x-api-key|api[_-]?key|password|secret|token|ticket|signature|business[_-]?token)\s*[:=]\s*([^\s,;]+)"
 )
 URL_PASSWORD_PATTERN = re.compile(r"(?P<scheme>[a-z][a-z0-9+.-]*://[^\s:/@]+:)[^\s@/]+@", re.I)
 
@@ -64,6 +67,9 @@ EVENT_FIELDS = frozenset(
         "outcome",
         "error_code",
         "error_type",
+        "error_detail",
+        "identity_details",
+        "diagnostic_response",
         "attempt",
         "method",
         "operation",

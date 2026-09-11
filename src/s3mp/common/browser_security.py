@@ -1,6 +1,7 @@
 """Browser-only CSRF enforcement for opaque account and tenant session cookies."""
 
 from collections.abc import Awaitable, Callable
+from urllib.parse import parse_qs
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -43,6 +44,16 @@ class BrowserCSRFMiddleware(BaseHTTPMiddleware):
         )
         cookie = request.cookies.get(cookie_name or "s3mp_account_csrf", "")
         header = request.headers.get("X-S3MP-CSRF", "")
+        if (
+            not header
+            and request.url.path == "/api/v1/auth/logout"
+            and request.headers.get("content-type", "")
+            .lower()
+            .startswith("application/x-www-form-urlencoded")
+        ):
+            header = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True).get(
+                "csrf_token", [""]
+            )[0]
         token_service = getattr(request.app.state, "session_token_service", None)
         if token_service is None or not token_service.verify_csrf(cookie, header):
             return JSONResponse(

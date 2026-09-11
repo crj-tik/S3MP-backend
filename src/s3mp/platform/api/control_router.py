@@ -88,6 +88,7 @@ class PlatformRolePage(_Strict):
 
 
 class PlatformRoleBindingResponse(_Strict):
+    id: UUID
     user: AccountSummary
     roles: list[PlatformRoleResponse]
     expires_at: datetime | None

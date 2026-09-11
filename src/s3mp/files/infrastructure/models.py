@@ -33,6 +33,7 @@ class FileObjectModel(Base):
             ondelete="CASCADE",
         ),
         Index("ix_file_object_tenant_space_key", "tenant_id", "storage_space_id", "object_key"),
+        Index("uq_file_object_public_file_ref", "public_file_ref", unique=True),
         Index(
             "ix_file_object_retention_due",
             "purge_due_at",
@@ -66,7 +67,14 @@ class FileObjectModel(Base):
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     etag: Mapped[str | None] = mapped_column(String(512))
     checksum: Mapped[str | None] = mapped_column(String(512))
+    public_file_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metadata_json: Mapped[object | None] = mapped_column("metadata", JSONB)
+    record_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    metadata_update_idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    metadata_update_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    active_operation_id: Mapped[UUID | None] = mapped_column()
+    operation_phase: Mapped[str | None] = mapped_column(String(32))
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="available")
     deletion_attempt_count: Mapped[int] = mapped_column(
         nullable=False, default=0, server_default="0"
@@ -120,6 +128,58 @@ class FileRetentionOutboxModel(Base):
     attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FileDeletionRecordModel(Base):
+    """Immutable per-delete provenance and server-owned trash target."""
+
+    __tablename__ = "file_deletion_record"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        UniqueConstraint("tenant_id", "idempotency_key"),
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "file_id"],
+            ["file_object.tenant_id", "file_object.id"],
+            ondelete="SET NULL",
+        ),
+        Index("ix_file_deletion_record_due", "purge_due_at", "status"),
+        Index(
+            "ix_file_deletion_record_original_key",
+            "tenant_id",
+            "storage_space_id",
+            "original_relative_key",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    file_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
+    application_id: Mapped[UUID | None] = mapped_column()
+    original_relative_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    original_physical_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    trash_physical_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    etag: Mapped[str | None] = mapped_column(String(512))
+    deleted_by: Mapped[UUID | None] = mapped_column()
+    deleted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    purge_due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="requested", server_default="requested"
+    )
+    attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_reason: Mapped[str | None] = mapped_column(String(128))
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -195,6 +255,7 @@ class MultipartSessionModel(Base):
     provider_upload_id: Mapped[str | None] = mapped_column(String(512))
     declared_length: Mapped[int] = mapped_column(BigInteger, nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    checksum: Mapped[str | None] = mapped_column(String(512))
     metadata_json: Mapped[object | None] = mapped_column("metadata", JSONB)
     quota_reservation_id: Mapped[UUID] = mapped_column(nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -280,10 +341,50 @@ class FileOperationModel(Base):
         JSON, nullable=False, default=dict
     )
     attempt_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    recovery_attempt_count: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
+    replay_of_event_id: Mapped[UUID | None] = mapped_column()
     lease_owner: Mapped[str | None] = mapped_column(String(128))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FileOperationEventOutboxModel(Base):
+    __tablename__ = "file_operation_event_outbox"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["operation_id"], ["file_operation.id"], ondelete="CASCADE"),
+        Index("ix_file_operation_event_outbox_pending", "published_at", "created_at"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    operation_id: Mapped[UUID] = mapped_column(nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    publish_attempt_count: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default="0"
+    )
+    publish_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replay_of_event_id: Mapped[UUID | None] = mapped_column()
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FileOperationResourceReservationModel(Base):
+    __tablename__ = "file_operation_resource_reservation"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "storage_space_id", "object_key"),
+        ForeignKeyConstraint(["tenant_id"], ["tenant.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["operation_id"], ["file_operation.id"], ondelete="CASCADE"),
+    )
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(nullable=False)
+    storage_space_id: Mapped[UUID] = mapped_column(nullable=False)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    operation_id: Mapped[UUID] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

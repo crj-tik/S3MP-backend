@@ -112,6 +112,9 @@ class ObjectStoragePort(Protocol):
     async def get_object(self, bucket: str, key: str) -> bytes: ...
 
     @abstractmethod
+    async def hash_object_sha256(self, bucket: str, key: str) -> str: ...
+
+    @abstractmethod
     async def head_object(self, bucket: str, key: str) -> dict[str, Any] | None: ...
 
     @abstractmethod

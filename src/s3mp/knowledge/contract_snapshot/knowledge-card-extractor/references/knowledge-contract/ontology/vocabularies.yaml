@@ -1,0 +1,182 @@
+# 受控词表（本体的一部分，变更走本体提案流程）
+# 版本：v1.4-draft
+# 变更：2026-07-13 v1.1 topic.经纪 全量替换为取数工具 topic_metrics 真实主题（21 个）
+#       2026-07-13 v1.2 正交化（经用户确认）：市场情况/商机转化/规模 三组合并（21→15），
+#       business_line 信息不再编码进主题词；存量原词条（二手市场情况等）降为归一化别名，
+#       见 org/topic-metrics 卡的分面归一映射。组合有效性由索引实例决定，空组合走 miss 处理
+#       2026-07-13 v1.3 新增 dimensions 词表（经用户确认）：metric 卡 dimensions 字段受控化，
+#       规范名取 dim_priority 用词；长期为指标平台同步投影（D17），词表只管取值合法性
+#       2026-07-16 v1.4 dimensions.业务 新增“品牌”（经用户确认），统一品牌名称、编码及系统前缀变体
+#       2026-07-20 v1.5 dimensions.业务 新增“委托类型”（经用户确认），统一委托类型名称等物理字段表达
+#       2026-08-12 v1.6 新增 business_domain 业务域枚举，用于区分北京链家、贝壳城市及通用卡片
+#       2026-08-16 v2.0 本体 V2：新增判别属性词表（table_layer/time_grain/lifecycle/queryable/
+#       business_object/business_object_role/metric_*/scope_level）、concept 与 policy 词表；
+#       type 增加 concept、policy；module 正式废弃
+#       2026-08-21 v2.1 新增 application_scope，用于按调用应用提升专属表卡排序
+#       2026-08-21 v2.2 新增“他带”“他签”业务对象，区分普通带看/成交与他人转化场景
+#       2026-08-24 v2.3 新增分析方法、评价规则、指标连续性与除法/减法等式语义
+# 说明：三级分面 unit → business_line → topic；判别属性词表见 § 判别属性
+
+version: 2.3-draft
+updated_at: 2026-08-24
+
+# ── 三级分面 ──────────────────────────────
+
+unit:
+  - 经纪
+  - 整装
+  - 贝好家
+
+business_line:
+  经纪: [二手, 新房, 租赁]
+  整装: [交付, 供应链, 销售, 设计]
+  贝好家: []          # 待补
+
+business_domain: [北京链家, 贝壳城市, 通用]
+
+application_scope: [智慧CA]
+
+topic:
+  经纪:               # 来源：取数工具 topic_metrics（v1.2 正交化后）；主题→指标归属与分面归一见 org/topic-metrics 卡
+    - 房客带
+    - 商机转化      # 正交化：原 二手/新房/租赁商机转化，业务线走 business_line 分面
+    - 规模          # 正交化：原 规模/门店规模/人员规模，细分见展开卡
+    - 城市经营状况
+    - 经营结果
+    - 行指情况
+    - 今天数据
+    - 市场情况      # 正交化：原 二手/新房/租赁市场情况，业务线走 business_line 分面
+    - 房源维护情况
+    - 门店积分
+    - 费率指标
+    - 被售业绩
+    - 业绩          # 兼作裸词展开入口（别名：应收业绩）
+    - 新签单量      # 兼作裸词展开入口（别名：单量/签单量/成交单量）
+    - 带看量        # 兼作裸词展开入口（别名：带看）
+  整装:
+    - 线索
+    - 客源
+    - 项目
+    - 订单
+    - 采购
+    - 结算
+    - 售后
+  贝好家: []          # 待补
+
+# ── metric 卡 dimensions 受控词表 ─────────────
+# 组织维度规范名与 dim_priority 用词一致（层级链见 org/hierarchy 卡）；
+# 业务维度为白名单，⚠️ 随指标平台接入扩充，当前值待数据工程确认
+
+dimensions:
+  组织: [城市, 大区, 大部, CA, 事业部, 门店, 店组, 商圈, 经纪人]
+  时间: [时间粒度]
+  业务: [渠道, 品牌, 委托类型]
+
+# ── 判别属性词表（V2 新增） ─────────────────
+# 与分面属性的区别是硬性的：分面值变了不影响这条知识对不对；
+# 判别值变了会直接改变 Agent 的行为。语义定义见 ontology/schema.yaml
+
+table_layer: [明细, 汇总, 维表, 指标表, 临时]
+
+time_grain: [日, 小时, 实时, 周, 月, 无时间]
+# 多值：一张表可能同时有事件时间与快照时间粒度，schema.yaml 中 cardinality: multi
+
+lifecycle: [生产, 测试, 下线中, 已下线]
+
+queryable: [可查, 不可查, 受限]
+# ⚠️ 纯枚举，不再混用 YAML boolean。旧写法 true/false 由校验器自动归一并告警
+
+business_object:          # ⚠️ 初稿，需数据工程 + 业务共同确认
+  - 成交
+  - 带看
+  - 他带
+  - 他签
+  - 客源
+  - 房源
+  - 商机
+  - 报备
+  - 经纪人
+  - 门店
+  - 组织
+  - 楼盘
+  - 财务
+  - 目标
+  - 会话日志
+  - 用户画像
+
+business_object_role: [主对象, 关联对象]
+# 主对象：证据是粒度键 unique_key，精确，达标后可用于剪枝
+# 关联对象：证据是任意字段存在，宽松，**设计上永久只加权不剪枝**
+#   —— 实测 shop_code 让"门店"命中 85/173 张表，绝大多数只是含有外键而非承载该对象
+
+metric_polarity: [正向, 逆向, 中性]
+
+metric_aggregation: [可加, 半可加, 不可加]
+
+metric_time_semantics: [时点, 时段, 累计]
+
+metric_kind: [原子, 派生, 复合]
+
+value_continuity: [离散, 连续]
+
+scope_level: [贝壳城市, 区域, 业城, 地城, 城市, 大区, 大部, CA, 赋能区域, 事业部, 加盟商, 门店, 店组, 商圈, 经纪人]
+# 与 dimensions.组织 同源，供 attribution/action 复用；是否合并为同一词表待评审
+
+# ── 分析框架词表（V2.3 新增） ─────────────────
+
+analysis_method: [趋势, 同比, 环比, 连续趋势, 绝对值, 排名, 结构, 漏斗]
+
+evaluation_rule_type: [阈值, 参考均值, 连续趋势]
+
+evaluation_operator: [大于等于, 大于, 小于等于, 小于, 约等于, 连续]
+
+evaluation_value_unit: [比例, 百分点, 倍, 期, 天]
+
+evaluation_basis: [业务标准, 经验均值, 文档观察]
+
+# ── concept 词表（V2 新增） ─────────────────
+
+concept_disambiguation: [required, default, none]
+
+# ── policy 词表（V2 新增，见 knowledge/policy/） ──
+
+policy_kind: [安全, 权限, 质量, 生命周期]
+
+policy_severity: [禁止, 受限, 提示]
+
+policy_handling: [不可见, 可见不可查, 需脱敏, 需授权]
+# ⚠️ 需授权：当前接口没有可信的 principal/role/purpose 上下文，
+#   因此闸门只输出"需要授权"的提示，**不在知识路由层自行放行**。
+#   实际放行由下游数据权限系统决定。见 tools/policy_gate.py 的能力边界声明
+
+policy_decision: [放行, 受管控, 拒绝]
+# policy 决策矩阵的三种结局，见 knowledge/policy/README 与 policy_gate.DECISION_MATRIX
+
+# ── 枚举字段 ──────────────────────────────
+
+type: [metric, table, concept, policy, attribution, equation, action, org, tool]
+
+status: [draft, reviewed, deprecated]
+
+scope: [enterprise, team, personal]      # 默认 enterprise
+
+provenance: [human, ai_extracted, ai_suggested]   # 默认 human
+
+# ── 边属性词表 ────────────────────────────
+
+equation_factor_role: [量, 率, 价, 分子, 分母, 被减数, 减数]
+
+equation_operator: [乘法, 加法, 除法, 减法]
+
+responds_to_condition: [上升, 下降]
+
+# ── 已废弃 ────────────────────────────────
+# V2 正式移除 module（v0.4 起被三级分面取代，v1.0 列为废弃候选，存量无人使用）。
+# 按 D29 的废弃观察期约定保留取值清单供溯源，卡片中出现 module 时校验器报错。
+
+deprecated_fields:
+  module:
+    values: [客源, 房源, 交易, 经纪人作业]
+    deprecated_in: "2.0"
+    replaced_by: [unit, business_line, topic]
+    level: error

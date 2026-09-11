@@ -1,0 +1,1 @@
+"""Knowledge extraction application services."""

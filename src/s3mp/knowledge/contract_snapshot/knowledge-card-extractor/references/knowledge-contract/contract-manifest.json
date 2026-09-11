@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "mode": "packaged_snapshot",
+  "generatedAt": "2026-09-01T07:24:43.578017+00:00",
+  "ontologyVersion": "2.3-draft",
+  "vocabVersion": "2.3-draft",
+  "indexOntologyVersion": "2.3-draft",
+  "files": {
+    "index/index.yaml": "14c0bc433279365d2c169d0dbaeee5a40e52edf2b6fcbb2a37c48814d85b8ab7",
+    "knowledge/org/brokerage-brand-semantics.md": "dbc5f1b5032a56e5a8d46fbed2af5ac4b00427dbb7b969ae5e598d24893db711",
+    "knowledge/org/brokerage-organization.md": "116d9d07f14f3687b786999cfbd26391e144d4323e346bd7358e9c490ee9db86",
+    "knowledge/org/business-diagnosis-scenes.md": "217865b9e7a884239a92976a67811bb25fb0f5a0756009483fb5bb177f14a93c",
+    "knowledge/org/codelist-contract-status.md": "963ef6f51ddba7f0f647083aa74fc7deeb24ecef0b952610c0b0b30181fb7ccb",
+    "knowledge/org/filter-vocab.md": "30082f313ea216ceddc4fac9ffcd8653871af4842f22dbc730e9c320798dac07",
+    "knowledge/org/hierarchy.md": "553dfd15959fabfc5310a97f17ef80f37427ba736697cd52e8d2ec9b67f4c6f0",
+    "knowledge/org/term-alias.md": "5fbc3dfd03da5429e3b952c208d462e10c6c23b0c359c0a2ad13f33da2fbbdbd",
+    "knowledge/org/topic-metrics.md": "802994d9d2aa96e64824305a6705bc514d9fb9625a2b5a56153c9c7e5666079e",
+    "knowledge-card-add.SKILL.md": "379ef746d4b9608c1f8d9b62c1df3645ff7176f95a20506243d08f9f37c2ff85",
+    "ontology/schema.yaml": "55f64adbe9e7e17939caa77e6309eefbbf3d17c55b9ff24b54541d873e893fe6",
+    "ontology/vocabularies.yaml": "ec9f4c440746db790209ccf48c76a517ad7e539413079fc4c80c2c290468f159",
+    "schema/SCHEMA.md": "e411960d5a5ddb5582848eef593c1220e6e4b0e1c23525613b6f125fd0b093dc",
+    "schema/templates/action.md": "0efb499808fce4664897e637c31dd439881ec34f432c1215e7de6cc4bd3f4a81",
+    "schema/templates/attribution.md": "ea9c71e301a922ea83ce335ab04959dd571ce6f70ce36dad22f18473b3b492e8",
+    "schema/templates/concept.md": "6f92b7501e256254b254f5a9fa268c441e2eec82ff6ba477eb159af491223c6b",
+    "schema/templates/equation.md": "f34eb6c8d7cbad33367e7f794e6b1b4e19bda1e08f28e3ec815695612cd05126",
+    "schema/templates/metric.md": "338af8c32e5d441e074bec3f395adf3828bb725f88140702ad6d510202f698cb",
+    "schema/templates/org.md": "72c648aff23740dad3f4d407d31f53e8cbf8c97786baabee9d24636145779498",
+    "schema/templates/policy.md": "e381e2be881c8275dcb01a01bb72d72e88fda927513248d47702110ec5ed09f5",
+    "schema/templates/table.md": "bde40c5b16e0ced8d5d277e6dc4adeec5457d4827fb5b1b6081c5f6740a317b1",
+    "schema/templates/tool.md": "8ae4a62905ae84aa5669778e901d60c8d7affd53f801855aed1cb3a71dfed167"
+  }
+}

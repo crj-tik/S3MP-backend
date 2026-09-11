@@ -16,9 +16,11 @@ from s3mp.common.timezone import CHINA_TIMEZONE
 from s3mp.files.application.auth_guard import FileAuthGuard
 from s3mp.files.application.authorized_command import AuthorizedFileCommand
 from s3mp.files.application.delayed_subject_validator import validate_delayed_subject
+from s3mp.files.domain.file_reference import generate_file_ref, is_file_ref
 from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.files.domain.ingestion import IngestionStatus
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.storage.domain.checksum import provider_checksum_to_hex, sha256_hex_to_base64
 from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
 
 MULTIPART_PART_SIZE = 8 * 1024 * 1024
@@ -54,9 +56,18 @@ class FileStore(Protocol):
     async def get_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID
     ) -> dict[str, Any] | None: ...
+    async def get_file_by_ref(
+        self, tenant_id: UUID, space_id: UUID, public_file_ref: str
+    ) -> dict[str, Any] | None: ...
     async def file_name_is_occupied(
         self, tenant_id: UUID, space_id: UUID, physical_key: str
     ) -> bool: ...
+    async def file_name_is_migrating(
+        self, tenant_id: UUID, space_id: UUID, physical_key: str
+    ) -> bool: ...
+    async def update_file_metadata(
+        self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
+    ) -> dict[str, Any] | None: ...
     async def delete_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
     ) -> dict[str, Any] | None: ...
@@ -68,6 +79,7 @@ class FileStore(Protocol):
     ) -> dict[str, Any] | None: ...
     async def list_pending_deletions(self) -> list[dict[str, Any]]: ...
     async def finalize_file_delete(self, tenant_id: UUID, file_id: UUID) -> None: ...
+    async def finalize_file_trash_migration(self, tenant_id: UUID, file_id: UUID) -> None: ...
     async def record_delete_failure(
         self, tenant_id: UUID, file_id: UUID, max_attempts: int
     ) -> None: ...
@@ -77,6 +89,9 @@ class FileStore(Protocol):
     async def create_rename_operation(
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
     ) -> dict[str, Any]: ...
+    async def replay_rename_operation(
+        self, tenant_id: UUID, application_id: UUID, idempotency_key: str
+    ) -> dict[str, Any] | None: ...
     async def get_operation(self, tenant_id: UUID, op_id: UUID) -> dict[str, Any] | None: ...
     async def create_upload(
         self, tenant_id: UUID, space_id: UUID, data: dict[str, Any]
@@ -147,10 +162,6 @@ class ApiKeyStateStore(Protocol):
     ) -> dict[str, Any] | None: ...
 
 
-class WorkNotifier(Protocol):
-    async def notify(self) -> bool: ...
-
-
 class IngestionStore(Protocol):
     async def create_upload_intent(
         self, tenant_id: UUID, session_data: dict[str, Any], ingestion_data: dict[str, Any]
@@ -218,6 +229,7 @@ class ObjectStorage(Protocol):
         self, target: ProviderTarget, body: bytes, content_type: str
     ) -> ObjectMetadata: ...
     async def head(self, target: ProviderTarget) -> ObjectMetadata | None: ...
+    async def hash_sha256(self, target: ProviderTarget) -> str: ...
     async def delete(self, target: ProviderTarget) -> None: ...
 
     async def list_objects(
@@ -238,7 +250,9 @@ class ObjectStorage(Protocol):
     ) -> str: ...
     async def readiness_probe(self) -> None: ...
     # ── Multipart ──────────────────────────────────────────────────────────
-    async def create_multipart_upload(self, target: ProviderTarget, content_type: str) -> str: ...
+    async def create_multipart_upload(
+        self, target: ProviderTarget, content_type: str, checksum_sha256: str | None = None
+    ) -> str: ...
     async def upload_part(
         self, target: ProviderTarget, upload_id: str, part_number: int, body: bytes
     ) -> dict[str, object]: ...
@@ -260,8 +274,34 @@ class FileApplicationService:
     ingestion_store: IngestionStore | None = None
     principal_store: PrincipalStateStore | None = None
     api_key_state_store: ApiKeyStateStore | None = None
-    work_notifier: WorkNotifier | None = None
     reconciliation_max_attempts: int = 5
+
+    async def _server_checksum(
+        self, target: ProviderTarget, metadata: ObjectMetadata, expected: str | None = None
+    ) -> str:
+        """Use the server streaming hash; retain metadata fallback for old test doubles."""
+        hasher = getattr(self.object_storage, "hash_sha256", None)
+        if callable(hasher):
+            value = await hasher(target)
+            normalized = provider_checksum_to_hex(value)
+            if normalized is None:
+                raise ApiError(
+                    "upload_verification_failed", "Server checksum is invalid", status_code=409
+                )
+            return f"sha256:{normalized}"
+        provider_value = provider_checksum_to_hex(getattr(metadata, "checksum_sha256", None))
+        if provider_value is not None:
+            return f"sha256:{provider_value}"
+        # Production adapters implement hash_sha256. This fallback keeps old
+        # lightweight storage doubles compatible during the rolling deployment.
+        expected_value = provider_checksum_to_hex(expected)
+        if expected_value is not None:
+            return f"sha256:{expected_value}"
+        raise ApiError(
+            "storage_capability_unsupported",
+            "Server checksum calculation is unavailable",
+            status_code=503,
+        )
 
     async def _resolve_space(self, tenant_id: UUID, space_id: UUID) -> dict[str, Any]:
         """Resolve storage space and validate tenant ownership."""
@@ -416,11 +456,14 @@ class FileApplicationService:
         target = ProviderTarget(bucket=str(space["bucket"]), key=str(record["object_key"]))
         checksum = record.get("checksum")
         checksum_sha256 = str(checksum).removeprefix("sha256:") if checksum is not None else None
+        checksum_header = (
+            sha256_hex_to_base64(checksum_sha256) if checksum_sha256 is not None else None
+        )
         url = await self.object_storage.presign_put(
             target,
             str(record["content_type"]),
             ttl,
-            checksum_sha256=checksum_sha256,
+            checksum_sha256=checksum_header,
         )
         public = self._public_upload(space, record)
         public.update(
@@ -431,8 +474,8 @@ class FileApplicationService:
                 "headers": {
                     "Content-Type": str(record["content_type"]),
                     **(
-                        {"x-amz-checksum-sha256": checksum_sha256}
-                        if checksum_sha256 is not None
+                        {"x-amz-checksum-sha256": checksum_header}
+                        if checksum_header is not None
                         else {}
                     ),
                 },
@@ -665,6 +708,7 @@ class FileApplicationService:
         idempotency_key: str | None,
         space: dict[str, Any],
         metadata: object | None = None,
+        checksum: str | None = None,
     ) -> dict[str, Any]:
         return {
             "creator_principal_id": str(command.acting_principal_id),
@@ -692,6 +736,7 @@ class FileApplicationService:
             "idempotency_key": idempotency_key,
             "idempotency_fingerprint": command.idempotency_fingerprint or None,
             "metadata": metadata,
+            "checksum": checksum,
         }
 
     @instrument_service_operation("file.ingestion.reconciliation")
@@ -770,6 +815,11 @@ class FileApplicationService:
                         "reconciliation_object_missing",
                     )
                     continue
+                server_checksum = await self._server_checksum(
+                    self._target(record["bucket"], record["physical_key"]),
+                    metadata,
+                    expected=record.get("checksum"),
+                )
                 await self.ingestion_store.record_provider_result(
                     UUID(record["tenant_id"]),
                     ingestion_id,
@@ -777,7 +827,7 @@ class FileApplicationService:
                     provider_version_id=getattr(metadata, "version_id", None),
                     actual_size=metadata.content_length,
                     actual_content_type=metadata.content_type,
-                    checksum=record.get("checksum"),
+                    checksum=server_checksum,
                 )
                 reconciled.append(
                     await self.ingestion_store.commit_verified_file(
@@ -904,10 +954,29 @@ class FileApplicationService:
                     )
                     continue
                 self._relative_key(space, str(record["object_key"]))
-                await self.object_storage.delete(
-                    self._target(space["bucket"], record["object_key"])
+                source_target = self._target(space["bucket"], record["object_key"])
+                deletion = record.get("deletion_record") or {}
+                trash_key = deletion.get("trash_physical_key")
+                if not trash_key:
+                    raise RuntimeError("deletion trash target is missing")
+                trash_target = self._target(space["bucket"], str(trash_key))
+                source_metadata = await self.object_storage.head(source_target)
+                trash_metadata = await self.object_storage.head(trash_target)
+                if trash_metadata is None:
+                    if source_metadata is None:
+                        raise RuntimeError("source object is missing before trash migration")
+                    await self.object_storage.copy(source_target, trash_target)
+                    trash_metadata = await self.object_storage.head(trash_target)
+                if trash_metadata is None or (
+                    source_metadata is not None
+                    and trash_metadata.content_length != source_metadata.content_length
+                ):
+                    raise RuntimeError("trash object verification failed")
+                if source_metadata is not None:
+                    await self.object_storage.delete(source_target)
+                await self.store.finalize_file_trash_migration(
+                    UUID(record["tenant_id"]), UUID(record["id"])
                 )
-                await self.store.finalize_file_delete(UUID(record["tenant_id"]), UUID(record["id"]))
                 finalized.append(record["id"])
             except Exception:
                 await self.store.record_delete_failure(
@@ -989,12 +1058,16 @@ class FileApplicationService:
             "files.write",
             semantics={"content_length": content_length, "operation": "upload_precheck"},
         )
+        migrating = await self.store.file_name_is_migrating(
+            ctx.tenant_id, command.storage_space_id, command.physical_key
+        )
         return {
             "object_key": self._key_relative_public_key(ctx, command.relative_key),
             "content_length": content_length,
             "exists": await self.store.file_name_is_occupied(
                 ctx.tenant_id, command.storage_space_id, command.physical_key
             ),
+            "status": "retry" if migrating else "ready",
         }
 
     async def get_ingestion_provenance(
@@ -1021,11 +1094,66 @@ class FileApplicationService:
         return chain
 
     async def get_file(self, ctx: PrincipalContext, space_id: str, file_id: str) -> dict[str, Any]:
-        result = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
-        if result is None:
-            raise ApiError("resource_not_found", "File not found", status_code=404)
+        result, _ = await self._resolve_file_reference(ctx, space_id, file_id)
         await self._command_for_record(ctx, result, "files.read")
         return self._public_file(await self._resolve_space(ctx.tenant_id, UUID(space_id)), result)
+
+    @instrument_service_operation("file.metadata.update")
+    async def update_file_metadata(
+        self,
+        ctx: PrincipalContext,
+        space_id: str,
+        file_id: str,
+        metadata: object | None,
+        *,
+        if_match: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        record, by_ref = await self._resolve_file_reference(ctx, space_id, file_id)
+        from s3mp.common.api.etag import require_if_match
+
+        # Metadata has its own record version even on the new file-ref track.
+        expected = require_if_match(if_match)
+        encoded_metadata = json.dumps(
+            metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        command = await self._command_for_record(
+            ctx,
+            record,
+            "files.write",
+            idempotency_key=idempotency_key,
+            semantics={
+                "operation": "metadata_update",
+                "file_id": file_id,
+                "record_etag": expected,
+                "metadata_sha256": hashlib.sha256(encoded_metadata.encode()).hexdigest(),
+            },
+        )
+        space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
+        updated = await self.store.update_file_metadata(
+            ctx.tenant_id,
+            UUID(space_id),
+            UUID(str(record["id"])),
+            metadata=metadata,
+            if_match=expected,
+            idempotency_key=idempotency_key,
+            request_fingerprint=hashlib.sha256(
+                f"{file_id}:{expected}:{encoded_metadata}".encode()
+            ).hexdigest(),
+            actor_principal_id=ctx.actor_principal_id or ctx.principal_id,
+            request_id=current_request_id(),
+            authorization_evidence=command.authorization_evidence,
+            public_file_ref=generate_file_ref(
+                tenant_id=ctx.tenant_id,
+                application_id=record.get("application_id"),
+                relative_key=self._relative_key(space, str(record["object_key"])),
+                metadata=metadata,
+                checksum=record.get("checksum"),
+            ),
+        )
+        if updated is None:
+            raise ApiError("resource_not_found", "File not found", status_code=404)
+        return self._public_file(space, updated)
 
     @instrument_service_operation("file.delete")
     async def delete_file(
@@ -1036,9 +1164,7 @@ class FileApplicationService:
         idempotency_key: str | None = None,
         if_match: str | None = None,
     ) -> dict[str, Any]:
-        record = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
-        if record is None:
-            raise ApiError("resource_not_found", "File not found", status_code=404)
+        record, by_ref = await self._resolve_file_reference(ctx, space_id, file_id)
         command = await self._command_for_record(
             ctx,
             record,
@@ -1048,31 +1174,34 @@ class FileApplicationService:
         )
         # The repository validates If-Match and durably records a deleting
         # intent before a worker is ever allowed to touch MinIO.
-        if if_match is None:
+        if if_match is None and not by_ref:
             from s3mp.common.api.etag import require_if_match
 
             require_if_match(None)
-        if record.get("etag") != if_match:
+        if if_match is not None and record.get("etag") != if_match:
             from s3mp.common.api.etag import check_etag
 
             check_etag(record.get("etag") or "", require_if_match(if_match))
+        space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
+        original_relative_key = self._relative_key(space, str(record["object_key"]))
         deleted = await self.store.delete_file(
             ctx.tenant_id,
             UUID(space_id),
-            UUID(file_id),
+            UUID(str(record["id"])),
             idempotency_key=idempotency_key,
             if_match=if_match,
             actor_principal_id=ctx.actor_principal_id or ctx.principal_id,
             request_id=current_request_id(),
             object_key=record["object_key"],
+            original_relative_key=original_relative_key,
             authorization_version=ctx.authorization_version,
             authorization_evidence=command.authorization_evidence,
+            allow_missing_if_match=by_ref,
+            reference_kind="file_ref" if by_ref else "file_id",
             purge_due_at=soft_delete_due_at(datetime.now(UTC)),
         )
         if deleted is None:
             raise ApiError("resource_not_found", "File not found", status_code=404)
-        if self.work_notifier is not None:
-            await self.work_notifier.notify()
         return {"status": "soft_deleted", "purge_due_at": deleted["purge_due_at"]}
 
     async def restore_file(
@@ -1084,39 +1213,11 @@ class FileApplicationService:
         idempotency_key: str | None = None,
         if_match: str | None = None,
     ) -> dict[str, Any]:
-        if ctx.subject_kind == "application":
-            raise ApiError("permission_denied", "Application API keys cannot restore files", 403)
-        # Its ordinary get path intentionally returns 404 during retention, so
-        # this management-only lookup is used solely to authorize its key.
-        if if_match is None:
-            from s3mp.common.api.etag import require_if_match
-
-            require_if_match(None)
-        record = await self.store.get_retained_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
-        if record is None:
-            raise ApiError("resource_not_found", "File not found", status_code=404)
-        command = await self._command_for_record(
-            ctx,
-            record,
-            "files.delete",
-            idempotency_key=idempotency_key,
-            semantics={"restore_file_id": file_id, "if_match": if_match},
+        raise ApiError(
+            "operation_not_supported",
+            "Retained files are available only through platform trash downloads",
+            status_code=409,
         )
-        restored = await self.store.restore_file(
-            ctx.tenant_id,
-            UUID(space_id),
-            UUID(file_id),
-            if_match=if_match,
-            actor_principal_id=ctx.actor_principal_id or ctx.principal_id,
-            request_id=current_request_id(),
-            authorization_version=ctx.authorization_version,
-            authorization_evidence=command.authorization_evidence,
-        )
-        if restored is None:
-            raise ApiError("resource_not_found", "File not found", status_code=404)
-        if self.work_notifier is not None:
-            await self.work_notifier.notify()
-        return self._public_file(await self._resolve_space(ctx.tenant_id, UUID(space_id)), restored)
 
     async def rename_file(
         self,
@@ -1131,16 +1232,6 @@ class FileApplicationService:
         """Create an immutable replacement file identity for an async rename."""
         if ctx.subject_kind != "application" or ctx.application_id is None:
             raise ApiError("permission_denied", "Application API key is required", status_code=403)
-        if if_match is None:
-            from s3mp.common.api.etag import require_if_match
-
-            require_if_match(None)
-        record = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(file_id))
-        if record is None:
-            raise ApiError("resource_not_found", "File not found", status_code=404)
-        source_read = await self._command_for_record(ctx, record, "files.read")
-        source_delete = await self._command_for_record(ctx, record, "files.delete")
-        source_move = await self._command_for_record(ctx, record, "files.move")
         destination_write = await self._command(
             ctx,
             space_id,
@@ -1149,11 +1240,46 @@ class FileApplicationService:
             idempotency_key=idempotency_key,
             semantics={"operation_type": "rename", "source_file_id": file_id},
         )
+        try:
+            record, by_ref = await self._resolve_file_reference(ctx, space_id, file_id)
+        except ApiError as exc:
+            if exc.code != "resource_not_found":
+                raise
+            replay = await self.store.replay_rename_operation(
+                ctx.tenant_id, ctx.application_id, idempotency_key
+            )
+            if (
+                replay is None
+                or replay.get("destination_key") != destination_write.relative_key
+                or not replay.get("source_key")
+            ):
+                raise
+            # Replay must not bypass current authorization even though the
+            # source record is now a rename tombstone.
+            await self._command(ctx, space_id, str(replay["source_key"]), "files.read")
+            await self._command(ctx, space_id, str(replay["source_key"]), "files.delete")
+            await self._command(ctx, space_id, str(replay["source_key"]), "files.move")
+            result_file = replay.get("result_file")
+            if not isinstance(result_file, dict):
+                raise ApiError(
+                    "resource_not_found", "Rename result not found", status_code=404
+                ) from None
+            space = await self._resolve_space(ctx.tenant_id, UUID(space_id))
+            public = self._public_operation(replay)
+            public["result_file"] = self._public_file(space, result_file)
+            return public
+        if if_match is None and not by_ref:
+            from s3mp.common.api.etag import require_if_match
+
+            require_if_match(None)
+        source_read = await self._command_for_record(ctx, record, "files.read")
+        source_delete = await self._command_for_record(ctx, record, "files.delete")
+        source_move = await self._command_for_record(ctx, record, "files.move")
         if source_read.relative_key == destination_write.relative_key:
             raise ApiError(
                 "validation_failed", "Destination key must differ from source", status_code=422
             )
-        if record.get("etag") != if_match:
+        if if_match is not None and record.get("etag") != if_match:
             from s3mp.common.api.etag import check_etag, require_if_match
 
             check_etag(record.get("etag") or "", require_if_match(if_match))
@@ -1162,7 +1288,7 @@ class FileApplicationService:
             json.dumps(
                 {
                     "application_id": str(ctx.application_id),
-                    "source_file_id": file_id,
+                    "source_file_id": str(record["id"]),
                     "source_etag": if_match,
                     "destination_key": destination_write.relative_key,
                 },
@@ -1180,10 +1306,17 @@ class FileApplicationService:
                 "actor_application_id": str(ctx.actor_application_id)
                 if ctx.actor_application_id
                 else None,
-                "source_file_id": file_id,
+                "source_file_id": str(record["id"]),
                 "source_key": source_read.relative_key,
                 "destination_key": destination_write.relative_key,
                 "destination_physical_key": destination_write.physical_key,
+                "result_file_ref": generate_file_ref(
+                    tenant_id=ctx.tenant_id,
+                    application_id=ctx.application_id,
+                    relative_key=destination_write.relative_key,
+                    metadata=record.get("metadata"),
+                    checksum=record.get("checksum"),
+                ),
                 "if_match": if_match,
                 "idempotency_key": idempotency_key,
                 "request_fingerprint": fingerprint,
@@ -1207,12 +1340,41 @@ class FileApplicationService:
                         source_move.authorization_evidence,
                         destination_write.authorization_evidence,
                     ],
+                    # The destination row is created before the provider copy.
+                    # Preserve the source content identity so the worker can
+                    # verify the ETag returned at acceptance time.
+                    "rename_integrity": {
+                        "content_length": record.get("content_length"),
+                        "etag": record.get("etag"),
+                        "checksum": record.get("checksum"),
+                    },
                 },
             },
         )
-        if self.work_notifier is not None:
-            await self.work_notifier.notify()
-        return self._public_operation(result)
+        public = self._public_operation(result)
+        result_file = result.get("result_file")
+        if not isinstance(result_file, dict):
+            raise RuntimeError("rename operation is missing its result file")
+        public["result_file"] = self._public_file(space, result_file)
+        return public
+
+    async def _resolve_file_reference(
+        self, ctx: PrincipalContext, space_id: str, reference: str
+    ) -> tuple[dict[str, Any], bool]:
+        """Resolve a public reference without treating provider ETags as identifiers."""
+        space_uuid = UUID(space_id)
+        if is_file_ref(reference):
+            record = await self.store.get_file_by_ref(ctx.tenant_id, space_uuid, reference)
+            by_ref = True
+        else:
+            try:
+                record = await self.store.get_file(ctx.tenant_id, space_uuid, UUID(reference))
+            except ValueError as exc:
+                raise ApiError("resource_not_found", "File not found", status_code=404) from exc
+            by_ref = False
+        if record is None:
+            raise ApiError("resource_not_found", "File not found", status_code=404)
+        return record, by_ref
 
     @instrument_service_operation("file.operation.create")
     async def create_file_operation(
@@ -1281,6 +1443,17 @@ class FileApplicationService:
                 if body.operation_type == "delete"
                 else None
             ),
+            "source_physical_key": (
+                commands[0].physical_key if body.operation_type in {"copy", "move"} else None
+            ),
+            "destination_physical_key": (
+                commands[-1].physical_key if body.operation_type in {"copy", "move"} else None
+            ),
+            "physical_keys": (
+                [command.physical_key for command in commands]
+                if body.operation_type == "delete"
+                else None
+            ),
             "idempotency_key": idempotency_key,
             "authorization_version": ctx.authorization_version,
             "provider_target_version": commands[0].provider_target_version,
@@ -1308,8 +1481,6 @@ class FileApplicationService:
             }
         )
         result = await self.store.create_operation(ctx.tenant_id, UUID(space_id), data)
-        if self.work_notifier is not None:
-            await self.work_notifier.notify()
         return self._public_operation(result)
 
     async def get_file_operation(self, ctx: PrincipalContext, operation_id: str) -> dict[str, Any]:
@@ -1413,7 +1584,9 @@ class FileApplicationService:
                     **data,
                     "storage_space_id": str(command.storage_space_id),
                 },
-                self._ingestion_data(command, idempotency_key, space, body.metadata),
+                self._ingestion_data(
+                    command, idempotency_key, space, body.metadata, body.checksum
+                ),
             )
             record.pop("replayed", None)
         try:
@@ -1492,11 +1665,12 @@ class FileApplicationService:
                     "upload_verification_failed", "Object content type mismatch", status_code=409
                 )
             requested_checksum = body.checksum or record.get("checksum")
-            actual_checksum = getattr(obj, "checksum_sha256", None)
-            if requested_checksum and requested_checksum not in {
-                actual_checksum,
-                f"sha256:{actual_checksum}",
-            }:
+            actual_checksum = await self._server_checksum(
+                command.provider_target, obj, expected=requested_checksum
+            )
+            if requested_checksum and provider_checksum_to_hex(
+                requested_checksum
+            ) != provider_checksum_to_hex(actual_checksum):
                 raise ApiError(
                     "upload_verification_failed", "Object checksum mismatch", status_code=409
                 )
@@ -1540,7 +1714,7 @@ class FileApplicationService:
                 provider_version_id=provider_version,
                 actual_size=obj.content_length,
                 actual_content_type=obj.content_type,
-                checksum=requested_checksum,
+                checksum=actual_checksum,
             )
             try:
                 committed = await self.ingestion_store.commit_verified_file(  # type: ignore[union-attr]
@@ -1570,7 +1744,7 @@ class FileApplicationService:
             "object_key": record["object_key"],
             "content_length": record["content_length"],
             "content_type": record["content_type"],
-            "checksum": record.get("checksum"),
+            "checksum": actual_checksum,
             "etag": provider_etag,
             "version_id": provider_version,
             "idempotency_key": idempotency_key,
@@ -1597,10 +1771,8 @@ class FileApplicationService:
     ) -> dict[str, Any]:
         if self.object_storage is None:
             raise ApiError("internal_error", "Object storage is not configured", status_code=500)
-        # Look up file by file_id (tenant-scoped) instead of accepting raw object_key
-        file_record = await self.store.get_file(ctx.tenant_id, UUID(space_id), UUID(body.file_id))
-        if file_record is None:
-            raise ApiError("resource_not_found", "File not found", status_code=404)
+        # The request field remains file_id for wire compatibility but accepts file_ref.
+        file_record, _ = await self._resolve_file_reference(ctx, space_id, body.file_id)
         command = await self._command_for_record(ctx, file_record, "presigned_urls.issue")
         url = await self.object_storage.presign_get(command.provider_target, body.ttl_seconds)
         return {
@@ -1637,6 +1809,7 @@ class FileApplicationService:
                 "content_length": body.content_length,
                 "content_type": body.content_type.lower(),
                 "expires_at": expires_at.isoformat(),
+                "checksum": body.checksum,
                 "metadata": body.metadata,
             },
         )
@@ -1647,6 +1820,7 @@ class FileApplicationService:
             "provider_target_version": command.provider_target_version,
             "content_length": body.content_length,
             "content_type": body.content_type,
+            "checksum": body.checksum,
             "metadata": body.metadata,
             "expires_at": expires_at,
             "idempotency_key": idempotency_key,
@@ -1674,7 +1848,9 @@ class FileApplicationService:
                     **data,
                     "storage_space_id": str(command.storage_space_id),
                 },
-                self._ingestion_data(command, idempotency_key, space, body.metadata),
+                self._ingestion_data(
+                    command, idempotency_key, space, body.metadata, body.checksum
+                ),
             )
             ingestion = {"id": record["ingestion_id"]}
             if record.pop("replayed", False):
@@ -1684,7 +1860,11 @@ class FileApplicationService:
         provider_upload_id: str | None = None
         try:
             provider_upload_id = await self.object_storage.create_multipart_upload(
-                command.provider_target, body.content_type
+                command.provider_target,
+                body.content_type,
+                checksum_sha256=(
+                    str(body.checksum).removeprefix("sha256:") if body.checksum else None
+                ),
             )
             try:
                 created = await self.store.set_multipart_provider_id(
@@ -1962,6 +2142,18 @@ class FileApplicationService:
                     "Completed multipart object metadata mismatch",
                     status_code=409,
                 )
+            expected_checksum = record.get("checksum")
+            actual_checksum = await self._server_checksum(
+                command.provider_target, metadata, expected=expected_checksum
+            )
+            if expected_checksum and provider_checksum_to_hex(
+                expected_checksum
+            ) != provider_checksum_to_hex(actual_checksum):
+                raise ApiError(
+                    "upload_verification_failed",
+                    "Completed multipart object checksum mismatch",
+                    status_code=409,
+                )
         except ApiError:
             if ingestion is not None:
                 await self.ingestion_store.fail_or_quarantine(  # type: ignore[union-attr]
@@ -1989,6 +2181,7 @@ class FileApplicationService:
             "content_length": total_size,
             "content_type": getattr(metadata, "content_type", record["content_type"]),
             "etag": getattr(metadata, "etag", None),
+            "checksum": actual_checksum,
             "idempotency_key": idempotency_key,
         }
         if ingestion is not None:
@@ -2009,7 +2202,7 @@ class FileApplicationService:
                 provider_version_id=getattr(metadata, "version_id", None),
                 actual_size=metadata.content_length,
                 actual_content_type=metadata.content_type,
-                checksum=None,
+                checksum=actual_checksum,
             )
             try:
                 committed = await self.ingestion_store.commit_verified_file(  # type: ignore[union-attr]

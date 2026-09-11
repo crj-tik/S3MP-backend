@@ -1,7 +1,5 @@
 """Durable PostgreSQL-backed executor for queued object operations."""
 
-import asyncio
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
@@ -12,21 +10,9 @@ from s3mp.files.application.file_service import (
     FileAuthorizationStore,
     StorageSpaceStore,
 )
+from s3mp.files.domain.file_reference import normalized_sha256
 from s3mp.identity.domain.context import PrincipalContext
 from s3mp.storage.domain.policy import ProviderTarget, derive_provider_target
-
-
-class OperationStore(Protocol):
-    async def claim_operations(self, worker_id: str, limit: int = 10) -> list[dict[str, Any]]: ...
-    async def finish_operation(
-        self, tenant_id: UUID, operation_id: UUID, status: str, reason: str | None = None
-    ) -> None: ...
-    async def renew_operation_lease(
-        self, tenant_id: UUID, operation_id: UUID, worker_id: str
-    ) -> bool: ...
-    async def finish_rename_operation(
-        self, tenant_id: UUID, operation_id: UUID, status: str, reason: str | None = None
-    ) -> None: ...
 
 
 class PrincipalStore(Protocol):
@@ -52,41 +38,16 @@ class OperationObjectStorage(Protocol):
 
 @dataclass(slots=True)
 class FileOperationWorker:
-    store: OperationStore
+    store: object
     storage_store: StorageSpaceStore
     authorization_store: FileAuthorizationStore
     principal_store: PrincipalStore
     object_storage: OperationObjectStorage
     api_key_state_store: ApiKeyStateStore | None = None
 
-    async def run_once(self, worker_id: str, limit: int = 10) -> list[str]:
-        completed: list[str] = []
-        for operation in await self.store.claim_operations(worker_id, limit):
-            heartbeat = asyncio.create_task(self._heartbeat(operation, worker_id))
-            try:
-                status, reason = await self._execute(operation)
-            finally:
-                heartbeat.cancel()
-                with suppress(asyncio.CancelledError):
-                    await heartbeat
-            if operation.get("operation_type") == "rename":
-                await self.store.finish_rename_operation(
-                    UUID(operation["tenant_id"]), UUID(operation["id"]), status, reason
-                )
-            else:
-                await self.store.finish_operation(
-                    UUID(operation["tenant_id"]), UUID(operation["id"]), status, reason
-                )
-            completed.append(operation["id"])
-        return completed
-
-    async def _heartbeat(self, operation: dict[str, Any], worker_id: str) -> None:
-        """Keep a long-running provider operation exclusively leased."""
-        tenant_id, operation_id = UUID(operation["tenant_id"]), UUID(operation["id"])
-        while True:
-            await asyncio.sleep(20)
-            if not await self.store.renew_operation_lease(tenant_id, operation_id, worker_id):
-                return
+    async def execute(self, operation: dict[str, Any]) -> tuple[str, str | None]:
+        """Execute an already-started broker delivery without database polling."""
+        return await self._execute(operation)
 
     async def _execute(self, operation: dict[str, Any]) -> tuple[str, str | None]:
         tenant_id = UUID(operation["tenant_id"])
@@ -136,14 +97,12 @@ class FileOperationWorker:
             space.get("provider_target_version", 1)
         ):
             return "cancelled", "legacy_provider_target"
-        if (
-            operation.get("application_id")
-            and str(operation["application_id"]) != str(space.get("application_id"))
+        if operation.get("application_id") and str(operation["application_id"]) != str(
+            space.get("application_id")
         ):
             return "cancelled", "application_namespace_mismatch"
-        if (
-            operation.get("storage_namespace")
-            and operation["storage_namespace"] != space.get("storage_namespace")
+        if operation.get("storage_namespace") and operation["storage_namespace"] != space.get(
+            "storage_namespace"
         ):
             return "cancelled", "application_namespace_changed"
         if int(operation.get("profile_version", 1)) != int(space.get("profile_version", 1)):
@@ -158,9 +117,7 @@ class FileOperationWorker:
                     relative_key=key,
                     operator_prefix=str(space.get("root_prefix") or ""),
                     storage_namespace=(
-                        str(space["storage_namespace"])
-                        if space.get("storage_namespace")
-                        else None
+                        str(space["storage_namespace"]) if space.get("storage_namespace") else None
                     ),
                     version=int(space.get("provider_target_version", 1)),
                 )
@@ -189,6 +146,8 @@ class FileOperationWorker:
 
         source = operation.get("source_key")
         destination = operation.get("destination_key")
+        integrity = evidence.get("rename_integrity") if isinstance(evidence, dict) else None
+        rename_integrity = integrity if isinstance(integrity, dict) else {}
         try:
             if operation["operation_type"] in {"copy", "move", "rename"}:
                 if not source or not destination:
@@ -217,12 +176,37 @@ class FileOperationWorker:
                         return "retry_wait", "copy_verification_failed"
                 source_size = getattr(source_state, "content_length", None)
                 destination_size = getattr(destination_state, "content_length", None)
+                expected_size = rename_integrity.get("content_length")
+                if (
+                    operation["operation_type"] == "rename"
+                    and expected_size is not None
+                    and destination_size != expected_size
+                ):
+                    return "retry_wait", "rename_content_length_mismatch"
                 if (
                     source_size is not None
                     and destination_size is not None
                     and source_size != destination_size
                 ):
                     return "retry_wait", "copy_verification_failed"
+                if operation["operation_type"] == "rename":
+                    # Provider ETags are issued per write/copy and can change
+                    # for identical content (notably multipart layouts).  They
+                    # are not a content-integrity assertion.
+                    source_checksum = getattr(source_state, "checksum_sha256", None)
+                    destination_checksum = getattr(destination_state, "checksum_sha256", None)
+                    expected_checksum = normalized_sha256(rename_integrity.get("checksum"))
+                    if expected_checksum and destination_checksum != expected_checksum:
+                        return "retry_wait", "rename_checksum_mismatch"
+                    if source_checksum is not None and destination_checksum != source_checksum:
+                        return "retry_wait", "rename_checksum_mismatch"
+                    recorder = getattr(self.store, "record_rename_provider_result", None)
+                    if recorder is not None:
+                        await recorder(
+                            tenant_id,
+                            UUID(str(operation["id"])),
+                            getattr(destination_state, "etag", None),
+                        )
                 if operation["operation_type"] in {"move", "rename"}:
                     if source_state is None:
                         return "succeeded", None

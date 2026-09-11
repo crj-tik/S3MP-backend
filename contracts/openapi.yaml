@@ -36,6 +36,30 @@ paths:
         '422': *id001
         '500': *id001
       description: 检查 API 进程是否存活；不检查数据库、Redis 或对象存储。
+  /health/knowledge:
+    get:
+      tags:
+      - health
+      summary: 执行该公开 API 操作
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      operationId: knowledge_status_health_knowledge_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Knowledge Status Health Knowledge Get
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+        '500': *id001
   /health/ready:
     get:
       tags:
@@ -447,6 +471,89 @@ paths:
         '500': *id001
       description: 将成员从指定用户组移除。
       x-permission: groups.manage
+  /api/v1/auth/cas/login:
+    get:
+      tags:
+      - Account authentication
+      summary: 执行该公开 API 操作
+      operationId: cas_login
+      parameters:
+      - name: return_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Return To
+        description: “return_to”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/auth/cas/callback:
+    get:
+      tags:
+      - Account authentication
+      summary: 执行该公开 API 操作
+      operationId: cas_callback
+      parameters:
+      - name: ticket
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Ticket
+        description: “ticket”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+    post:
+      tags:
+      - Account authentication
+      summary: 执行该公开 API 操作
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      operationId: cas_single_logout
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+        '500': *id001
   /api/v1/auth/login:
     post:
       tags:
@@ -556,8 +663,11 @@ paths:
           title: X-S3Mp-Csrf
         description: 浏览器会话的 CSRF 校验值；账户操作取自 s3mp_account_csrf Cookie，租户操作取自 s3mp_csrf Cookie，并原样放入此请求头。
       responses:
-        '204':
+        '200':
           description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422': *id001
         '400': *id001
         '401': *id001
@@ -566,8 +676,7 @@ paths:
         '409': *id001
         '412': *id001
         '500': *id001
-      description: 撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；客户端必须把 s3mp_account_csrf Cookie 的值原样放入 X-S3MP-CSRF
-        请求头。
+      description: 撤销当前账户会话及该账户的租户会话，并清除账户与租户 Cookie；浏览器随后跟随 302 到配置的 CAS 全局登出地址。客户端必须以携带 csrf_token 的原生表单提交该请求。
   /api/v1/auth/tenant-sessions:
     post:
       tags:
@@ -3038,7 +3147,7 @@ paths:
         '409': *id001
         '412': *id001
         '500': *id001
-      description: 提交文件删除；接口按声明的幂等与并发前置条件执行。
+      description: 提交文件删除；file_ref 新轨无需 provider ETag，旧 UUID 轨继续按 If-Match 并发校验。
       x-permission: files.delete
   /api/v1/storage_spaces/{space_id}/files/{file_id}/restore:
     post:
@@ -3308,7 +3417,7 @@ paths:
       - Files
       - Uploads
       - Multipart
-      summary: 校验直传对象的元数据并将直传会话提交为可用文件。
+      summary: 服务端流式计算正文 SHA-256，校验直传对象并同步返回 file_ref。
       operationId: complete_direct_upload
       parameters:
       - name: upload_id
@@ -3359,7 +3468,7 @@ paths:
         '409': *id001
         '412': *id001
         '500': *id001
-      description: 校验直传对象的元数据并将直传会话提交为可用文件。
+      description: 服务端流式计算正文 SHA-256，校验直传对象并同步返回 file_ref。
       x-permission: files.write
   /api/v1/storage_spaces/{space_id}/presigned_downloads:
     post:
@@ -3634,7 +3743,7 @@ paths:
       - Files
       - Uploads
       - Multipart
-      summary: 按已确认分片完成分段上传并验证最终对象。
+      summary: 合并分片后由服务端对完整对象流式计算 SHA-256，并同步返回 file_ref。
       operationId: complete_multipart_upload
       parameters:
       - name: multipart_id
@@ -3675,7 +3784,7 @@ paths:
         '409': *id001
         '412': *id001
         '500': *id001
-      description: 按已确认分片完成分段上传并验证最终对象。
+      description: 合并分片后由服务端对完整对象流式计算 SHA-256，并同步返回 file_ref。
       x-permission: files.write
   /api/v1/applications/{application_id}/files:
     get:
@@ -4053,6 +4162,74 @@ paths:
         '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/application/files/{file_id}/metadata:
+    patch:
+      tags:
+      - Files
+      - Uploads
+      - Multipart
+      summary: 更新当前应用文件元数据
+      description: 使用 record_etag 原子替换文件记录元数据，不修改对象内容或对象 ETag。
+      operationId: update_current_application_file_metadata
+      parameters:
+      - name: file_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: File Id
+        description: 文件对象的服务端唯一标识。
+      - name: application_code
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          description: 调用方应用代码，用于确认应用身份与审计归属。
+          title: Application Code
+        description: 调用方应用代码，用于确认应用身份与审计归属。
+      - name: If-Match
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 当前文件记录的 record_etag；用于拒绝覆盖较新的元数据。
+          title: If-Match
+        description: 当前文件记录的 record_etag；用于拒绝覆盖较新的元数据。
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 客户端生成的幂等键；相同业务动作重试时必须复用。
+          title: Idempotency-Key
+        description: 客户端生成的幂等键；相同业务动作重试时必须复用。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileMetadataUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileObjectRuntime'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      x-permission: files.write
   /api/v1/application/files/{file_id}/rename:
     post:
       tags:
@@ -4116,7 +4293,8 @@ paths:
         '409': *id001
         '412': *id001
         '500': *id001
-      description: 异步重命名当前应用文件；必须提供当前 ETag 和幂等键，并返回新的文件标识。
+      description: 异步重命名当前应用文件；必须提供当前 ETag 和幂等键。受理响应返回预创建目标文件的 ID、元数据、内容 ETag 与记录 ETag，但只有操作成功且文件状态为 available
+        后才可读取或下载。
       x-permission: files.move
   /api/v1/application/file_operations/{operation_id}:
     get:
@@ -4525,6 +4703,193 @@ paths:
         '412': *id001
         '500': *id001
       description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/knowledge/exclusions:
+    get:
+      tags:
+      - Knowledge Extraction
+      summary: 执行该公开 API 操作
+      operationId: list_knowledge_exclusions_application
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ExclusionResponse'
+                type: array
+                title: Response List Knowledge Exclusions Application
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '422': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+    post:
+      tags:
+      - Knowledge Extraction
+      summary: 执行该公开 API 操作
+      operationId: create_knowledge_exclusion_application
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExclusionCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExclusionResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/knowledge/exclusions/{rule_id}:
+    delete:
+      tags:
+      - Knowledge Extraction
+      summary: 执行该公开 API 操作
+      operationId: delete_knowledge_exclusion_application
+      parameters:
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Rule Id
+        description: “rule_id”字段；具体取值和约束见当前资源说明。
+      responses:
+        '204':
+          description: Successful Response
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+  /api/v1/knowledge/tenant-exclusions/{application_id}:
+    get:
+      tags:
+      - Knowledge Extraction
+      summary: 执行该公开 API 操作
+      operationId: list_knowledge_exclusions_tenant_admin
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExclusionResponse'
+                title: Response List Knowledge Exclusions Tenant Admin
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: knowledge.exclusions.read
+    post:
+      tags:
+      - Knowledge Extraction
+      summary: 执行该公开 API 操作
+      operationId: create_knowledge_exclusion_tenant_admin
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExclusionCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExclusionResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: knowledge.exclusions.manage
+  /api/v1/knowledge/tenant-exclusions/{application_id}/{rule_id}:
+    delete:
+      tags:
+      - Knowledge Extraction
+      summary: 执行该公开 API 操作
+      operationId: delete_knowledge_exclusion_tenant_admin
+      parameters:
+      - name: application_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Application Id
+        description: 应用的服务端唯一标识。
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Rule Id
+        description: “rule_id”字段；具体取值和约束见当前资源说明。
+      responses:
+        '204':
+          description: Successful Response
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: knowledge.exclusions.manage
   /api/v1/dashboard/api-metrics:
     get:
       tags:
@@ -5264,6 +5629,159 @@ paths:
         '500': *id001
       description: 撤销没有使用量和进行中预留的应用独立配额，使容量回到共享池。
       x-permission: platform.quotas.manage
+  /api/v1/platform/file-trash:
+    get:
+      tags:
+      - Platform file trash
+      summary: 执行该公开 API 操作
+      operationId: list_platform_file_trash
+      parameters:
+      - name: tenant_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Tenant Id
+        description: 租户的服务端唯一标识。
+      - name: storage_space_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Storage Space Id
+        description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 32
+          - type: 'null'
+          title: Status
+        description: 资源当前生命周期状态。
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Cursor
+        description: 不透明分页游标；仅可用于相同查询条件的下一页请求。
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+        description: 本页最多返回的记录数。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrashRecordPage'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: platform.file_trash.read
+  /api/v1/platform/file-trash/{deletion_id}:
+    get:
+      tags:
+      - Platform file trash
+      summary: 执行该公开 API 操作
+      operationId: get_platform_file_trash
+      parameters:
+      - name: deletion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Deletion Id
+        description: “deletion_id”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrashRecordResponse'
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: platform.file_trash.read
+  /api/v1/platform/file-trash/{deletion_id}/download:
+    post:
+      tags:
+      - Platform file trash
+      summary: 执行该公开 API 操作
+      operationId: download_platform_file_trash
+      parameters:
+      - name: deletion_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Deletion Id
+        description: “deletion_id”字段；具体取值和约束见当前资源说明。
+      - name: expires_in
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 3600
+          minimum: 60
+          default: 300
+          title: Expires In
+        description: “expires_in”字段；具体取值和约束见当前资源说明。
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  anyOf:
+                  - type: string
+                  - type: integer
+                title: Response Download Platform File Trash
+        '422': *id001
+        '400': *id001
+        '401': *id001
+        '403': *id001
+        '404': *id001
+        '409': *id001
+        '412': *id001
+        '500': *id001
+      description: 执行该公开 API 操作；具体输入、输出和授权要求见下方说明。
+      x-permission: platform.file_trash.read
 components:
   schemas:
     Account:
@@ -6589,7 +7107,7 @@ components:
             maxLength: 512
           - type: 'null'
           title: Checksum
-          description: 内容校验和，用于验证上传数据的完整性。
+          description: 服务端从最终对象正文计算的 SHA-256；客户端可不提交，完成响应会同步返回。
         metadata:
           anyOf:
           - $ref: '#/components/schemas/JsonValue'
@@ -6742,6 +7260,57 @@ components:
       - evaluated_at
       - permissions
       title: EffectivePermissionsResponse
+    ExclusionCreate:
+      properties:
+        directory_path:
+          type: string
+          maxLength: 1024
+          minLength: 1
+          title: Directory Path
+          description: “directory_path”字段；具体取值和约束见当前资源说明。
+      additionalProperties: false
+      type: object
+      required:
+      - directory_path
+      title: ExclusionCreate
+    ExclusionResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 资源的服务端唯一标识。
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+        application_id:
+          type: string
+          format: uuid
+          title: Application Id
+          description: 应用的服务端唯一标识。
+        directory_path:
+          type: string
+          title: Directory Path
+          description: “directory_path”字段；具体取值和约束见当前资源说明。
+        rule_source:
+          type: string
+          title: Rule Source
+          description: “rule_source”字段；具体取值和约束见当前资源说明。
+        enabled:
+          type: boolean
+          title: Enabled
+          description: “enabled”字段；具体取值和约束见当前资源说明。
+      type: object
+      required:
+      - id
+      - tenant_id
+      - application_id
+      - directory_path
+      - rule_source
+      - enabled
+      title: ExclusionResponse
     FileDeletionResult:
       properties:
         status:
@@ -6758,12 +7327,29 @@ components:
       required:
       - status
       title: FileDeletionResult
+    FileMetadataUpdate:
+      properties:
+        metadata:
+          anyOf:
+          - $ref: '#/components/schemas/JsonValue'
+          - type: 'null'
+          description: 替换文件记录的应用 JSON 元数据；null 表示清空。
+      additionalProperties: false
+      type: object
+      title: FileMetadataUpdate
+      description: 文件元数据替换请求；平台不解析其业务字段。
     FileObjectRuntime:
       properties:
         id:
           type: string
           title: Id
           description: 资源的服务端唯一标识。
+        file_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: File Ref
+          description: S3MP 签发的确定性公开文件引用；历史文件可能为空。
         storage_space_id:
           anyOf:
           - type: string
@@ -6798,12 +7384,18 @@ components:
           - type: 'null'
           title: Etag
           description: 资源当前版本标识，用于并发控制。
+        record_etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Record Etag
+          description: 文件记录版本；仅用于元数据等记录字段更新的 If-Match，不代表对象内容版本。
         checksum:
           anyOf:
           - type: string
           - type: 'null'
           title: Checksum
-          description: 内容校验和，用于验证上传数据的完整性。
+          description: 服务端从最终对象正文计算的 SHA-256；客户端可不提交，完成响应会同步返回。
         metadata:
           anyOf:
           - $ref: '#/components/schemas/JsonValue'
@@ -7658,6 +8250,13 @@ components:
           minLength: 1
           title: Content Type
           description: 对象的媒体类型。
+        checksum:
+          anyOf:
+          - type: string
+            maxLength: 512
+          - type: 'null'
+          title: Checksum
+          description: 服务端从最终对象正文计算的 SHA-256；客户端可不提交，完成响应会同步返回。
         metadata:
           anyOf:
           - $ref: '#/components/schemas/JsonValue'
@@ -8000,6 +8599,11 @@ components:
       title: PlatformRoleBindingPage
     PlatformRoleBindingResponse:
       properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 资源的服务端唯一标识。
         user:
           $ref: '#/components/schemas/AccountSummary'
           description: 全局用户账户的公开身份摘要。
@@ -8026,6 +8630,7 @@ components:
       additionalProperties: false
       type: object
       required:
+      - id
       - user
       - roles
       - expires_at
@@ -8792,6 +9397,12 @@ components:
           type: string
           title: Id
           description: 资源的服务端唯一标识。
+        file_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: File Ref
+          description: S3MP 签发的确定性公开文件引用；历史文件可能为空。
         object_key:
           type: string
           title: Object Key
@@ -8801,11 +9412,47 @@ components:
           title: Status
           default: renaming
           description: 资源当前生命周期状态。
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
+          description: 沿用源文件的正文大小；不表示目标对象已可读取。
+        content_type:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Content Type
+          description: 沿用源文件的内容类型。
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Etag
+          description: 预发的对象内容 ETag；重命名不改变正文，目标对象可用后仍沿用此值。
+        record_etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Record Etag
+          description: 预创建目标文件记录的版本；用于后续记录字段更新的 If-Match。
+        checksum:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Checksum
+          description: 沿用源文件的内容摘要。
+        metadata:
+          anyOf:
+          - $ref: '#/components/schemas/JsonValue'
+          - type: 'null'
+          description: 沿用源文件的应用 JSON 元数据。
       type: object
       required:
       - id
       - object_key
       title: RenameAcceptedFile
+      description: 预创建的重命名目标；只有 available 后才可读取或下载。
     RoleBindingPage:
       properties:
         items:
@@ -9439,6 +10086,133 @@ components:
       additionalProperties: false
       type: object
       title: TenantUpdate
+    TrashRecordPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/TrashRecordResponse'
+          type: array
+          title: Items
+          description: 当前页返回的资源记录列表。
+        next_cursor:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Next Cursor
+          description: 下一页分页游标；无更多结果时为 null。
+      additionalProperties: false
+      type: object
+      required:
+      - items
+      title: TrashRecordPage
+    TrashRecordResponse:
+      properties:
+        id:
+          type: string
+          format: uuid
+          title: Id
+          description: 资源的服务端唯一标识。
+        tenant_id:
+          type: string
+          format: uuid
+          title: Tenant Id
+          description: 租户的服务端唯一标识。
+        file_id:
+          type: string
+          format: uuid
+          title: File Id
+          description: 文件对象的服务端唯一标识。
+        storage_space_id:
+          type: string
+          format: uuid
+          title: Storage Space Id
+          description: 历史内部存储记录标识；仅用于迁移兼容，不是业务存储空间。
+        application_id:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Application Id
+          description: 应用的服务端唯一标识。
+        original_relative_key:
+          type: string
+          title: Original Relative Key
+          description: “original_relative_key”字段；具体取值和约束见当前资源说明。
+        content_length:
+          type: integer
+          title: Content Length
+          description: 对象实际内容长度，单位为字节。
+        content_type:
+          type: string
+          title: Content Type
+          description: 对象的媒体类型。
+        etag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Etag
+          description: 资源当前版本标识，用于并发控制。
+        deleted_by:
+          anyOf:
+          - type: string
+            format: uuid
+          - type: 'null'
+          title: Deleted By
+          description: “deleted_by”字段；具体取值和约束见当前资源说明。
+        deleted_at:
+          type: string
+          format: date-time
+          title: Deleted At
+          description: “deleted_at”字段；具体取值和约束见当前资源说明。
+        purge_due_at:
+          type: string
+          format: date-time
+          title: Purge Due At
+          description: “purge_due_at”字段；具体取值和约束见当前资源说明。
+        status:
+          type: string
+          title: Status
+          description: 资源当前生命周期状态。
+        attempt_count:
+          type: integer
+          title: Attempt Count
+          description: “attempt_count”字段；具体取值和约束见当前资源说明。
+        next_retry_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Next Retry At
+          description: “next_retry_at”字段；具体取值和约束见当前资源说明。
+        failure_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Failure Reason
+          description: “failure_reason”字段；具体取值和约束见当前资源说明。
+        purged_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Purged At
+          description: “purged_at”字段；具体取值和约束见当前资源说明。
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - tenant_id
+      - file_id
+      - storage_space_id
+      - original_relative_key
+      - content_length
+      - content_type
+      - deleted_at
+      - purge_due_at
+      - status
+      - attempt_count
+      title: TrashRecordResponse
     UploadComplete:
       properties:
         checksum:
@@ -9447,7 +10221,7 @@ components:
             maxLength: 512
           - type: 'null'
           title: Checksum
-          description: 内容校验和，用于验证上传数据的完整性。
+          description: 服务端从最终对象正文计算的 SHA-256；客户端可不提交，完成响应会同步返回。
       additionalProperties: false
       type: object
       title: UploadComplete
@@ -9694,14 +10468,18 @@ components:
       type: string
       title: MetadataFileOperationStatus
       enum:
-      - pending
-      - running
-      - retry_wait
+      - queued
+      - processing
+      - retry_scheduled
       - succeeded
       - completed
       - partial_failure
       - failed
       - cancelled
+      - dead_lettered
+      - pending
+      - running
+      - retry_wait
       description: 由 /api/v1/metadata/catalog 同步发布的稳定枚举值。
     MetadataSupportAccessStatus:
       type: string

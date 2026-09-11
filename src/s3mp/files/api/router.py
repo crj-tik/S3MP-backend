@@ -5,13 +5,14 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Header, Path, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from s3mp.common.api.dependencies import management_permission
 from s3mp.common.application.idempotency import IdempotencyGuard
 from s3mp.common.errors import ApiError
 from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.identity.domain.context import PrincipalContext
+from s3mp.knowledge.domain.source_hash import normalize_declared_sha256
 
 router = APIRouter(prefix="/api/v1", tags=["Files", "Uploads", "Multipart"])
 
@@ -45,6 +46,12 @@ class DirectUploadCreate(BaseModel):
         description="资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。"
     )
 
+    @field_validator("checksum")
+    @classmethod
+    def validate_checksum(cls, value: str | None) -> str | None:
+        digest = normalize_declared_sha256(value)
+        return f"sha256:{digest}" if digest else None
+
 
 class UploadPrecheckCreate(BaseModel):
     """Caller-proposed name and size before creating an upload session."""
@@ -52,6 +59,15 @@ class UploadPrecheckCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     object_key: str = Field(min_length=1, max_length=1024)
     content_length: int = Field(ge=0)
+
+
+class FileMetadataUpdate(BaseModel):
+    """文件元数据替换请求；平台不解析其业务字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+    metadata: JsonValue | None = Field(
+        default=None, description="替换文件记录的应用 JSON 元数据；null 表示清空。"
+    )
 
 
 class UploadPrecheckRuntime(BaseModel):
@@ -66,6 +82,12 @@ class UploadComplete(BaseModel):
     model_config = ConfigDict(extra="forbid")
     checksum: str | None = Field(default=None, max_length=512)
 
+    @field_validator("checksum")
+    @classmethod
+    def validate_checksum(cls, value: str | None) -> str | None:
+        digest = normalize_declared_sha256(value)
+        return f"sha256:{digest}" if digest else None
+
 
 class PresignedDownloadCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -78,12 +100,20 @@ class MultipartCreate(BaseModel):
     object_key: str = Field(min_length=1, max_length=1024)
     content_length: int = Field(ge=0)
     content_type: str = Field(min_length=1, max_length=255)
+    checksum: str | None = Field(default=None, max_length=512)
     metadata: JsonValue | None = Field(
         default=None, description="应用提供的 JSON 元数据；平台不解析其业务含义。"
     )
     expires_at: datetime = Field(
         description="资源或授权的失效时间，采用 Asia/Shanghai（UTC+08:00）格式。"
     )
+
+
+    @field_validator("checksum")
+    @classmethod
+    def validate_checksum(cls, value: str | None) -> str | None:
+        digest = normalize_declared_sha256(value)
+        return f"sha256:{digest}" if digest else None
 
 
 class MultipartPartRuntime(BaseModel):
@@ -98,12 +128,19 @@ class FileObjectRuntime(BaseModel):
     """已提交文件的公开元数据；不包含对象存储物理路径或鉴权证据。"""
 
     id: str
+    file_ref: str | None = Field(
+        default=None, description="S3MP 签发的确定性公开文件引用；历史文件可能为空。"
+    )
     storage_space_id: str | None = None
     object_key: str
     content_length: int | None = None
     content_type: str | None = None
     status: str | None = None
     etag: str | None = None
+    record_etag: str | None = Field(
+        default=None,
+        description="文件记录版本；仅用于元数据等记录字段更新的 If-Match，不代表对象内容版本。",
+    )
     checksum: str | None = None
     metadata: JsonValue | None = None
     created_at: str | None = None
@@ -156,9 +193,28 @@ class FileOperationRuntime(BaseModel):
 
 
 class RenameAcceptedFile(BaseModel):
+    """预创建的重命名目标；只有 available 后才可读取或下载。"""
+
     id: str
+    file_ref: str | None = Field(
+        default=None, description="S3MP 签发的确定性公开文件引用；历史文件可能为空。"
+    )
     object_key: str
     status: str = "renaming"
+    content_length: int | None = Field(
+        default=None, description="沿用源文件的正文大小；不表示目标对象已可读取。"
+    )
+    content_type: str | None = Field(default=None, description="沿用源文件的内容类型。")
+    etag: str | None = Field(
+        default=None,
+        description="预发的对象内容 ETag；重命名不改变正文，目标对象可用后仍沿用此值。",
+    )
+    record_etag: str | None = Field(
+        default=None,
+        description="预创建目标文件记录的版本；用于后续记录字段更新的 If-Match。",
+    )
+    checksum: str | None = Field(default=None, description="沿用源文件的内容摘要。")
+    metadata: JsonValue | None = Field(default=None, description="沿用源文件的应用 JSON 元数据。")
 
 
 class FileRenameAccepted(BaseModel):
@@ -697,6 +753,45 @@ async def get_current_application_file(
     return await get_file(request, await _implicit_space_id(request), file_id)
 
 
+@router.patch(
+    "/application/files/{file_id}/metadata",
+    response_model=FileObjectRuntime,
+    operation_id="update_current_application_file_metadata",
+    summary="更新当前应用文件元数据",
+    description="使用 record_etag 原子替换文件记录元数据，不修改对象内容或对象 ETag。",
+    openapi_extra={"x-permission": "files.write"},
+)
+async def update_current_application_file_metadata(
+    request: Request,
+    file_id: str,
+    body: FileMetadataUpdate,
+    application_code: str = Query(
+        min_length=1, description="调用方应用代码，用于确认应用身份与审计归属。"
+    ),
+    if_match: str | None = Header(
+        default=None,
+        alias="If-Match",
+        description="当前文件记录的 record_etag；用于拒绝覆盖较新的元数据。",
+    ),
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        description="客户端生成的幂等键；相同业务动作重试时必须复用。",
+    ),
+) -> FileObjectRuntime:
+    await _application_api_context(request, application_code)
+    return FileObjectRuntime.model_validate(
+        await _file_svc(request).update_file_metadata(
+            _context(request),
+            await _implicit_space_id(request),
+            file_id,
+            body.metadata,
+            if_match=if_match,
+            idempotency_key=_idempotency_key(idempotency_key),
+        )
+    )
+
+
 @router.delete(
     "/applications/{application_id}/files/{file_id}",
     status_code=202,
@@ -761,10 +856,8 @@ async def rename_current_application_file(
     )
     return FileRenameAccepted(
         operation_id=result["id"],
-        status=str(result.get("status") or "pending"),
-        file=RenameAcceptedFile(
-            id=str(result["result_file_id"]), object_key=body.object_key, status="renaming"
-        ),
+        status=str(result.get("status") or "queued"),
+        file=RenameAcceptedFile.model_validate(result["result_file"]),
     )
 
 

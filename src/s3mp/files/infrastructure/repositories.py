@@ -6,15 +6,20 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from s3mp.audit.infrastructure.models import AuditEventModel
 from s3mp.common.errors import ApiError
 from s3mp.common.logging import instrument_async_methods
+from s3mp.files.domain.file_reference import generate_file_ref
 from s3mp.files.domain.file_status import FileObjectStatus
 from s3mp.files.infrastructure.models import (
+    FileDeletionRecordModel,
     FileObjectModel,
+    FileOperationEventOutboxModel,
     FileOperationModel,
+    FileOperationResourceReservationModel,
     FileRetentionOutboxModel,
     MultipartPartModel,
     MultipartSessionModel,
@@ -93,6 +98,30 @@ class SqlAlchemyFileStore:
             )
             return _file_dict(row) if row else None
 
+    async def get_file_by_ref(
+        self, tenant_id: UUID, space_id: UUID, public_file_ref: str
+    ) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(FileObjectModel)
+                .join(
+                    StorageSpaceModel,
+                    (StorageSpaceModel.tenant_id == FileObjectModel.tenant_id)
+                    & (StorageSpaceModel.id == FileObjectModel.storage_space_id),
+                )
+                .join(TenantModel, TenantModel.id == FileObjectModel.tenant_id)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.storage_space_id == space_id,
+                    FileObjectModel.public_file_ref == public_file_ref,
+                    FileObjectModel.status == "available",
+                    FileObjectModel.soft_deleted.is_(False),
+                    StorageSpaceModel.status == "active",
+                    TenantModel.status == "active",
+                )
+            )
+            return _file_dict(row) if row else None
+
     async def file_name_is_occupied(
         self, tenant_id: UUID, space_id: UUID, physical_key: str
     ) -> bool:
@@ -119,7 +148,90 @@ class SqlAlchemyFileStore:
                 )
                 .limit(1)
             )
+            if row is not None:
+                return True
+            reservation = await session.scalar(
+                select(FileOperationResourceReservationModel.id)
+                .where(
+                    FileOperationResourceReservationModel.tenant_id == tenant_id,
+                    FileOperationResourceReservationModel.storage_space_id == space_id,
+                    FileOperationResourceReservationModel.object_key == physical_key,
+                )
+                .limit(1)
+            )
+            return reservation is not None
+
+    async def file_name_is_migrating(
+        self, tenant_id: UUID, space_id: UUID, physical_key: str
+    ) -> bool:
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(FileDeletionRecordModel.id).where(
+                    FileDeletionRecordModel.tenant_id == tenant_id,
+                    FileDeletionRecordModel.storage_space_id == space_id,
+                    FileDeletionRecordModel.original_physical_key == physical_key,
+                    FileDeletionRecordModel.status.in_(("requested", "moving", "retrying")),
+                )
+            )
             return row is not None
+
+    async def update_file_metadata(
+        self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
+    ) -> dict[str, Any] | None:
+        """Replace opaque application metadata without touching the stored object."""
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileObjectModel)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.storage_space_id == space_id,
+                    FileObjectModel.id == file_id,
+                    FileObjectModel.status == "available",
+                    FileObjectModel.soft_deleted.is_(False),
+                )
+                .with_for_update()
+            )
+            if row is None:
+                return None
+            if row.active_operation_id is not None:
+                raise ApiError(
+                    "file_operation_in_progress",
+                    "File is occupied by an asynchronous operation",
+                    status_code=409,
+                )
+            fingerprint = str(data["request_fingerprint"])
+            if row.metadata_update_idempotency_key == data["idempotency_key"]:
+                if row.metadata_update_fingerprint != fingerprint:
+                    raise ApiError(
+                        "idempotency_key_reused",
+                        "Idempotency key was used for a different metadata update",
+                        status_code=409,
+                    )
+                return _file_dict(row)
+            if _record_etag(row) != data["if_match"]:
+                from s3mp.common.api.etag import check_etag
+
+                check_etag(_record_etag(row), str(data["if_match"]))
+            row.metadata_json = data["metadata"]
+            row.public_file_ref = data.get("public_file_ref")
+            row.record_version += 1
+            row.metadata_update_idempotency_key = str(data["idempotency_key"])
+            row.metadata_update_fingerprint = fingerprint
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=data.get("actor_principal_id"),
+                    action="file.metadata_updated",
+                    resource_type="file_object",
+                    resource_id=str(row.id),
+                    details={
+                        "request_id": data.get("request_id"),
+                        "storage_space_id": str(space_id),
+                    },
+                )
+            )
+            await session.flush()
+            return _file_dict(row)
 
     async def delete_file(
         self, tenant_id: UUID, space_id: UUID, file_id: UUID, **data: Any
@@ -137,14 +249,18 @@ class SqlAlchemyFileStore:
                     return _file_dict(row)
                 if row.status != "available" or row.soft_deleted:
                     return None
-                if data.get("if_match") is None:
-                    from s3mp.common.api.etag import require_if_match
-
-                    require_if_match(None)
-                if row.etag != data.get("if_match"):
-                    from s3mp.common.api.etag import check_etag
-
-                    check_etag(row.etag or "", str(data.get("if_match")))
+                if row.active_operation_id is not None:
+                    raise ApiError(
+                        "file_operation_in_progress",
+                        "File is occupied by an asynchronous operation",
+                        status_code=409,
+                    )
+                _validate_delete_etag(
+                    row.etag,
+                    data.get("if_match"),
+                    is_file_ref=data.get("reference_kind") == "file_ref"
+                    or bool(data.get("allow_missing_if_match")),
+                )
                 session.add(
                     AuditEventModel(
                         tenant_id=tenant_id,
@@ -162,11 +278,19 @@ class SqlAlchemyFileStore:
                     )
                 )
                 due_at = data["purge_due_at"]
-                row.status = "deleted"
+                deleted_at = datetime.now(UTC)
+                deletion_id = uuid4()
+                original_key = str(row.object_key)
+                original_relative_key = str(data.get("original_relative_key") or original_key)
+                basename = original_key.rsplit("/", 1)[-1]
+                parent = original_key.rsplit("/", 1)[0] if "/" in original_key else ""
+                stamp = deleted_at.strftime("%Y%m%dT%H%M%S.%fZ")
+                trash_key = f"{parent}/__trash__/{stamp}-{deletion_id}/{basename}"
+                row.status = "deleting"
                 row.soft_deleted = True
-                row.deleted_at = datetime.now(UTC)
+                row.deleted_at = deleted_at
                 row.purge_due_at = due_at
-                row.purge_state = "scheduled"
+                row.purge_state = "pending_migration"
                 row.purge_attempt_count = 0
                 row.purge_next_retry_at = None
                 row.purge_failure_reason = None
@@ -174,6 +298,26 @@ class SqlAlchemyFileStore:
                 row.deletion_authorization_version = data.get("authorization_version")
                 row.deletion_authorization_evidence = data.get("authorization_evidence")
                 row.deletion_idempotency_key = data.get("idempotency_key")
+                session.add(
+                    FileDeletionRecordModel(
+                        id=deletion_id,
+                        tenant_id=tenant_id,
+                        file_id=row.id,
+                        storage_space_id=space_id,
+                        application_id=row.application_id,
+                        original_relative_key=original_relative_key,
+                        original_physical_key=original_key,
+                        trash_physical_key=trash_key,
+                        content_length=row.content_length,
+                        content_type=row.content_type,
+                        etag=row.etag,
+                        deleted_by=data.get("actor_principal_id"),
+                        deleted_at=deleted_at,
+                        purge_due_at=due_at,
+                        status="requested",
+                        idempotency_key=str(data.get("idempotency_key") or deletion_id),
+                    )
+                )
                 outbox = await session.scalar(
                     select(FileRetentionOutboxModel)
                     .where(
@@ -305,7 +449,114 @@ class SqlAlchemyFileStore:
                     ),
                 )
             )
-            return [_file_dict(row) for row in rows]
+            result = []
+            for row in rows:
+                deletion = await session.scalar(
+                    select(FileDeletionRecordModel).where(
+                        FileDeletionRecordModel.tenant_id == row.tenant_id,
+                        FileDeletionRecordModel.file_id == row.id,
+                    )
+                )
+                item = _file_dict(row)
+                item["deletion_record"] = _deletion_dict(deletion) if deletion else None
+                result.append(item)
+            return result
+
+    async def list_deletion_records(
+        self,
+        *,
+        tenant_id: UUID | None = None,
+        storage_space_id: UUID | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        after_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        async with self._sf() as session:
+            query = (
+                select(FileDeletionRecordModel)
+                .order_by(FileDeletionRecordModel.id)
+                .limit(limit)
+            )
+            if tenant_id is not None:
+                query = query.where(FileDeletionRecordModel.tenant_id == tenant_id)
+            if storage_space_id is not None:
+                query = query.where(FileDeletionRecordModel.storage_space_id == storage_space_id)
+            if status is not None:
+                query = query.where(FileDeletionRecordModel.status == status)
+            if after_id is not None:
+                query = query.where(FileDeletionRecordModel.id > after_id)
+            rows = await session.scalars(query)
+            return [_deletion_public_dict(row) for row in rows]
+
+    async def get_deletion_record(
+        self, deletion_id: UUID, *, tenant_id: UUID | None = None
+    ) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            query = select(FileDeletionRecordModel).where(FileDeletionRecordModel.id == deletion_id)
+            if tenant_id is not None:
+                query = query.where(FileDeletionRecordModel.tenant_id == tenant_id)
+            row = await session.scalar(query)
+            return _deletion_public_dict(row) if row else None
+
+    async def get_deletion_record_internal(
+        self, deletion_id: UUID, *, tenant_id: UUID | None = None
+    ) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            query = select(FileDeletionRecordModel).where(FileDeletionRecordModel.id == deletion_id)
+            if tenant_id is not None:
+                query = query.where(FileDeletionRecordModel.tenant_id == tenant_id)
+            row = await session.scalar(query)
+            return _deletion_dict(row) if row else None
+
+    async def get_storage_space_for_deletion(
+        self, tenant_id: UUID, storage_space_id: UUID
+    ) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            row = await session.scalar(
+                select(StorageSpaceModel).where(
+                    StorageSpaceModel.tenant_id == tenant_id,
+                    StorageSpaceModel.id == storage_space_id,
+                )
+            )
+            if row is None:
+                return None
+            return {
+                "id": str(row.id),
+                "tenant_id": str(row.tenant_id),
+                "bucket": row.bucket,
+                "root_prefix": row.root_prefix,
+                "storage_namespace": row.storage_namespace,
+                "profile_version": row.profile_version,
+                "provider_target_version": row.provider_target_version,
+            }
+
+    async def finalize_file_trash_migration(self, tenant_id: UUID, file_id: UUID) -> None:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileObjectModel)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.id == file_id,
+                    FileObjectModel.status == "deleting",
+                    FileObjectModel.soft_deleted.is_(True),
+                )
+                .with_for_update()
+            )
+            deletion = await session.scalar(
+                select(FileDeletionRecordModel)
+                .where(
+                    FileDeletionRecordModel.tenant_id == tenant_id,
+                    FileDeletionRecordModel.file_id == file_id,
+                )
+                .with_for_update()
+            )
+            if row is None or deletion is None:
+                return
+            row.object_key = deletion.trash_physical_key
+            row.status = "deleted"
+            row.purge_state = "scheduled"
+            deletion.status = "retained"
+            await session.flush()
 
     async def record_delete_failure(
         self, tenant_id: UUID, file_id: UUID, max_attempts: int
@@ -323,15 +574,30 @@ class SqlAlchemyFileStore:
             if row is None:
                 return
             row.deletion_attempt_count += 1
+            deletion = await session.scalar(
+                select(FileDeletionRecordModel)
+                .where(
+                    FileDeletionRecordModel.tenant_id == tenant_id,
+                    FileDeletionRecordModel.file_id == file_id,
+                )
+                .with_for_update()
+            )
             if row.deletion_attempt_count >= max_attempts:
                 row.status = "delete_failed"
                 row.deletion_failure_reason = "retry_exhausted"
                 row.deletion_next_retry_at = None
+                if deletion is not None:
+                    deletion.status = "failed"
+                    deletion.failure_reason = "retry_exhausted"
             else:
                 row.deletion_failure_reason = "object_storage_unavailable"
                 row.deletion_next_retry_at = datetime.now(UTC) + timedelta(
                     seconds=min(300, 2**row.deletion_attempt_count)
                 )
+                if deletion is not None:
+                    deletion.status = "retrying"
+                    deletion.attempt_count = row.deletion_attempt_count
+                    deletion.next_retry_at = row.deletion_next_retry_at
 
     async def finalize_file_delete(self, tenant_id: UUID, file_id: UUID) -> None:
         async with self._sf.begin() as session:
@@ -621,7 +887,7 @@ class SqlAlchemyFileStore:
                 destination_key=data.get("destination_key"),
                 keys=data.get("keys", []),
                 idempotency_key=data.get("idempotency_key", str(uuid4())),
-                status="pending",
+                status="queued",
                 storage_space_id=space_id,
                 application_id=(
                     UUID(data["application_id"]) if data.get("application_id") else None
@@ -636,6 +902,34 @@ class SqlAlchemyFileStore:
                 authorization_evidence=data.get("authorization_evidence", {}),
             )
             session.add(model)
+            await session.flush()
+            occupied_keys, destination_keys = _operation_resource_keys(data)
+            await self._occupy_operation_resources(
+                session,
+                tenant_id=tenant_id,
+                space_id=space_id,
+                operation=model,
+                occupied_keys=occupied_keys,
+                destination_keys=destination_keys,
+            )
+            session.add(
+                FileOperationEventOutboxModel(
+                    tenant_id=tenant_id,
+                    operation_id=model.id,
+                    event_type="file.operation.execute",
+                    payload=_operation_event_payload(model),
+                )
+            )
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=model.principal_id,
+                    action="file.operation_requested",
+                    resource_type="file_operation",
+                    resource_id=str(model.id),
+                    details={"operation_type": model.operation_type},
+                )
+            )
             await session.flush()
             return _op_dict(model)
 
@@ -655,7 +949,7 @@ class SqlAlchemyFileStore:
             )
             if source is None or source.status != "available" or source.soft_deleted:
                 raise ApiError("resource_not_found", "File not found", status_code=404)
-            if source.etag != data["if_match"]:
+            if data.get("if_match") is not None and source.etag != data["if_match"]:
                 raise ApiError("precondition_failed", "File ETag does not match", status_code=412)
 
             existing = await session.scalar(
@@ -670,10 +964,25 @@ class SqlAlchemyFileStore:
             )
             if existing is not None:
                 if existing.request_fingerprint == data["request_fingerprint"]:
-                    return _op_dict(existing)
+                    destination = await session.scalar(
+                        select(FileObjectModel).where(
+                            FileObjectModel.tenant_id == tenant_id,
+                            FileObjectModel.id == existing.result_file_id,
+                        )
+                    )
+                    result = _op_dict(existing)
+                    if destination is not None:
+                        result["result_file"] = _file_dict(destination)
+                    return result
                 raise ApiError(
                     "idempotency_conflict",
                     "Idempotency key was used for a different rename",
+                    status_code=409,
+                )
+            if source.active_operation_id is not None:
+                raise ApiError(
+                    "file_operation_in_progress",
+                    "File is occupied by an asynchronous operation",
                     status_code=409,
                 )
             active = await session.scalar(
@@ -719,7 +1028,11 @@ class SqlAlchemyFileStore:
                 content_length=source.content_length,
                 content_type=source.content_type,
                 checksum=source.checksum,
-                etag=source.etag,
+                public_file_ref=data.get("result_file_ref"),
+                metadata_json=source.metadata_json,
+                # The provider returns the destination ETag only after the
+                # asynchronous copy has completed.  It is not pre-issued.
+                etag=None,
                 status="renaming",
             )
             session.add(destination)
@@ -738,7 +1051,7 @@ class SqlAlchemyFileStore:
                 keys=[],
                 idempotency_key=str(data["idempotency_key"]),
                 request_fingerprint=str(data["request_fingerprint"]),
-                status="pending",
+                status="queued",
                 storage_space_id=space_id,
                 application_id=UUID(str(data["application_id"])),
                 actor_application_id=(
@@ -754,6 +1067,18 @@ class SqlAlchemyFileStore:
             )
             session.add(operation)
             await session.flush()
+            source.active_operation_id = operation.id
+            source.operation_phase = "queued"
+            destination.active_operation_id = operation.id
+            destination.operation_phase = "queued"
+            session.add(
+                FileOperationEventOutboxModel(
+                    tenant_id=tenant_id,
+                    operation_id=operation.id,
+                    event_type="file.operation.execute",
+                    payload=_operation_event_payload(operation),
+                )
+            )
             session.add(
                 AuditEventModel(
                     tenant_id=tenant_id,
@@ -771,60 +1096,124 @@ class SqlAlchemyFileStore:
                     },
                 )
             )
-            return _op_dict(operation)
+            result = _op_dict(operation)
+            result["result_file"] = _file_dict(destination)
+            return result
 
-    async def claim_operations(self, worker_id: str, limit: int = 10) -> list[dict[str, Any]]:
+    async def replay_rename_operation(
+        self, tenant_id: UUID, application_id: UUID, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        """Find a prior rename without requiring its (now deleted) source row."""
+        async with self._sf() as session:
+            operation = await session.scalar(
+                select(FileOperationModel).where(
+                    FileOperationModel.tenant_id == tenant_id,
+                    FileOperationModel.application_id == application_id,
+                    FileOperationModel.operation_type == "rename",
+                    FileOperationModel.idempotency_key == idempotency_key,
+                )
+            )
+            if operation is None:
+                return None
+            result = _op_dict(operation)
+            if operation.result_file_id is not None:
+                destination = await session.scalar(
+                    select(FileObjectModel).where(
+                        FileObjectModel.tenant_id == tenant_id,
+                        FileObjectModel.id == operation.result_file_id,
+                    )
+                )
+                if destination is not None:
+                    result["result_file"] = _file_dict(destination)
+            return result
+
+    async def claim_outbox_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Lease unpublished events briefly; this coordinates publishers, not work execution."""
         now = datetime.now(UTC)
         async with self._sf.begin() as session:
-            rows = await session.scalars(
-                select(FileOperationModel)
-                .where(
-                    or_(
-                        FileOperationModel.status.in_(("pending", "retry_wait")),
-                        (FileOperationModel.status == "running")
-                        & (FileOperationModel.lease_expires_at < now),
-                    ),
-                    or_(
-                        FileOperationModel.next_retry_at.is_(None),
-                        FileOperationModel.next_retry_at <= now,
-                    ),
+            rows = (
+                await session.scalars(
+                    select(FileOperationEventOutboxModel)
+                    .where(
+                        FileOperationEventOutboxModel.published_at.is_(None),
+                        or_(
+                            FileOperationEventOutboxModel.publish_lease_expires_at.is_(None),
+                            FileOperationEventOutboxModel.publish_lease_expires_at < now,
+                        ),
+                    )
+                    .order_by(FileOperationEventOutboxModel.created_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
                 )
-                .order_by(FileOperationModel.created_at)
-                .limit(limit)
-                .with_for_update(skip_locked=True)
-            )
-            claimed = list(rows)
-            for row in claimed:
-                row.status = "running"
-                row.lease_owner = worker_id
-                row.lease_expires_at = now + timedelta(minutes=1)
-                row.attempt_count += 1
-            await session.flush()
-            return [_op_dict(row) for row in claimed]
+            ).all()
+            for row in rows:
+                row.publish_attempt_count += 1
+                row.publish_lease_expires_at = now + timedelta(minutes=1)
+            return [_outbox_dict(row) for row in rows]
 
-    async def renew_operation_lease(
-        self, tenant_id: UUID, operation_id: UUID, worker_id: str
-    ) -> bool:
-        """Extend a lease only while it is still owned by this worker."""
+    async def mark_outbox_published(self, event_id: UUID) -> None:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileOperationEventOutboxModel)
+                .where(FileOperationEventOutboxModel.id == event_id)
+                .with_for_update()
+            )
+            if row is not None:
+                row.published_at = datetime.now(UTC)
+                row.publish_lease_expires_at = None
+
+    async def release_outbox_event(self, event_id: UUID) -> None:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileOperationEventOutboxModel)
+                .where(FileOperationEventOutboxModel.id == event_id)
+                .with_for_update()
+            )
+            if row is not None and row.published_at is None:
+                row.publish_lease_expires_at = None
+
+    async def start_broker_operation(
+        self, tenant_id: UUID, operation_id: UUID
+    ) -> dict[str, Any] | None:
+        """Move an event-backed operation to processing exactly once per delivery."""
         async with self._sf.begin() as session:
             row = await session.scalar(
                 select(FileOperationModel)
                 .where(
-                    FileOperationModel.tenant_id == tenant_id,
-                    FileOperationModel.id == operation_id,
-                    FileOperationModel.status == "running",
-                    FileOperationModel.lease_owner == worker_id,
+                    FileOperationModel.tenant_id == tenant_id, FileOperationModel.id == operation_id
                 )
                 .with_for_update()
             )
-            if row is None:
-                return False
-            row.lease_expires_at = datetime.now(UTC) + timedelta(minutes=1)
-            return True
+            if row is None or row.status not in {"queued", "retry_scheduled"}:
+                return None
+            row.status = "processing"
+            row.attempt_count += 1
+            now = datetime.now(UTC)
+            files = (
+                await session.scalars(
+                    select(FileObjectModel)
+                    .where(
+                        FileObjectModel.tenant_id == tenant_id,
+                        FileObjectModel.active_operation_id == row.id,
+                    )
+                    .with_for_update()
+                )
+            ).all()
+            for file in files:
+                file.operation_phase = "processing"
+                file.processing_started_at = now
+            await session.flush()
+            return _op_dict(row)
 
-    async def finish_operation(
-        self, tenant_id: UUID, operation_id: UUID, status: str, reason: str | None = None
+    async def settle_broker_operation(
+        self,
+        tenant_id: UUID,
+        operation_id: UUID,
+        status: str,
+        reason: str | None = None,
     ) -> None:
+        """Persist outcome and release all durable mutation exclusion state before ack."""
+        terminal = {"succeeded", "failed", "cancelled", "partial_failure", "dead_lettered"}
         async with self._sf.begin() as session:
             row = await session.scalar(
                 select(FileOperationModel)
@@ -835,91 +1224,323 @@ class SqlAlchemyFileStore:
             )
             if row is None:
                 return
-            if status == "retry_wait":
-                # A transient provider failure must not create a hot retry loop.
-                # Five attempts is intentionally bounded; an operator can inspect
-                # the durable failed row instead of silently retrying forever.
-                if row.attempt_count >= 5:
-                    status = "failed"
-                    reason = "retry_exhausted"
-                else:
-                    row.next_retry_at = datetime.now(UTC) + timedelta(
-                        seconds=min(300, 2**row.attempt_count)
-                    )
-            else:
-                row.next_retry_at = None
-            row.status, row.failure_reason = status, reason
-            row.lease_owner, row.lease_expires_at = None, None
-            if status in {"succeeded", "failed", "partial_failure", "cancelled"}:
-                row.completed_at = datetime.now(UTC)
-
-    async def finish_rename_operation(
-        self, tenant_id: UUID, operation_id: UUID, status: str, reason: str | None = None
-    ) -> None:
-        """Settle catalog visibility only when provider-side rename truly completed."""
-        async with self._sf.begin() as session:
-            row = await session.scalar(
-                select(FileOperationModel)
-                .where(
-                    FileOperationModel.tenant_id == tenant_id,
-                    FileOperationModel.id == operation_id,
-                )
-                .with_for_update()
-            )
-            if row is None:
-                return
-            source = (
-                await session.scalar(
+            files = (
+                await session.scalars(
                     select(FileObjectModel)
                     .where(
                         FileObjectModel.tenant_id == tenant_id,
-                        FileObjectModel.id == row.source_file_id,
+                        FileObjectModel.active_operation_id == operation_id,
                     )
+                    .order_by(FileObjectModel.id)
                     .with_for_update()
                 )
-                if row.source_file_id
-                else None
-            )
-            destination = (
-                await session.scalar(
-                    select(FileObjectModel)
-                    .where(
-                        FileObjectModel.tenant_id == tenant_id,
-                        FileObjectModel.id == row.result_file_id,
-                    )
-                    .with_for_update()
-                )
-                if row.result_file_id
-                else None
-            )
-            if status == "succeeded" and source is not None and destination is not None:
-                source.status, source.deleted_at = "deleted", datetime.now(UTC)
-                destination.status = "available"
-            elif destination is not None and status == "failed":
-                destination.status = "rename_failed"
-            if status == "retry_wait":
-                if row.attempt_count >= 5:
-                    status, reason = "failed", "retry_exhausted"
-                else:
-                    row.next_retry_at = datetime.now(UTC) + timedelta(
-                        seconds=min(300, 2**row.attempt_count)
-                    )
-            else:
-                row.next_retry_at = None
+            ).all()
+            if row.operation_type == "rename":
+                source = next((file for file in files if file.id == row.source_file_id), None)
+                destination = next((file for file in files if file.id == row.result_file_id), None)
+                if status == "succeeded" and source is not None and destination is not None:
+                    source.status, source.deleted_at = "deleted", datetime.now(UTC)
+                    destination.status = "available"
+                elif destination is not None and status in {"failed", "cancelled", "dead_lettered"}:
+                    destination.status = "rename_failed"
             row.status, row.failure_reason = status, reason
+            row.next_retry_at = None
             row.lease_owner, row.lease_expires_at = None, None
-            if status in {"succeeded", "failed", "partial_failure", "cancelled"}:
+            if status in terminal:
                 row.completed_at = datetime.now(UTC)
+                for file in files:
+                    file.active_operation_id = None
+                    file.operation_phase = None
+                    file.processing_started_at = None
+                reservations = (
+                    await session.scalars(
+                        select(FileOperationResourceReservationModel)
+                        .where(FileOperationResourceReservationModel.operation_id == operation_id)
+                        .with_for_update()
+                    )
+                ).all()
+                for reservation in reservations:
+                    await session.delete(reservation)
             session.add(
                 AuditEventModel(
                     tenant_id=tenant_id,
                     actor_principal_id=row.principal_id,
-                    action=f"file.rename_{status}",
+                    action=f"file.operation_{status}",
                     resource_type="file_operation",
                     resource_id=str(row.id),
-                    details={"reason": reason, "result_file_id": str(row.result_file_id)},
+                    details={"reason": reason},
                 )
             )
+
+    async def record_rename_provider_result(
+        self, tenant_id: UUID, operation_id: UUID, provider_etag: str | None
+    ) -> None:
+        """Persist the actual copy result before making the target available."""
+        async with self._sf.begin() as session:
+            operation = await session.scalar(
+                select(FileOperationModel)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id,
+                    FileOperationModel.id == operation_id,
+                    FileOperationModel.operation_type == "rename",
+                )
+                .with_for_update()
+            )
+            if operation is None or operation.result_file_id is None:
+                return
+            destination = await session.scalar(
+                select(FileObjectModel)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.id == operation.result_file_id,
+                )
+                .with_for_update()
+            )
+            if destination is not None:
+                destination.etag = provider_etag
+
+    async def schedule_broker_retry(
+        self, tenant_id: UUID, operation_id: UUID, reason: str | None = None
+    ) -> dict[str, Any] | None:
+        async with self._sf.begin() as session:
+            row = await session.scalar(
+                select(FileOperationModel)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id, FileOperationModel.id == operation_id
+                )
+                .with_for_update()
+            )
+            if row is None or row.status != "processing":
+                return None
+            row.status, row.failure_reason = "retry_scheduled", reason
+            row.next_retry_at = datetime.now(UTC)
+            files = (
+                await session.scalars(
+                    select(FileObjectModel).where(FileObjectModel.active_operation_id == row.id)
+                )
+            ).all()
+            for file in files:
+                file.operation_phase = "retry_scheduled"
+                file.processing_started_at = None
+            return _op_dict(row)
+
+    async def operation_file_ids(self, tenant_id: UUID, operation_id: UUID) -> list[UUID]:
+        async with self._sf() as session:
+            return list(
+                await session.scalars(
+                    select(FileObjectModel.id)
+                    .where(
+                        FileObjectModel.tenant_id == tenant_id,
+                        FileObjectModel.active_operation_id == operation_id,
+                    )
+                    .order_by(FileObjectModel.storage_space_id, FileObjectModel.id)
+                )
+            )
+
+    async def recover_timed_out_operations(
+        self, timeout_seconds: int, max_recoveries: int, limit: int = 100
+    ) -> int:
+        """Indexed exceptional recovery; it never claims ordinary queued work."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=timeout_seconds)
+        recovered = 0
+        async with self._sf.begin() as session:
+            rows = (
+                (
+                    await session.scalars(
+                        select(FileOperationModel)
+                        .join(
+                            FileObjectModel,
+                            (FileObjectModel.tenant_id == FileOperationModel.tenant_id)
+                            & (FileObjectModel.active_operation_id == FileOperationModel.id),
+                        )
+                        .where(
+                            FileOperationModel.status == "processing",
+                            FileObjectModel.processing_started_at < cutoff,
+                        )
+                        .order_by(FileObjectModel.processing_started_at)
+                        .limit(limit)
+                        .with_for_update(skip_locked=True)
+                    )
+                )
+                .unique()
+                .all()
+            )
+            for row in rows:
+                if row.recovery_attempt_count >= max_recoveries:
+                    row.status, row.failure_reason = "dead_lettered", "processing_timeout"
+                    row.completed_at = datetime.now(UTC)
+                    continue
+                row.recovery_attempt_count += 1
+                row.status, row.failure_reason = "queued", "processing_timeout_recovery"
+                files = (
+                    await session.scalars(
+                        select(FileObjectModel)
+                        .where(FileObjectModel.active_operation_id == row.id)
+                        .with_for_update()
+                    )
+                ).all()
+                for file in files:
+                    file.operation_phase, file.processing_started_at = "queued", None
+                session.add(
+                    FileOperationEventOutboxModel(
+                        tenant_id=row.tenant_id,
+                        operation_id=row.id,
+                        event_type="file.operation.execute",
+                        payload=_operation_event_payload(row),
+                    )
+                )
+                recovered += 1
+        return recovered
+
+    async def record_dead_letter_event(
+        self, tenant_id: UUID, operation_id: UUID | None, details: dict[str, Any]
+    ) -> None:
+        async with self._sf.begin() as session:
+            session.add(
+                AuditEventModel(
+                    tenant_id=tenant_id,
+                    actor_principal_id=None,
+                    action="file.operation_dead_letter_received",
+                    resource_type="file_operation",
+                    resource_id=str(operation_id) if operation_id else None,
+                    details=details,
+                )
+            )
+
+    async def replay_dead_letter_operation(
+        self, tenant_id: UUID, operation_id: UUID, replay_of_event_id: UUID
+    ) -> dict[str, Any] | None:
+        """Create a linked delivery intent instead of republishing raw DLQ data."""
+        async with self._sf.begin() as session:
+            operation = await session.scalar(
+                select(FileOperationModel)
+                .where(
+                    FileOperationModel.tenant_id == tenant_id,
+                    FileOperationModel.id == operation_id,
+                    FileOperationModel.status.in_(("dead_lettered", "partial_failure")),
+                )
+                .with_for_update()
+            )
+            if operation is None:
+                return None
+            operation.status, operation.failure_reason = "queued", None
+            operation.completed_at = None
+            operation.replay_of_event_id = replay_of_event_id
+            session.add(
+                FileOperationEventOutboxModel(
+                    tenant_id=tenant_id,
+                    operation_id=operation_id,
+                    event_type="file.operation.execute",
+                    payload=_operation_event_payload(operation),
+                    replay_of_event_id=replay_of_event_id,
+                )
+            )
+            return _op_dict(operation)
+
+    async def enqueue_legacy_operations(self, limit: int = 1_000) -> int:
+        """One-time cutover bridge; callers must stop the legacy polling worker first."""
+        now = datetime.now(UTC)
+        migrated = 0
+        async with self._sf.begin() as session:
+            rows = (
+                await session.scalars(
+                    select(FileOperationModel)
+                    .where(
+                        or_(
+                            FileOperationModel.status.in_(("pending", "retry_wait")),
+                            (FileOperationModel.status == "running")
+                            & (FileOperationModel.lease_expires_at < now),
+                        )
+                    )
+                    .order_by(FileOperationModel.created_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+            for operation in rows:
+                operation.status, operation.next_retry_at = "queued", None
+                operation.lease_owner, operation.lease_expires_at = None, None
+                existing = await session.scalar(
+                    select(FileOperationEventOutboxModel.id).where(
+                        FileOperationEventOutboxModel.operation_id == operation.id
+                    )
+                )
+                if existing is None:
+                    session.add(
+                        FileOperationEventOutboxModel(
+                            tenant_id=operation.tenant_id,
+                            operation_id=operation.id,
+                            event_type="file.operation.execute",
+                            payload=_operation_event_payload(operation),
+                        )
+                    )
+                migrated += 1
+        return migrated
+
+    async def _occupy_operation_resources(
+        self,
+        session: AsyncSession,
+        *,
+        tenant_id: UUID,
+        space_id: UUID,
+        operation: FileOperationModel,
+        occupied_keys: list[str],
+        destination_keys: list[str],
+    ) -> None:
+        """Claim file rows and destination names in one operation-creation transaction."""
+        all_keys = sorted(set(occupied_keys + destination_keys))
+        rows = (
+            await session.scalars(
+                select(FileObjectModel)
+                .where(
+                    FileObjectModel.tenant_id == tenant_id,
+                    FileObjectModel.storage_space_id == space_id,
+                    FileObjectModel.object_key.in_(all_keys),
+                )
+                .order_by(FileObjectModel.id)
+                .with_for_update()
+            )
+        ).all()
+        rows_by_key = {row.object_key: row for row in rows}
+        for key in occupied_keys:
+            row = rows_by_key.get(key)
+            if row is None or row.status != "available" or row.soft_deleted:
+                raise ApiError("resource_not_found", "File not found", status_code=404)
+            if row.active_operation_id is not None:
+                raise ApiError(
+                    "file_operation_in_progress",
+                    "File is occupied by an asynchronous operation",
+                    status_code=409,
+                )
+        for key in destination_keys:
+            if rows_by_key.get(key) is not None:
+                raise ApiError(
+                    "duplicate_resource",
+                    "Destination file already exists",
+                    status_code=409,
+                )
+        for key in occupied_keys:
+            row = rows_by_key.get(key)
+            if row is not None:
+                row.active_operation_id = operation.id
+                row.operation_phase = "queued"
+        for key in destination_keys:
+            session.add(
+                FileOperationResourceReservationModel(
+                    tenant_id=tenant_id,
+                    storage_space_id=space_id,
+                    object_key=key,
+                    operation_id=operation.id,
+                )
+            )
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise ApiError(
+                "file_operation_in_progress",
+                "Destination key is reserved by an asynchronous operation",
+                status_code=409,
+            ) from exc
 
     async def get_operation(self, tenant_id: UUID, op_id: UUID) -> dict[str, Any] | None:
         async with self._sf() as session:
@@ -1072,6 +1693,13 @@ class SqlAlchemyFileStore:
                 content_length=row.declared_length,
                 content_type=row.content_type,
                 checksum=data.get("checksum") or row.checksum,
+                public_file_ref=generate_file_ref(
+                    tenant_id=tenant_id,
+                    application_id=row.application_id,
+                    relative_key=row.object_key,
+                    metadata=row.metadata_json,
+                    checksum=data.get("checksum") or row.checksum,
+                ),
                 metadata_json=row.metadata_json,
                 etag=data.get("etag"),
             )
@@ -1120,6 +1748,7 @@ class SqlAlchemyFileStore:
                 provider_target_version=int(data.get("provider_target_version", 1)),
                 declared_length=data["content_length"],
                 content_type=data["content_type"],
+                checksum=data.get("checksum"),
                 metadata_json=data.get("metadata"),
                 quota_reservation_id=uuid4(),
                 expires_at=data["expires_at"],
@@ -1265,6 +1894,13 @@ class SqlAlchemyFileStore:
                 content_length=data["content_length"],
                 content_type=data["content_type"],
                 checksum=data.get("checksum"),
+                public_file_ref=generate_file_ref(
+                    tenant_id=tenant_id,
+                    application_id=row.application_id,
+                    relative_key=row.object_key,
+                    metadata=row.metadata_json,
+                    checksum=data.get("checksum") or row.checksum,
+                ),
                 metadata_json=row.metadata_json,
                 etag=data.get("etag"),
             )
@@ -1273,6 +1909,20 @@ class SqlAlchemyFileStore:
             result = _mp_dict(row)
             result["file_object"] = _file_dict(file_obj)
             return result
+
+
+def _validate_delete_etag(
+    current_etag: str | None, supplied_etag: str | None, *, is_file_ref: bool
+) -> None:
+    """Apply the legacy ETag precondition without leaking it into file_ref deletes."""
+    if is_file_ref:
+        return
+    from s3mp.common.api.etag import check_etag, require_if_match
+
+    if supplied_etag is None:
+        require_if_match(None)
+    if current_etag != supplied_etag:
+        check_etag(current_etag or "", str(supplied_etag))
 
 
 def _file_dict(m: FileObjectModel) -> dict[str, Any]:
@@ -1289,7 +1939,9 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "content_type": m.content_type,
         "etag": m.etag,
         "checksum": m.checksum,
+        "file_ref": m.public_file_ref,
         "metadata": m.metadata_json,
+        "record_etag": _record_etag(m),
         "status": m.status,
         "deletion_attempt_count": m.deletion_attempt_count,
         "deletion_principal_id": str(m.deletion_principal_id) if m.deletion_principal_id else None,
@@ -1306,6 +1958,45 @@ def _file_dict(m: FileObjectModel) -> dict[str, Any]:
         "restored_at": m.restored_at.isoformat() if m.restored_at else None,
         "created_at": m.created_at.isoformat(),
     }
+
+
+def _deletion_dict(m: FileDeletionRecordModel | None) -> dict[str, Any] | None:
+    if m is None:
+        return None
+    return {
+        "id": str(m.id),
+        "tenant_id": str(m.tenant_id),
+        "file_id": str(m.file_id),
+        "storage_space_id": str(m.storage_space_id),
+        "application_id": str(m.application_id) if m.application_id else None,
+        "original_relative_key": m.original_relative_key,
+        "original_physical_key": m.original_physical_key,
+        "trash_physical_key": m.trash_physical_key,
+        "content_length": m.content_length,
+        "content_type": m.content_type,
+        "etag": m.etag,
+        "deleted_by": str(m.deleted_by) if m.deleted_by else None,
+        "deleted_at": m.deleted_at.isoformat(),
+        "purge_due_at": m.purge_due_at.isoformat(),
+        "status": m.status,
+        "attempt_count": m.attempt_count,
+        "next_retry_at": m.next_retry_at.isoformat() if m.next_retry_at else None,
+        "failure_reason": m.failure_reason,
+        "purged_at": m.purged_at.isoformat() if m.purged_at else None,
+    }
+
+
+def _deletion_public_dict(m: FileDeletionRecordModel) -> dict[str, Any]:
+    """Expose provenance without exposing provider-owned physical keys."""
+    value = _deletion_dict(m)
+    assert value is not None
+    value.pop("original_physical_key", None)
+    value.pop("trash_physical_key", None)
+    return value
+
+
+def _record_etag(m: FileObjectModel) -> str:
+    return hashlib.sha256(f"file-record:{m.id}:{m.record_version}".encode()).hexdigest()[:32]
 
 
 def _upload_dict(m: UploadSessionModel) -> dict[str, Any]:
@@ -1343,6 +2034,7 @@ def _mp_dict(m: MultipartSessionModel) -> dict[str, Any]:
         "profile_version": m.profile_version,
         "content_length": m.declared_length,
         "content_type": m.content_type,
+        "checksum": m.checksum,
         "metadata": m.metadata_json,
         "status": m.status,
         "provider_upload_id": m.provider_upload_id,
@@ -1384,9 +2076,43 @@ def _op_dict(m: FileOperationModel) -> dict[str, Any]:
         "provider_target_version": m.provider_target_version,
         "authorization_evidence": m.authorization_evidence or {},
         "attempt_count": m.attempt_count,
+        "recovery_attempt_count": m.recovery_attempt_count,
+        "replay_of_event_id": str(m.replay_of_event_id) if m.replay_of_event_id else None,
         "lease_owner": m.lease_owner,
         "lease_expires_at": m.lease_expires_at.isoformat() if m.lease_expires_at else None,
         "next_retry_at": m.next_retry_at.isoformat() if m.next_retry_at else None,
         "completed_at": m.completed_at.isoformat() if m.completed_at else None,
         "created_at": m.created_at.isoformat(),
+    }
+
+
+def _operation_resource_keys(data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Return physical source/target keys subject to durable mutation exclusion."""
+    operation_type = str(data["operation_type"])
+    if operation_type == "delete":
+        return sorted(set(data.get("physical_keys") or ())), []
+    source = data.get("source_physical_key")
+    destination = data.get("destination_physical_key")
+    return ([str(source)] if source else []), ([str(destination)] if destination else [])
+
+
+def _operation_event_payload(operation: FileOperationModel) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "event_id": str(uuid4()),
+        "operation_id": str(operation.id),
+        "tenant_id": str(operation.tenant_id),
+        "event_type": "file.operation.execute",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _outbox_dict(m: FileOperationEventOutboxModel) -> dict[str, Any]:
+    return {
+        "id": str(m.id),
+        "tenant_id": str(m.tenant_id),
+        "operation_id": str(m.operation_id),
+        "event_type": m.event_type,
+        "payload": dict(m.payload or {}),
+        "publish_attempt_count": m.publish_attempt_count,
     }

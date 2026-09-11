@@ -1,0 +1,846 @@
+# 本体机器可读事实源（V2）
+#
+# 定位：这是本体的**唯一事实源**。三端投影（生产 schema/templates、检索 tools/、
+#       消费 router/）要么由本文件生成，要么由 CI 按本文件校验，不允许手写第三份。
+#       —— 决策 D27
+#
+# 分层（按 docs/本体V2 评审意见 §8，五层各自 owner 与变更节奏不同）：
+#   语义本体层   ontology/schema.yaml + ontology/vocabularies.yaml   ← 本文件
+#   源系统映射层 mappings/*.yaml（推导规则、legacy 迁移映射）
+#   检索策略层   config/retrieval.yaml（权重、预算、top_k）
+#   安全策略层   knowledge/policy/*.md + tools/policy_gate.py
+#   发布评测层   release（见 §release）、eval/
+#
+# 变更走本体提案：P（补丁）/ N（新增）/ S（结构）/ B（破坏）四级，见 ontology.md §7。
+
+version: 2.3-draft
+updated_at: 2026-08-24
+ontology_min_version: "2.0"
+
+# ── 消费方能力协商 ────────────────────────────────────────────────
+# 评审 4.4：仅比较版本号不足以表达兼容能力。消费方按 capabilities 判断能否安全处理。
+# 只有"消费者可安全忽略的可选字段"才算兼容 MINOR；新增必须理解的类型按行为兼容性判级。
+
+capabilities:
+  card_types: [metric, table, concept, policy, attribution, equation, action, org, tool]
+  edge_types: [in_unit, in_line, in_topic, depends_on, derived_from, join_with,
+               has_equation, factor, result, attributed_by, factor_of, responds_with,
+               variant_of, alias_of, means_in, carries]
+  response_schema_version: 2
+  policy_schema_version: 1
+  # 知识包正文键迁移：V2 期间 body 与 content 双写，V3 起只保留 content
+  body_key: {current: content, legacy_alias: body, dual_write_until: "3.0"}
+
+# ── 发布状态的消费语义 ────────────────────────────────────────────
+# 评审 3.7 阻断项：当前 1364 张卡全部 draft 却全部进索引和检索结果，而 SCHEMA.md
+# 写的是"reviewed 后才追加索引"。三处语义不一致。此处一次性定死，三端只读这一份。
+#
+# 拆成四种能力而不是一个开关：
+#   discoverable  能否被 search 发现
+#   retrievable   能否进入 lookup 知识包
+#   authoritative 能否作为最终事实直接引用（Agent 不必加"未经确认"）
+#   constraining  能否驱动硬剪枝 / policy / 默认口径等高影响判断
+#
+# 关键取舍：draft 可发现、可召回（否则全量零 reviewed 时知识能力清零），
+#          但绝不可 constraining——高影响判断必须由人工审核过的知识驱动。
+
+release:
+  draft:
+    discoverable: true
+    retrievable: true
+    authoritative: false
+    constraining: false
+    agent_note: 该知识尚未经 owner 审核，回答时需标注"未经确认"
+  reviewed:
+    discoverable: true
+    retrievable: true
+    authoritative: true
+    constraining: true
+    agent_note: null
+  deprecated:
+    discoverable: true
+    retrievable: false
+    authoritative: false
+    constraining: false
+    agent_note: 该知识已废弃，仅供溯源，不得用于回答
+
+# provenance 不改变发布状态，只影响同分下的排序偏好（权重见 config/retrieval.yaml）
+provenance_rank: [human, ai_extracted, ai_suggested]
+
+# ── 属性字典 ──────────────────────────────────────────────────────
+# 全局唯一命名。同一个属性名在任何卡型上语义必须一致。
+#
+# class（属性三分，D18）：
+#   facet        分面——属于谁的地盘。值变了不影响这条知识对不对
+#   discriminant 判别——能不能用、该不该召回。值变了直接改变 Agent 行为
+#   relation     关系边——从这能走到哪
+#   descriptive  描述——自由内容，不受控
+#   governance   治理——status/owner/provenance 等
+#
+# consumers：哪一端真的读它。CI 反向检查项——本体定义了却无任何一端消费的属性会告警，
+#            这正是 v1.0 "填写率 0%" 失败模式的机器化拦截（评审建议试点期先 warning）。
+#
+# activation（D28 + 评审 3.5 修订）：判别属性的生效档位。
+#   off    不参与检索
+#   weight 参与加权（覆盖率达 weight_from 即可）
+#   prune  参与硬剪枝——**不自动升级**。覆盖率只是必要条件，还须：
+#          precision_verified（人工标注样本上的精确率达标）
+#          + prune_approved（owner 显式批准）
+#          缺一不可。错误率高的推导规则可以快速刷到 80% 覆盖率，
+#          自动升级会批量制造漏召回。
+
+attributes:
+
+  # ── 分面（v1.0 已有，保留） ──
+  unit:
+    class: facet
+    value: {vocab: unit}
+    cardinality: multi
+    applies_to: [metric, table, concept, attribution, equation, action, org, tool]
+    index: true
+    consumers: [production, retrieval, agent]
+    since: "1.0"
+  business_line:
+    class: facet
+    value: {vocab: business_line}
+    cardinality: multi
+    applies_to: [metric, table, concept, attribution, equation, action, org, tool]
+    index: true
+    retrieval: {mode: weight}
+    consumers: [production, retrieval, agent]
+    since: "1.0"
+  business_domain:
+    class: facet
+    value: {vocab: business_domain}
+    cardinality: multi
+    applies_to: [metric, table, concept, attribution, equation, action, org, tool]
+    index: true
+    retrieval: {mode: weight}
+    consumers: [production, retrieval, agent]
+    since: "1.6"
+  application_scope:
+    class: facet
+    value: {vocab: application_scope}
+    cardinality: multi
+    applies_to: [table, attribution, equation, action]
+    index: true
+    retrieval: {mode: weight, request_source: app_key_mapping}
+    consumers: [production, retrieval, agent]
+    since: "2.1"
+    note: 缺失表示跨应用共享；调用方不能直接填分面，只能由 appKey 映射产生请求值。表卡用于选表，分析卡用于提升应用专属诊断知识排序
+  topic:
+    class: facet
+    value: {vocab: topic}
+    cardinality: multi
+    applies_to: [metric, concept, attribution, equation, action]
+    index: true
+    retrieval: {mode: weight}
+    consumers: [production, retrieval, agent]
+    since: "1.0"
+
+  # ── table 判别属性（V2 新增） ──
+  layer:
+    class: discriminant
+    value: {vocab: table_layer}
+    cardinality: single
+    applies_to: [table]
+    index: true
+    derivable: true
+    retrieval:
+      mode: weight
+      activation: {weight_from: 0.30, prune_from: 0.80,
+                   precision_verified: false, prune_approved: false}
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+    replaces_hardcode: [_is_indicator_table_entry, _is_allowed_indicator_named_detail_table,
+                        _is_public_business_fact_table]
+  time_grain:
+    class: discriminant
+    value: {vocab: time_grain}
+    cardinality: multi          # 评审 4.2：一张表可能同时有事件时间/快照时间/分区粒度
+    applies_to: [table]
+    index: true
+    derivable: true
+    retrieval:
+      mode: weight
+      activation: {weight_from: 0.30, prune_from: 0.80,
+                   precision_verified: false, prune_approved: false}
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+    replaces_hardcode: [_is_hourly_table_entry, _is_hourly_table_card, _is_hourly_table_text]
+  lifecycle:
+    class: discriminant
+    value: {vocab: lifecycle}
+    cardinality: single
+    applies_to: [table, metric]
+    index: true
+    derivable: true
+    retrieval:
+      mode: prune               # 唯一默认允许硬过滤的判别属性：客观事实，不存在"模型判断错"
+      hard_filter_values: [测试, 已下线]
+      activation: {weight_from: 0.0, prune_from: 0.0,
+                   precision_verified: true, prune_approved: true,
+                   approved_by: ontology-v2-review, approved_at: "2026-08-16",
+                   note: 测试表/下线表不进知识包是客观事实，无需覆盖率闸门}
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+    replaces_hardcode: [_is_test_table_entry]
+  queryable:
+    class: discriminant
+    value: {vocab: queryable}   # 评审 R10：纯枚举，不再混用 YAML boolean 与字符串
+    cardinality: single
+    applies_to: [table]
+    index: true
+    derivable: true
+    retrieval:
+      mode: weight
+      activation: {weight_from: 0.30, prune_from: 0.80,
+                   precision_verified: false, prune_approved: false}
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+    replaces_hardcode: [_is_blocked_table_entry]
+  query_note:
+    class: descriptive
+    value: {type: string}
+    cardinality: single
+    applies_to: [table]
+    required_when: {queryable: [不可查, 受限]}
+    index: true
+    consumers: [production, agent]
+    since: "2.0"
+  business_objects:
+    class: discriminant
+    # 评审 3.4 阻断项修订：从 business_object: [string] 改为带 role 的结构化模型。
+    # 扁平列表无法表达"主对象 vs 关联对象"，而实测证明这个区分是能否剪枝的分界线
+    # （shop_code 让"门店"命中 85/173 张表，绝大多数只是含有外键而非承载该对象）。
+    # 覆盖率、精确率与 activation 必须按 role 分别计算，不能合并统计。
+    value:
+      type: object_list
+      item:
+        object: {vocab: business_object, required: true}
+        role: {vocab: business_object_role, required: true}
+        evidence: {type: string}        # unique_key / has_column / legacy_hint / human
+        rule_id: {type: string}
+        confidence: {type: string}      # high | medium | low
+    cardinality: multi
+    applies_to: [table]
+    index: true
+    derivable: true
+    # 兼容写法：business_object: [成交, 客源] —— 视为人工显式声明的主对象
+    shorthand_field: business_object
+    shorthand_role: 主对象
+    retrieval:
+      mode: weight
+      # 两级分别设闸门：主对象证据精确（粒度键）才有资格升到剪枝；
+      # 关联对象证据宽松（字段存在），永久只加权，prune_from 显式设为 null
+      activation_by_role:
+        主对象: {weight_from: 0.30, prune_from: 0.70,
+                precision_verified: false, prune_approved: false}
+        关联对象: {weight_from: 0.30, prune_from: null,
+                  note: 证据是字段存在，天然过度命中，设计上不允许剪枝}
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+    replaces_hardcode: [TABLE_HINT_ALIASES, TABLE_FIELD_ALIASES]
+
+  # ── metric 判别属性（V2 新增） ──
+  polarity:
+    class: discriminant
+    value: {vocab: metric_polarity}
+    cardinality: single
+    applies_to: [metric]
+    index: true
+    derivable: true
+    # 评审 4.2：好坏依赖业务目标与角色，不是绝对固有属性。
+    # 试点期不设必填，先用样板切片验证 owner 能否稳定填写
+    required_for: []
+    goal_relative: true
+    retrieval:
+      mode: weight
+      activation: {weight_from: 0.30, prune_from: null,
+                   note: 归因诊断的输入，不用于召回剪枝}
+    consumers: [production, agent]
+    since: "2.0"
+  aggregation:
+    class: discriminant
+    value: {vocab: metric_aggregation}
+    cardinality: single
+    applies_to: [metric]
+    index: true
+    derivable: true
+    required_for: []
+    retrieval:
+      mode: off
+      activation: {weight_from: 0.30, prune_from: null,
+                   note: 供 Agent 判断能否跨维度求和，不参与召回打分}
+    consumers: [production, agent]
+    since: "2.0"
+  semi_additive_along:
+    class: descriptive
+    # 评审 4.2：半可加必须说明"沿哪些维度可加、沿哪些维度不可加"，单值不足
+    value: {type: object}       # {additive: [维度], non_additive: [维度]}
+    cardinality: single
+    applies_to: [metric]
+    required_when: {aggregation: [半可加]}
+    index: false
+    consumers: [production, agent]
+    since: "2.0"
+  time_semantics:
+    class: discriminant
+    value: {vocab: metric_time_semantics}
+    cardinality: single
+    applies_to: [metric]
+    index: true
+    derivable: true
+    retrieval: {mode: off, activation: {weight_from: 0.30, prune_from: null}}
+    consumers: [production, agent]
+    since: "2.0"
+  metric_kind:
+    class: discriminant
+    value: {vocab: metric_kind}
+    cardinality: single
+    applies_to: [metric]
+    index: true
+    derivable: true
+    retrieval: {mode: weight, activation: {weight_from: 0.30, prune_from: null}}
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+
+  value_continuity:
+    class: discriminant
+    value: {vocab: value_continuity}
+    cardinality: single
+    applies_to: [metric]
+    index: true
+    retrieval: {mode: off, activation: {weight_from: 1.1, prune_from: null}}
+    consumers: [production, agent]
+    since: "2.3"
+    note: 指标值在统计意义上是离散还是连续；只指导评价方法，不参与检索剪枝
+
+  # ── attribution / action ──
+  scope_level:
+    class: discriminant
+    value: {vocab: scope_level}
+    cardinality: multi
+    applies_to: [attribution, action]
+    index: true
+    consumers: [production, agent]
+    since: "2.0"
+    note: 与 dimensions.组织 同源不同名；合并与否见 ontology.md §7 待评审
+
+  analysis_methods:
+    class: descriptive
+    value: {vocab: analysis_method}
+    cardinality: multi
+    applies_to: [attribution]
+    index: true
+    consumers: [production, retrieval, agent]
+    since: "2.3"
+    note: 该归因框架采用的分析方法；方法只描述如何分析，不替代 factors 关系
+
+  evaluation_rules:
+    class: descriptive
+    value:
+      type: object_list
+      item:
+        metric: {type: ref, target_types: [metric]}
+        metric_name: {type: string}
+        rule_type: {vocab: evaluation_rule_type, required: true}
+        operator: {vocab: evaluation_operator, required: true}
+        value: {type: number, required: true}
+        value_unit: {vocab: evaluation_value_unit, required: true}
+        label: {type: string}
+        when: {type: object}
+        basis: {vocab: evaluation_basis, required: true}
+        note: {type: string}
+    cardinality: multi
+    applies_to: [attribution]
+    index: true
+    consumers: [production, agent]
+    since: "2.3"
+    note: 带业务线和组织层级条件的阈值、参考均值或连续趋势规则；draft 规则不可驱动硬约束
+
+  # ── concept（新增类型专属） ──
+  ambiguous:
+    class: discriminant
+    value: {type: boolean}
+    cardinality: single
+    applies_to: [concept]
+    index: true
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+  senses:
+    class: relation
+    value:
+      type: object_list
+      item:
+        condition: {type: object, required: true}   # 键取自受控分面
+        means: {type: string, required: true}
+        metrics: {type: ref_list, target_types: [metric]}
+        codelist: {type: ref, target_types: [org]}  # 落到物理编码的那一跳
+        predicate: {type: string}                   # 落到 WHERE 条件的那一跳
+        note: {type: string}
+    cardinality: multi
+    applies_to: [concept]
+    index: false
+    edge: means_in
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+    # 评审 4.1：concept 只做到"词→指标"不够，必须端到端落到
+    # metric → table/column → codelist → predicate，否则 Agent 翻不成 WHERE 条件
+  disambiguation:
+    class: discriminant
+    value: {vocab: concept_disambiguation}
+    cardinality: single
+    applies_to: [concept]
+    index: true
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+  default_sense:
+    class: descriptive
+    value: {type: string}
+    cardinality: single
+    applies_to: [concept]
+    required_when: {disambiguation: [default]}
+    index: false
+    consumers: [production, agent]
+    since: "2.0"
+
+  # ── policy（新增类型专属） ──
+  policy_kind:
+    class: discriminant
+    value: {vocab: policy_kind}
+    cardinality: single
+    applies_to: [policy]
+    index: true
+    required_for: [policy]
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+  severity:
+    class: discriminant
+    value: {vocab: policy_severity}
+    cardinality: single
+    applies_to: [policy]
+    index: true
+    required_for: [policy]
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+  handling:
+    class: discriminant
+    value: {vocab: policy_handling}
+    cardinality: single
+    applies_to: [policy]
+    index: true
+    required_for: [policy]
+    consumers: [production, retrieval, agent]
+    since: "2.0"
+  match:
+    class: governance
+    value:
+      type: object
+      keys:
+        column_matches: {type: string_list}
+        meaning_matches: {type: string_list}
+        columns: {type: object_list}
+        tables: {type: ref_list, target_types: [table]}
+    cardinality: single
+    applies_to: [policy]
+    required_for: [policy]
+    index: false
+    consumers: [retrieval]
+    since: "2.0"
+  exemptions:
+    class: governance
+    value:
+      type: object_list
+      item:
+        table: {type: ref, target_types: [table]}
+        column: {type: string}
+        reason: {type: string, required: true}
+        approved_by: {type: string, required: true}
+        expires_at: {type: date, required: true}
+    cardinality: multi
+    applies_to: [policy]
+    index: false
+    consumers: [retrieval]
+    since: "2.0"
+  masking:
+    class: governance
+    value: {type: string}
+    cardinality: single
+    applies_to: [policy]
+    required_when: {handling: [需脱敏]}
+    index: false
+    consumers: [retrieval, agent]
+    since: "2.0"
+  legal_basis:
+    class: governance
+    value: {type: string}
+    cardinality: single
+    applies_to: [policy]
+    required_for: [policy]
+    index: false
+    consumers: [production]
+    since: "2.0"
+  agent_message:
+    class: governance
+    value: {type: string}
+    cardinality: single
+    applies_to: [policy]
+    required_for: [policy]
+    index: false
+    consumers: [retrieval, agent]
+    since: "2.0"
+
+  # ── 关系边（声明处） ──
+  depends_on:
+    class: relation
+    value: {type: ref_list, target_types: [table]}   # V2 收窄：table 是叶子
+    cardinality: multi
+    applies_to: [metric]
+    edge: depends_on
+    index: false
+    consumers: [production, retrieval]
+    since: "1.0"
+    # 存量卡里 metric→metric 与 metric→table 混写，由 build_index 按目标 type 自动分流，
+    # 卡片零改动。分流后 derived_from 单独设跳数上限，修无界递归导致的知识包截断
+    auto_split: {to: derived_from, when_target_type: metric}
+  derived_from:
+    class: relation
+    value: {type: ref_list, target_types: [metric]}
+    cardinality: multi
+    applies_to: [metric]
+    edge: derived_from
+    index: false
+    consumers: [production, retrieval]
+    since: "2.0"
+  variant_of:
+    class: relation
+    value: {type: ref, target_types: [metric]}       # 评审 R6：修正 01 §3.2 的 concept_id 笔误
+    cardinality: single
+    applies_to: [metric]
+    edge: variant_of
+    index: true
+    consumers: [production, retrieval, agent]
+    since: "1.0"
+    required_when: {_has_same_name_variant: true}    # 评审 R8：条件必填，不是无条件必填
+  applies_to:
+    class: relation
+    value: {type: ref_list, target_types: [metric]}
+    cardinality: multi
+    applies_to: [attribution]
+    edge: attributed_by
+    index: false
+    consumers: [production, retrieval]
+    since: "1.0"
+  factors:
+    class: relation
+    value: {type: ref_list, target_types: [metric, table, attribution]}   # V2 扩展
+    cardinality: multi
+    applies_to: [attribution, equation]
+    edge: factor_of
+    index: false
+    consumers: [production, retrieval]
+    since: "1.0"
+  result:
+    class: relation
+    value: {type: ref, target_types: [metric]}
+    cardinality: single
+    applies_to: [equation]
+    edge: result
+    index: false
+    consumers: [production, retrieval]
+    since: "1.0"
+  responds_to:
+    class: relation
+    value: {type: object_list, item: {metric: {type: ref, target_types: [metric]},
+                                     condition: {vocab: responds_to_condition},
+                                     threshold: {type: string}}}
+    cardinality: multi
+    applies_to: [action]
+    edge: responds_with
+    index: false
+    consumers: [production, retrieval]
+    since: "1.0"
+
+  # ── 治理与描述（v1.0 已有） ──
+  status:      {class: governance, value: {vocab: status}, cardinality: single, index: true,
+                applies_to: "*", consumers: [production, retrieval, agent], since: "1.0"}
+  scope:       {class: governance, value: {vocab: scope}, cardinality: single, index: false,
+                applies_to: "*", consumers: [production], since: "1.0"}
+  provenance:  {class: governance, value: {vocab: provenance}, cardinality: single, index: true,
+                applies_to: "*", consumers: [production, retrieval], since: "1.0"}
+  owner:       {class: governance, value: {type: string}, cardinality: single, index: false,
+                applies_to: "*", consumers: [production], since: "1.0"}
+  title:       {class: descriptive, value: {type: string}, cardinality: single, index: true,
+                applies_to: "*", consumers: [production, retrieval, agent], since: "1.0",
+                note: 中文业务名称；id 不承担语义与检索职责，命中主要靠 title}
+  description: {class: descriptive, value: {type: string}, cardinality: single, index: true,
+                applies_to: "*", consumers: [production, retrieval, agent], since: "1.0"}
+  canonical_name: {class: descriptive, value: {type: string}, cardinality: single, index: true,
+                   applies_to: [metric], consumers: [production, retrieval], since: "1.0"}
+  unique_key:  {class: descriptive, value: {type: nested_list}, cardinality: multi, index: true,
+                applies_to: [table], consumers: [production, retrieval], since: "1.0"}
+  formula:     {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                applies_to: [metric], consumers: [production, agent], since: "1.0"}
+  dimensions:  {class: facet, value: {vocab: dimensions}, cardinality: multi, index: false,
+                applies_to: [metric], consumers: [production, agent], since: "1.3"}
+  default:     {class: discriminant, value: {type: boolean}, cardinality: single, index: true,
+                applies_to: [metric], consumers: [production, retrieval, agent], since: "1.0",
+                required_when: {_has_same_name_variant: true},
+                retrieval: {mode: weight, activation: {weight_from: 0.0, prune_from: null}}}
+  tags:        {class: descriptive, value: {type: string_list}, cardinality: multi, index: true,
+                applies_to: "*", consumers: [retrieval], since: "1.0",
+                note: 红线 1——tags 永不表达关系，永不进图谱}
+  schema_ref:  {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                applies_to: [table], consumers: [production], since: "1.0"}
+  refresh_freq: {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                 applies_to: [table], consumers: [production, agent], since: "1.0"}
+  source_system: {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                  applies_to: [org], consumers: [production], since: "1.0"}
+  source_ref:  {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                applies_to: "*", consumers: [production], since: "1.0"}
+  owner_role:  {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                applies_to: [action], consumers: [production, agent], since: "1.0"}
+  operator:    {class: descriptive, value: {vocab: equation_operator}, cardinality: single,
+                index: false, applies_to: [equation], consumers: [production, agent], since: "1.0"}
+  reviewed_by: {class: governance, value: {type: string}, cardinality: single, index: false,
+                applies_to: [attribution], consumers: [production], since: "1.0"}
+  input_schema:  {class: descriptive, value: {type: object}, cardinality: single, index: false,
+                  applies_to: [tool], consumers: [agent], since: "1.0"}
+  output_schema: {class: descriptive, value: {type: object}, cardinality: single, index: false,
+                  applies_to: [tool], consumers: [agent], since: "1.0"}
+  invocation:    {class: descriptive, value: {type: string}, cardinality: single, index: false,
+                  applies_to: [tool], consumers: [agent], since: "1.0"}
+  ai_tags:     {class: descriptive, value: {type: string_list}, cardinality: multi, index: true,
+                applies_to: "*", consumers: [retrieval], since: "1.0"}
+
+# ── 卡片类型 ──────────────────────────────────────────────────────
+
+types:
+  metric:
+    kind: entity
+    id_pattern: '^metric::\d+$'
+    path: knowledge/metric/<数字ID>.md
+    fact_source: 指标平台（薄投影）
+    body_sections: ["# Definition", "# Business Definition", "# Examples"]
+    template: schema/templates/metric.md
+  table:
+    kind: entity
+    id_pattern: '^table/[a-z0-9_.-]+$'
+    path: knowledge/table/<name>.md
+    fact_source: 数仓元数据（薄投影）
+    body_sections: ["# Schema", "# Join Path", "# Field Notes"]
+    template: schema/templates/table.md
+    schema_table_columns: [字段, 类型, 含义, 可查, 枚举]   # 第 4、5 列可选
+  concept:
+    kind: entity
+    id_pattern: '^concept/[a-z0-9-]+$'
+    path: knowledge/concept/<kebab-case>.md
+    fact_source: 卡片自身
+    owner_role: 业务专家
+    body_sections: ["# Senses", "# Disambiguation", "# Common Mistakes"]
+    template: schema/templates/concept.md
+    since: "2.0"
+  policy:
+    kind: constraint
+    id_pattern: '^policy/[a-z0-9-]+$'
+    path: knowledge/policy/<kebab-case>.md
+    fact_source: 卡片自身
+    owner_role: 数据安全 / 合规
+    body_sections: ["# Scope", "# Handling", "# Exemption Process"]
+    template: schema/templates/policy.md
+    since: "2.0"
+    consumption_principle: default_deny   # 与其余类型的"宽松消费"极性相反
+  attribution:
+    kind: entity
+    id_pattern: '^attribution/[a-z0-9-]+$'
+    path: knowledge/attribution/<kebab-case>.md
+    fact_source: 卡片自身
+    body_sections: ["# Factors", "# Analysis Method", "# Evaluation Rules", "# Citations"]
+    template: schema/templates/attribution.md
+  equation:
+    kind: entity
+    id_pattern: '^equation/[a-z0-9-]+$'
+    path: knowledge/equation/<kebab-case>.md
+    fact_source: 卡片自身
+    body_sections: ["# Decomposition", "# Priority"]
+    template: schema/templates/equation.md
+  action:
+    kind: entity
+    id_pattern: '^action/[a-z0-9-]+$'
+    path: knowledge/action/<kebab-case>.md
+    fact_source: 卡片自身
+    body_sections: ["# Playbook", "# Applicability"]
+    template: schema/templates/action.md
+  org:
+    kind: support
+    id_pattern: '^org/[a-z0-9-]+$'
+    path: knowledge/org/<kebab-case>.md
+    fact_source: 源系统投影
+    body_sections: ["# Mapping"]
+    template: schema/templates/org.md
+  tool:
+    kind: support
+    id_pattern: '^tool/[a-z0-9-]+$'
+    path: knowledge/tool/<kebab-case>.md
+    fact_source: 卡片自身
+    body_sections: []
+    template: schema/templates/tool.md
+
+# ── 边清单 ────────────────────────────────────────────────────────
+# 每条边规定唯一声明处，避免双写。max_hops 是 meta-path 展开的硬边界。
+
+edges:
+  in_unit:      {from: [metric, table], to: unit, declared_in: unit, derived: forward}
+  in_line:      {from: [metric, table], to: business_line, declared_in: business_line, derived: forward}
+  in_topic:     {from: [metric], to: topic, declared_in: topic, derived: forward}
+  depends_on:   {from: [metric], to: [table], declared_in: depends_on, derived: forward,
+                 max_hops: 1, note: table 是叶子，不反向扩展"依赖该表的所有指标"}
+  derived_from: {from: [metric], to: [metric], declared_in: derived_from, derived: forward,
+                 max_hops: 1, since: "2.0",
+                 note: 口径追溯场景显式请求时才走全链，默认 1 跳}
+  join_with:    {from: [table], to: [table], declared_in: "# Join Path", derived: forward}
+  has_equation: {from: [metric], to: [equation], declared_in: result, derived: reverse}
+  factor:       {from: [equation], to: [metric], declared_in: factors, derived: forward}
+  result:       {from: [equation], to: [metric], declared_in: result, derived: forward}
+  attributed_by: {from: [metric], to: [attribution], declared_in: applies_to, derived: reverse}
+  factor_of:    {from: [attribution], to: [metric, table, attribution], declared_in: factors,
+                 derived: forward, max_hops: 3, since_v2_extended: true,
+                 note: V2 允许指向 attribution，吸收诊断树"板块→子板块→指标"分层}
+  responds_with: {from: [metric], to: [action], declared_in: responds_to, derived: reverse}
+  variant_of:   {from: [metric], to: [metric], declared_in: variant_of, derived: forward}
+  alias_of:     {from: [org], to: "*", declared_in: "# Mapping", derived: forward}
+  means_in:     {from: [concept], to: [metric], declared_in: senses, derived: forward, since: "2.0"}
+  carries:      {from: [table], to: business_object, declared_in: business_objects,
+                 derived: forward, since: "2.0",
+                 note: business_object 是分面类目节点（同 topic），无独立卡片、无口径}
+
+# ── meta-path 模板 ────────────────────────────────────────────────
+# 检索器只执行，不定义。改路径改本文件，不改代码。
+
+meta_paths:
+  问数:
+    - [derived_from, depends_on]
+  归因:
+    - [attributed_by, factor_of, depends_on]
+    - [has_equation, factor]
+    - [factor_of]
+    - [factor_of, factor_of]
+    - [factor_of, factor_of, depends_on]
+  诊断:
+    - [attributed_by, factor_of, depends_on]
+    - [has_equation, factor]
+    - [responds_with]
+    - [factor_of]
+    - [factor_of, factor_of]
+    - [factor_of, factor_of, depends_on]
+  口径追溯:
+    - [derived_from*]           # 显式请求时才走全链
+  全部:
+    - [derived_from, depends_on]
+    - [attributed_by, factor_of, depends_on]
+    - [has_equation, factor]
+    - [responds_with]
+    - [factor_of]
+    - [factor_of, factor_of]
+    - [factor_of, factor_of, depends_on]
+
+# ── 检索过滤策略 ──────────────────────────────────────────────────
+# "哪些属性允许硬过滤"是本体的判断，不是实现细节——它决定错误发生时
+# 系统偏向漏召回还是偏向误召回。权重数值在 config/retrieval.yaml，不在本文件。
+
+retrieval_policy:
+  hard_filter_allowed:
+    - attribute: lifecycle
+      values: [测试, 已下线]
+      reason: 客观事实，不存在"模型判断错误"的可能
+    - attribute: _policy_hit
+      reason: 合规，宁可误拦不可漏放（但见 policy_gate 的能力边界声明）
+    - attribute: business_domain
+      via: facet_scopes
+      reason: |
+        业务域的适用城市是业务事实，不是模型推断——城市要么是北京要么不是，
+        不存在"拆错分面"的可能。把北京链家的指标口径用到其他城市会给出错误数据，
+        属于答错而不是少答，因此这一条允许硬过滤。
+        注意：此前实现在 business_domain 属性之外还加了表名字符串兜底
+        （`_is_out_of_scope_beijing_lianjia_entry` 里的 beijing_lianjia 子串匹配），
+        属性覆盖率已 100%，兜底纯属冗余，且会让"改卡片不生效"成为可能，V2 删除。
+
+# 分面取值的适用范围
+# 只有当某个分面值本身带业务约束时才在此登记；登记即意味着允许硬过滤，需本体评审。
+facet_scopes:
+  business_domain:
+    北京链家:
+      city_in: [北京]
+      exclusive: true
+      rationale: 北京链家是城市级独立业务域，其指标口径与表在其他城市不成立
+    贝壳城市:
+      city_not_in: [北京]
+      exclusive: false
+      rationale: 贝壳城市请求允许使用通用卡片；北京链家请求的精确域约束由其 exclusive 声明触发
+    通用:
+      fallback_when_requested_object_uncovered: true
+      rationale: 仅当独占请求域没有承载用户明确业务对象的表时，允许通用表补齐该对象
+  soft_filter_only:
+    - business_objects
+    - layer
+    - topic
+    - business_line
+    - business_domain
+    - time_grain
+    - queryable
+  rationale: |
+    模型拆错分面时硬过滤会造成假 miss，recall 反而下降。所有分面参数只加分不减分，
+    冲突降权设下限，不足以把命中项挤出候选集——"传错不能比不传更差"（D24）。
+    intent 已经失败过一次，新参数必须可选、有兜底、传错不劣于不传。
+
+# ── 推导规则的边界 ────────────────────────────────────────────────
+# 评审 3.6：按表名/字段名推断属性本质是**源系统接入映射**，不是稳定业务本体。
+# 因此规则实体放在 mappings/ 而非 ontology/，避免本体被某个数仓的命名约定污染。
+
+derivations:
+  location: mappings/derivations.yaml
+  legacy_migration: mappings/table-business-objects.yaml
+  produces_only: [discriminant]     # 只产判别属性，不产分面和边——业务归属必须人来定
+  card_overrides_derivation: true   # 卡片显式声明优先级永远高于推导
+  evidence_required: true           # 每个推导值必须带 rule_id / evidence / confidence
+  health_thresholds:
+    conflict_rate_warn: 0.10        # 评审 4.6：数量上限不是可靠代理，改用冲突率等指标
+    unmatched_rate_warn: 0.50
+    rule_count_warn: 50             # 保留为预警，不作为硬性正确性标准
+    # 评审 4.6：规则数量不是维护性的可靠代理——20 条互相覆盖的复杂正则可能比
+    # 100 条独立、按源系统分组的映射更危险。真正把关的是上面两条（冲突率、未命中率）
+    # 以及健康度报告里的"显式声明率应随时间上升"。数量只作预警，不作正确性标准
+    review_interval_days: 180       # 评审 R2：每条规则到期重审，防止固化为第二个硬编码
+
+# ── CI 防漂移检查 ─────────────────────────────────────────────────
+
+ci_checks:
+  - id: controlled_values
+    desc: 所有受控字段取值在词表内
+    level: error
+  - id: broken_refs
+    desc: 引用字段指向的 id 必须存在
+    level: error
+  - id: projection_consistency
+    desc: 三端（模板 / 检索器 / Agent 提示词）引用的属性名必须都在本文件定义
+    level: error
+  - id: no_business_hardcode
+    desc: 检索器核心逻辑不得内建资源 id、表名前缀、指标 id 字面量
+    level: error
+    scope: [tools/knowledge_retrieval.py]
+    # 评审 4.5：不做"词表外中文字符串一律禁止"的机械扫描——会误伤错误提示、
+    # trace 文案与测试 fixture，且容易退化为把字符串机械搬进 YAML。改用 AST 结构检查
+  - id: unconsumed_attribute
+    desc: 本体定义了却无任何一端消费的属性
+    level: warning              # 试点期 warning，期满再议是否升 error
+    rationale: 这正是 v1.0"填写率 0%"失败模式的机器化拦截
+  - id: derivation_health
+    desc: 推导规则冲突率 / 未命中率 / 到期未重审
+    level: warning
+  - id: activation_gate
+    desc: mode=prune 的属性必须同时具备 precision_verified 与 prune_approved
+    level: error
+  - id: policy_required_fields
+    desc: policy 卡的豁免必须有 approved_by 与 expires_at，且未过期
+    level: error
